@@ -1,8 +1,24 @@
-# DSH Cost Tracker
+<div align="center">
 
-> A [DeepSeek Harness](https://github.com/deepseek-ai/dsh) (DSH) plugin that automatically tracks **token usage and cost (CNY)** for every LLM call — with a visual dashboard, balance lookup, subscription quota monitoring, and fully local data storage.
+# 💰 DSH Cost Tracker
 
-**[中文 README →](./README.md)** · [MIT License](./LICENSE)
+**LLM COST & USAGE TRACKING PLUGIN FOR DEEPSEEK HARNESS**
+
+[简体中文](./README.md) | **English**
+
+![version](https://img.shields.io/badge/version-v1.0.0-blue?style=flat-square)
+![license](https://img.shields.io/badge/license-MIT-green?style=flat-square)
+![status](https://img.shields.io/badge/status-stable-brightgreen?style=flat-square)
+![platform](https://img.shields.io/badge/platform-DSH%20Web-blueviolet?style=flat-square)
+[![GitHub stars](https://img.shields.io/github/stars/Angelyeye/dsh-cost-tracker?style=flat-square)](https://github.com/Angelyeye/dsh-cost-tracker/stargazers)
+
+</div>
+
+---
+
+> An LLM cost-tracking plugin for [DeepSeek Harness](https://github.com/deepseek-ai/dsh): automatically records token usage and cost (CNY) for every API call, with **native support for DeepSeek's official peak/off-peak pricing (half-price off-peak) and Kimi Coding Plan subscription usage & equivalent-cost statistics**. Visual settings dashboard with hover tooltips, in-chat agent queries, balance & quota monitoring — all persisted locally, survives restarts, and uninstalls cleanly.
+
+> 一个为 [DeepSeek Harness](https://github.com/deepseek-ai/dsh) 打造的 LLM 花费统计插件:自动记录每一次 API 调用的 Token 用量与费用,**原生支持 DeepSeek 官方峰值价格计费与 Kimi Coding Plan 订阅套餐的用量及等效费用统计**。设置页可视化仪表盘、对话内 Agent 查询、账户余额与订阅配额监控,数据全部本地持久化。
 
 ![Cost dashboard: overview cards and a peak/off-peak stacked cost chart with hover details](docs/screenshots/dashboard-overview.png)
 
