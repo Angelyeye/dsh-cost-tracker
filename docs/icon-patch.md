@@ -4,18 +4,20 @@
 设计：双柱（统计图表）+ 描边 ¥（花费），与 DSH 内置 16px outline 图标风格一致。
 多尺寸 / 深浅色 / 导航行效果预览：`icon-preview.html`。
 
-## 生效方式（已打补丁）
+## 生效方式（v1.1.0 起：插件启动时自动自愈）
 
 DSH 设置外壳的侧边导航图标由 `navIcon(sectionId)` 按 id 硬编码，
 未知 id 一律回退为齿轮，slot 注册项（`id` / `order` / `label`）不支持自带图标。
-因此图标通过直接给外壳产物打补丁接入：
+因此图标通过给外壳产物打补丁接入，且**插件 Host 半端每次启动自动检查并重打**
+（`ensureNavIconPatch()`，见 `index.js`）：DSH 升级覆盖外壳文件后，首次启动即自动恢复，
+失败时静默跳过（侧边栏回退齿轮，面板内图标不受影响）。
 
 - 文件：`<dsh 安装目录>/node_modules/@deepseek-ai/dsh-client-ui-settings-general/lib/client.js`
 - 位置：`function navIcon(id)` 内，在 `if (id === "models")` 之前插入 `cost-dashboard` 分支
-- 当前安装目录：`/opt/homebrew/lib/node_modules/@deepseek-ai/dsh`
+- 补丁前自动备份原文件为 `client.js.cost-tracker-bak`（仅首次）
 - `/plugins/<id>/client.js` 每次请求实时读盘且 `no-cache`，**刷新页面即生效**，无需重启
 
-## 升级后重新应用
+## 手动重打（自动失效时的兜底）
 
 DSH 升级 / 重装会覆盖该文件。重新打补丁：在同一函数开头插入下面的分支
 （`react_jsx_runtime` 与 `SettingsRoot_module_css_default` 为该文件内已有变量）：

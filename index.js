@@ -6,14 +6,64 @@
 //   subprocess node → 原生 fetch + node:fs
 //   新增数据持久化 → ~/.dsh/storages/cost-tracker-records.json
 // ============================================================
-import { readFileSync, writeFileSync, mkdirSync, renameSync, existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { readFileSync, writeFileSync, mkdirSync, renameSync, existsSync, realpathSync } from 'node:fs'
+import { join, dirname } from 'node:path'
 import { homedir } from 'node:os'
+
+// ============================================================
+// 设置侧边栏图标补丁 · 启动自愈
+// DSH 设置外壳的 navIcon() 按 id 硬编码图标，未知 id 回退齿轮；
+// slot 注册不支持自带图标，只能给外壳产物打补丁。
+// DSH 升级/重装会覆盖外壳文件 —— 因此每次启动自检，缺失即重打。
+// 任何一步失败都静默跳过（侧边栏回退齿轮，面板内图标不受影响）。
+// ============================================================
+const NAV_ICON_BRANCH = 'if (id === "cost-dashboard") return (0, react_jsx_runtime.jsxs)("svg", { className: SettingsRoot_module_css_default.navIcon, width: 16, height: 16, viewBox: "0 0 16 16", fill: "none", xmlns: "http://www.w3.org/2000/svg", children: [(0, react_jsx_runtime.jsx)("rect", { x: 1.5, y: 8.6, width: 3.1, height: 5.9, rx: 0.9, fill: "currentColor" }), (0, react_jsx_runtime.jsx)("rect", { x: 5.9, y: 5.2, width: 3.1, height: 9.3, rx: 0.9, fill: "currentColor" }), (0, react_jsx_runtime.jsxs)("g", { fill: "none", stroke: "currentColor", strokeWidth: 1.3, strokeLinecap: "round", strokeLinejoin: "round", children: [(0, react_jsx_runtime.jsx)("path", { d: "M10.7 4.9 L12.3 7.2 L13.9 4.9" }), (0, react_jsx_runtime.jsx)("path", { d: "M12.3 7.2 L12.3 10.9" }), (0, react_jsx_runtime.jsx)("path", { d: "M10.9 7.8 L13.7 7.8" }), (0, react_jsx_runtime.jsx)("path", { d: "M10.9 9.5 L13.7 9.5" })] })] }); // cost-tracker-icon-patch\n\t\t\t'
+
+export function ensureNavIconPatch(opts) {
+  const log = (opts && opts.log) || (() => {})
+  try {
+    const entry = (opts && opts.entry) || (process.argv && process.argv[1]) || ''
+    // 全局安装通常通过符号链接启动（如 /opt/homebrew/bin/dsh），需同时尝试 realpath
+    const entries = [entry]
+    try { const real = realpathSync(entry); if (real && real !== entry) entries.push(real) } catch (e) {}
+    let shellFile = ''
+    for (const e0 of entries) {
+      let dir = dirname(e0)
+      for (let i = 0; i < 8 && dir && dir !== dirname(dir); i++) {
+        const candidate = join(dir, 'node_modules', '@deepseek-ai', 'dsh-client-ui-settings-general', 'lib', 'client.js')
+        if (existsSync(candidate)) { shellFile = candidate; break }
+        dir = dirname(dir)
+      }
+      if (shellFile) break
+    }
+    if (!shellFile) { log('skip: settings shell not found'); return false }
+    const src = readFileSync(shellFile, 'utf8')
+    if (src.includes('id === "cost-dashboard"')) { log('ok: already patched'); return true }
+    const anchor = /function navIcon\(id\)\s*\{\s*/.exec(src)
+    if (!anchor) { log('skip: navIcon() not found (shell layout changed?)'); return false }
+    if (!src.includes('react_jsx_runtime') || !src.includes('SettingsRoot_module_css_default')) {
+      log('skip: expected identifiers missing (shell layout changed?)'); return false
+    }
+    if (!existsSync(shellFile + '.cost-tracker-bak')) writeFileSync(shellFile + '.cost-tracker-bak', src)
+    const at = anchor.index + anchor[0].length
+    const tmp = shellFile + '.cost-tracker-tmp'
+    writeFileSync(tmp, src.slice(0, at) + NAV_ICON_BRANCH + src.slice(at))
+    renameSync(tmp, shellFile)
+    log('ok: patch applied -> ' + shellFile)
+    return true
+  } catch (e) {
+    log('skip: ' + String(e && e.message ? e.message : e))
+    return false
+  }
+}
 
 export default {
   name: 'cost-tracker',
   inject: ['tools', 'webServer'],
   apply(ctx) {
+    // 侧边栏图标补丁自愈（DSH 升级覆盖外壳后自动重打；失败静默跳过）
+    ensureNavIconPatch({ log: (m) => console.log('[cost-tracker] nav-icon ' + m) })
+
     // ---------- price tables (CNY per 1M tokens) ----------
     const EXACT_MODELS = {
       'deepseek-v4-flash': { input: 3.0, output: 9.0, cacheRead: 0.10, cacheWrite: 3.0 },
