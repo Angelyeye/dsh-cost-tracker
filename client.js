@@ -44,7 +44,8 @@ window.__ModuleLoader__.load({
 		function applyStyles(ctx) {
 			const css = `
 .cost-wrap { padding: 4px 2px 28px; color: var(--dsw-alias-label-primary, #171a1f); font-size: 13px; }
-.cost-h1 { font-size: 16px; font-weight: 600; margin: 2px 0 12px; }
+.cost-h1 { font-size: 16px; font-weight: 600; margin: 2px 0 12px; display: flex; align-items: center; gap: 8px; }
+.cost-h1 .cost-icon { flex: none; }
 .cost-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .cost-spacer { flex: 1; }
 .cost-hint { color: var(--dsw-alias-label-secondary, #5b6472); font-size: 12px; }
@@ -88,6 +89,21 @@ window.__ModuleLoader__.load({
 			tag.textContent = css;
 			document.head.appendChild(tag);
 			ctx.effect(() => () => { tag.remove(); }, "cost-tracker: styles");
+		}
+
+		function pluginIcon(size) {
+			const s = size || 16;
+			return e("svg", {
+				className: "cost-icon", width: s, height: s, viewBox: "0 0 16 16",
+				fill: "none", xmlns: "http://www.w3.org/2000/svg", "aria-hidden": "true",
+			},
+				e("rect", { x: 1.5, y: 8.6, width: 3.1, height: 5.9, rx: 0.9, fill: "currentColor" }),
+				e("rect", { x: 5.9, y: 5.2, width: 3.1, height: 9.3, rx: 0.9, fill: "currentColor" }),
+				e("g", { fill: "none", stroke: "currentColor", strokeWidth: 1.3, strokeLinecap: "round", strokeLinejoin: "round" },
+					e("path", { d: "M10.7 4.9 L12.3 7.2 L13.9 4.9" }),
+					e("path", { d: "M12.3 7.2 L12.3 10.9" }),
+					e("path", { d: "M10.9 7.8 L13.7 7.8" }),
+					e("path", { d: "M10.9 9.5 L13.7 9.5" })));
 		}
 
 		function fmtInt(n) { return String(Math.round(Number(n) || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, ","); }
@@ -541,7 +557,7 @@ window.__ModuleLoader__.load({
 			}, []);
 
 			return e("div", { className: "cost-wrap" },
-				e("div", { className: "cost-h1" }, "花费统计"),
+				e("div", { className: "cost-h1" }, pluginIcon(18), "花费统计"),
 				filterRow(days, setDays, onExport, onRefresh, msg, busy, dash ? dash.peakWindows : "9:00-12:00 · 14:00-18:00"),
 				dashErr ? e("div", { className: "cost-err", style: { marginTop: "8px" } }, dashErr) : null,
 				!dash && !dashErr ? e("div", { className: "cost-hint", style: { marginTop: "12px" } }, "加载中…") : null,

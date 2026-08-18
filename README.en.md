@@ -1,6 +1,6 @@
 <div align="center">
 
-# 💰 DSH Cost Tracker
+# <img src="./docs/icon-mark.svg" width="30" valign="bottom" alt="icon"> DSH Cost Tracker
 
 **LLM COST & USAGE TRACKING PLUGIN FOR DEEPSEEK HARNESS**
 

@@ -1,6 +1,6 @@
 <div align="center">
 
-# 💰 DSH Cost Tracker · 花费统计
+# <img src="./docs/icon-mark.svg" width="30" valign="bottom" alt="icon"> DSH Cost Tracker · 花费统计
 
 **DEEPSEEK HARNESS LLM 花费与用量统计插件**
 
