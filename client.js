@@ -7,7 +7,7 @@
 // 输出为浏览器 ModuleLoader bundle：exports.apply / exports.inject
 // ============================================================
 window.__ModuleLoader__.load({
-	id: "cost-tracker-plugin",
+	id: "dsh-cost-tracker",
 	factory: (require) => {
 		var module = { exports: {} };
 		var exports = module.exports;

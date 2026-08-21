@@ -6,7 +6,7 @@
 
 **简体中文** | [English](./README.en.md)
 
-![version](https://img.shields.io/badge/version-v1.1.0-blue?style=flat-square)
+![version](https://img.shields.io/badge/version-v1.1.1-blue?style=flat-square)
 ![license](https://img.shields.io/badge/license-MIT-green?style=flat-square)
 ![status](https://img.shields.io/badge/status-stable-brightgreen?style=flat-square)
 ![platform](https://img.shields.io/badge/platform-DSH%20Web-blueviolet?style=flat-square)
