@@ -1,6 +1,6 @@
 {
   "name": "dsh-cost-tracker",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "DeepSeek Harness (DSH) plugin: LLM token usage & cost tracking with a settings dashboard, agent tools, HTTP API and persistent storage.",
   "type": "module",
   "main": "index.js",
@@ -8,6 +8,9 @@
     ".": "./index.js",
     "./client": "./client.js",
     "./package.json": "./package.json"
+  },
+  "scripts": {
+    "test": "node test/storage.test.js"
   },
   "keywords": [
     "dsh-plugin",

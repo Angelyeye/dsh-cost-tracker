@@ -6,7 +6,7 @@
 
 [简体中文](./README.md) | **English**
 
-![version](https://img.shields.io/badge/version-v1.1.1-blue?style=flat-square)
+![version](https://img.shields.io/badge/version-v1.1.2-blue?style=flat-square)
 ![license](https://img.shields.io/badge/license-MIT-green?style=flat-square)
 ![status](https://img.shields.io/badge/status-stable-brightgreen?style=flat-square)
 ![platform](https://img.shields.io/badge/platform-DSH%20Web-blueviolet?style=flat-square)
@@ -35,8 +35,8 @@
 | 💳 | **Balance lookup** | One-click DeepSeek account balance (total / topped-up / granted / status) |
 | 🤖 | **Agent tools** | Ask in any chat: "how much have I spent today?" — the agent answers via `cost_stats` / `cost_prices` |
 | 🔻 | **Status line** | A live line under the chat input: session cost, total cost, current peak/off-peak price indicator |
-| 💾 | **Local persistence** | Data lives in `~/.dsh/storages/cost-tracker-records.json`; survives restarts, never leaves your machine |
-| 📤 | **CSV export** | Export all records in one click for further analysis in Excel / Numbers |
+| 💾 | **Local persistence** | Data lives in `~/.dsh/storages/cost-tracker-records.json`; survives restarts, never leaves your machine. **Details are kept for the last 180 days; older records are auto-compressed into permanent daily rollups, so all-time stats stay exact with bounded memory/disk** |
+| 📤 | **CSV export** | One-click export of details + daily rollups (`purpose=rollup`) for further analysis in Excel / Numbers |
 
 ## Screenshots
 
@@ -109,7 +109,7 @@ dsh web
 - **Time range**: switch between last 7 days / 30 days / all time (top-right);
 - **Cost chart**: segment by peak period or by model; hover for daily breakdowns;
 - **Per-model sections**: one request-count chart and one token-composition chart (input / cache write / output / cache hit) per model;
-- **CSV export**: export all records within the selected range.
+- **CSV export**: exports detail records (last 180 days) plus daily rollup rows (`purpose=rollup`).
 
 ### Agent tools
 
@@ -142,7 +142,10 @@ Example: `curl -X POST http://127.0.0.1:3080/api/cost-tracker/summary -d '{}'`
 Everything stays on your machine in `~/.dsh/storages/cost-tracker-records.json`; nothing is uploaded. The API binds to loopback but has no authentication — **do not expose the DSH port to the public internet**.
 
 **Q: Do I lose data when DSH restarts?**
-No. Records are flushed to disk with debounced atomic writes (capped at 5000 entries) and restored on startup. A corrupted file is backed up as `.corrupt-<timestamp>` and tracking restarts cleanly.
+No. Records are flushed to disk with debounced atomic writes and restored on startup. A corrupted file is backed up as `.corrupt-<timestamp>` and tracking restarts cleanly.
+
+**Q: How long is history kept? Is there a stats cap?**
+Detail records are kept for the last **180 days**; older records are auto-compressed into **permanent daily rollups** (aggregates only: calls / token breakdown / cost — no per-call details). So all-time totals and per-model stats stay **exact forever**, while memory, disk and write volume stay bounded no matter how long you run. The daily chart axis spans up to 730 days. Old-format data files migrate automatically; set the `DSH_COST_TRACKER_STORE` env var to override the store path (default `$DSH_HOME/storages`, or `~/.dsh` when `DSH_HOME` is unset).
 
 **Q: What does "equivalent cost" mean for subscription models (kimi-coding)?**
 Subscriptions are not billed per token. The plugin estimates what those calls *would* cost at pay-as-you-go prices so you can judge whether your subscription pays off — **it is not a real charge**.
@@ -161,9 +164,11 @@ Run `git pull` inside the plugin directory. If only the UI (`client.js`) changed
 ## Repository layout
 
 ```
-├── index.js        Host half: usage capture, aggregation, persistence, HTTP API, agent tools
+├── index.js        Host half: usage capture, aggregation, HTTP API, agent tools
+├── store.js        Storage layer: 180-day detail retention + permanent daily rollups + persistence (pure logic, unit-testable)
 ├── client.js       Client half: settings dashboard & status line UI
 ├── package.json    Plugin manifest (with dsh.client declaration)
+├── test/           Storage unit tests (node test/storage.test.js)
 └── docs/           README screenshots
 ```
 

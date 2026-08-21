@@ -6,7 +6,7 @@
 
 **简体中文** | [English](./README.en.md)
 
-![version](https://img.shields.io/badge/version-v1.1.1-blue?style=flat-square)
+![version](https://img.shields.io/badge/version-v1.1.2-blue?style=flat-square)
 ![license](https://img.shields.io/badge/license-MIT-green?style=flat-square)
 ![status](https://img.shields.io/badge/status-stable-brightgreen?style=flat-square)
 ![platform](https://img.shields.io/badge/platform-DSH%20Web-blueviolet?style=flat-square)
@@ -35,8 +35,8 @@
 | 💳 | **余额查询** | 一键查询 DeepSeek 官方账户余额(总余额 / 充值 / 赠送 / 状态) |
 | 🤖 | **Agent 工具** | 直接在对话里问:"我现在花了多少钱?"——Agent 会调用 `cost_stats` / `cost_prices` 等工具回答 |
 | 🔻 | **状态栏** | 聊天输入框下方实时显示:本会话花费、累计花费、当前峰/闲时价 |
-| 💾 | **本地持久化** | 数据存本机 `~/.dsh/storages/cost-tracker-records.json`,重启不丢、不上传 |
-| 📤 | **CSV 导出** | 一键导出全部记录,方便用 Excel / Numbers 做进一步分析 |
+| 💾 | **本地持久化** | 数据存本机 `~/.dsh/storages/cost-tracker-records.json`,重启不丢、不上传;**明细保留最近 180 天,更早自动压缩为永久日汇总,全时段统计永远精确且内存/磁盘有界** |
+| 📤 | **CSV 导出** | 一键导出明细 + 日汇总(purpose=rollup),方便用 Excel / Numbers 做进一步分析 |
 
 ## 界面展示
 
@@ -109,7 +109,7 @@ dsh web
 - **时间范围**:右上角可切换近 7 天 / 近 30 天 / 全部;
 - **消费金额图**:支持「按峰谷」「按模型」两种分段方式,鼠标悬停查看当日明细;
 - **分模型区块**:每个模型一张请求次数图 + 一张 Tokens 构成图(输入/缓存写入/输出/缓存命中);
-- **导出 CSV**:导出当前时间范围内的全部记录。
+- **导出 CSV**:导出明细记录(近 180 天)+ 日汇总行(`purpose=rollup`)。
 
 ### 对话中的 Agent 工具
 
@@ -142,7 +142,10 @@ POST /api/cost-tracker/export       导出 CSV
 全部数据只存在你本机的 `~/.dsh/storages/cost-tracker-records.json`,不会上传到任何服务器。API 只监听本机回环地址,但无鉴权——**不要把 DSH 端口暴露到公网**。
 
 **Q:重启 DSH 数据会丢吗?**
-不会。记录会防抖写入磁盘(原子写入,上限 5000 条),重启后自动恢复;文件损坏时自动备份为 `.corrupt-<时间戳>` 并从头开始。
+不会。记录防抖写入磁盘(原子写入),重启后自动恢复;文件损坏时自动备份为 `.corrupt-<时间戳>` 并从头开始。
+
+**Q:历史记录会保留多久?统计有上限吗?**
+明细记录保留最近 **180 天**;更早的记录自动按「天 + 模型」压缩为**永久日汇总**(只保留聚合数字:调用数 / 各段 tokens / 费用,不再保留单次调用)。因此「全部」时间的总花费、分模型统计**永远精确**,且内存、磁盘、写入量有界,跑多久都不会膨胀。按天图表日期轴最长 730 天。数据文件支持旧版格式自动迁移;可用环境变量 `DSH_COST_TRACKER_STORE` 覆盖存储路径(默认 `$DSH_HOME/storages`,未设 `DSH_HOME` 时为 `~/.dsh`)。
 
 **Q:订阅套餐(kimi-coding)的"等效费用"是什么意思?**
 订阅制不按量扣费。插件按内置单价估算出"如果这些调用走按量计费会花多少钱",仅供你评估订阅是否划算,**不是真实扣费**。
@@ -161,9 +164,11 @@ POST /api/cost-tracker/export       导出 CSV
 ## 仓库结构
 
 ```
-├── index.js        Host 半端:用量采集、聚合、持久化、HTTP API、Agent 工具
+├── index.js        Host 半端:用量采集、聚合、HTTP API、Agent 工具
+├── store.js        存储层:明细保留 + 永久日汇总 + 持久化(纯逻辑,可独立测试)
 ├── client.js       Client 半端:设置页仪表盘与状态栏 UI
 ├── package.json    插件清单(含 dsh.client 声明)
+├── test/           存储层单元测试(node test/storage.test.js)
 └── docs/           README 截图
 ```
 

@@ -9,6 +9,7 @@
 import { readFileSync, writeFileSync, mkdirSync, renameSync, existsSync, realpathSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { homedir } from 'node:os'
+import { createStore, collectTotals, DETAIL_DAYS, MAX_AXIS_DAYS } from './store.js'
 
 // ============================================================
 // 设置侧边栏图标补丁 · 启动自愈
@@ -80,11 +81,9 @@ export default {
     }
     const GENERIC_RATES = { input: 2.0, output: 8.0, cacheRead: 0.5, cacheWrite: 2.0 }
     const PEAK_WINDOWS = '9:00-12:00 · 14:00-18:00'
-    const MAX_RECORDS = 10000
-    const PERSIST_COUNT = 5000
 
     // ---------- state ----------
-    const records = []
+    // 注意：records/rollups 在 persistence 段由 store 初始化（details/rollups 引用）
     let kimiCache = null
 
     // ---------- small helpers ----------
@@ -117,37 +116,20 @@ export default {
     }
 
     // ---------- persistence ----------
-    const STORE_DIR = join(homedir(), '.dsh', 'storages')
-    const STORE_FILE = join(STORE_DIR, 'cost-tracker-records.json')
-    const STORE_TMP = STORE_FILE + '.tmp'
+    // 数据文件路径：可用环境变量 DSH_COST_TRACKER_STORE 覆盖（测试/自定义用）；
+    // 默认 $DSH_HOME/storages/cost-tracker-records.json（未设 DSH_HOME 时为 ~/.dsh）。
+    // 明细保留最近 DETAIL_DAYS 天，更早自动压缩为永久日汇总（见 store.js）。
+    const STORE_FILE = process.env.DSH_COST_TRACKER_STORE || join(process.env.DSH_HOME || join(homedir(), '.dsh'), 'storages', 'cost-tracker-records.json')
+    const store = createStore(STORE_FILE)
+    const records = store.details
+    const rollups = store.rollups
 
-    function writeRecords() {
-      try {
-        mkdirSync(STORE_DIR, { recursive: true })
-        const snapshot = records.slice(-PERSIST_COUNT)
-        writeFileSync(STORE_TMP, JSON.stringify(snapshot), 'utf8')
-        renameSync(STORE_TMP, STORE_FILE)
-      } catch (e) {
-        console.error('cost tracker persist failed', e)
-      }
-    }
+    function writeRecords() { store.persist() }
 
     function loadRecords() {
-      try {
-        if (!existsSync(STORE_FILE)) return
-        const parsed = JSON.parse(readFileSync(STORE_FILE, 'utf8'))
-        if (!Array.isArray(parsed)) return
-        for (const r of parsed) {
-          if (!r || typeof r !== 'object' || typeof r.ts !== 'number') continue
-          records.push(r)
-        }
-        if (records.length > MAX_RECORDS) records.splice(0, records.length - MAX_RECORDS)
-        console.log('cost tracker restored ' + records.length + ' records from ' + STORE_FILE)
-      } catch (e) {
-        // 损坏时改名备份，从零开始，不阻断启动
-        try { renameSync(STORE_FILE, STORE_FILE + '.corrupt-' + Date.now()) } catch (e2) {}
-        console.error('cost tracker load failed, starting empty', e)
-      }
+      const n = store.load()
+      const ru = Object.keys(rollups).length
+      if (n > 0 || ru > 0) console.log('cost tracker restored ' + n + ' detail records, ' + ru + ' rollup days from ' + STORE_FILE)
     }
 
     let persistPending = false
@@ -183,7 +165,7 @@ export default {
         cacheRead: toNum(usage.cacheReadTokens),
         cacheWrite: toNum(usage.cacheWriteTokens),
       }
-      records.push({
+      store.add({
         ts, provider, model,
         sessionId: toStr(options && options.sessionId),
         purpose: toStr(options && options.purpose),
@@ -193,7 +175,6 @@ export default {
         tokens,
         subscription: price.subscription,
       })
-      if (records.length > MAX_RECORDS) records.splice(0, records.length - MAX_RECORDS)
       schedulePersist()
     }
 
@@ -380,7 +361,7 @@ export default {
     }
 
     async function exportCsv() {
-      const rows = records.slice(-3000)
+      const rows = records.slice(-50000)
       const lines = ['time,provider,model,sessionId,purpose,period,subscription,estimated,inputTokens,outputTokens,cacheReadTokens,cacheWriteTokens,totalTokens,costCNY']
       for (const r of rows) {
         const t = r.tokens
@@ -388,12 +369,22 @@ export default {
         const ts = d.getUTCFullYear() + '-' + pad2(d.getUTCMonth() + 1) + '-' + pad2(d.getUTCDate()) + ' ' + pad2(d.getUTCHours()) + ':' + pad2(d.getUTCMinutes()) + ':' + pad2(d.getUTCSeconds())
         lines.push([csvCell(ts), csvCell(r.provider), csvCell(r.model), csvCell(r.sessionId), csvCell(r.purpose), r.period, r.subscription ? '1' : '0', r.estimated ? '1' : '0', t.input, t.output, t.cacheRead, t.cacheWrite, t.input + t.output + t.cacheRead + t.cacheWrite, r4(r.cost)].join(','))
       }
+      // 日汇总行（purpose=rollup）：早于保留窗口的记录按天+模型聚合后永久保留
+      let rollupRows = 0
+      for (const dk of Object.keys(rollups).sort()) {
+        for (const mk of Object.keys(rollups[dk]).sort()) {
+          const e = rollups[dk][mk]
+          const total = e.input + e.output + e.cacheRead + e.cacheWrite
+          lines.push([csvCell(dk + ' 12:00:00'), csvCell(e.provider), csvCell(e.model), '', 'rollup', '', e.subscription ? '1' : '0', e.estimated ? '1' : '0', e.input, e.output, e.cacheRead, e.cacheWrite, total, r4(e.cost)].join(','))
+          rollupRows += 1
+        }
+      }
       const csv = '\uFEFF' + lines.join('\n') + '\n'
       const name = 'cost-export-' + dayKey(Date.now()) + '.csv'
       try {
         const path = join(workspaceRoot(), name)
         writeFileSync(path, csv, 'utf8')
-        return { ok: true, path, count: rows.length, error: '' }
+        return { ok: true, path, count: rows.length + rollupRows, error: '' }
       } catch (e) {
         return { ok: false, path: '', count: 0, error: toStr(e && e.message ? e.message : e).slice(0, 300) }
       }
@@ -417,7 +408,7 @@ export default {
       const out = []
       let t = Date.UTC(toInt(startKey.slice(0, 4)), toInt(startKey.slice(5, 7)) - 1, toInt(startKey.slice(8, 10)))
       const end = Date.UTC(toInt(endKey.slice(0, 4)), toInt(endKey.slice(5, 7)) - 1, toInt(endKey.slice(8, 10)))
-      if (end - t > 89 * 86400000) t = end - 89 * 86400000
+      if (end - t > (MAX_AXIS_DAYS - 1) * 86400000) t = end - (MAX_AXIS_DAYS - 1) * 86400000
       while (t <= end) {
         const d = new Date(t)
         out.push({ key: d.getUTCFullYear() + '-' + pad2(d.getUTCMonth() + 1) + '-' + pad2(d.getUTCDate()), label: (d.getUTCMonth() + 1) + '/' + d.getUTCDate() })
@@ -432,6 +423,12 @@ export default {
       const cutoff = days > 0 ? now - days * 86400000 : 0
       const filt = []
       for (const r of records) if (r.ts >= cutoff) filt.push(r)
+      // 保留窗口外的日汇总（按天+模型），仅取落在查询范围内的天
+      const ru = {}
+      {
+        const startDk = dayKey(cutoff)
+        for (const dk of Object.keys(rollups)) if (dk >= startDk) ru[dk] = rollups[dk]
+      }
       let realCost = 0, realTokens = 0, peakCost = 0, offCost = 0, flatCost = 0, realCalls = 0
       let subEquivalent = 0, subTokens = 0, subCalls = 0
       const modelMap = {}
@@ -454,10 +451,33 @@ export default {
           else flatCost += r.cost
         }
       }
+      // 合并日汇总到总量 / 模型 / 按天明细
+      for (const dk of Object.keys(ru)) {
+        for (const mk of Object.keys(ru[dk])) {
+          const e = ru[dk][mk]
+          const total = e.input + e.output + e.cacheRead + e.cacheWrite
+          let m = modelMap[mk]
+          if (!m) m = modelMap[mk] = { model: mk, subscription: e.subscription, estimated: e.estimated, calls: 0, tokens: 0, cost: 0, dayMap: {} }
+          m.calls += e.calls; m.tokens += total; m.cost += e.cost
+          let dm = m.dayMap[dk]
+          if (!dm) dm = m.dayMap[dk] = { calls: 0, tokens: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 }
+          dm.calls += e.calls; dm.tokens += total; dm.input += e.input; dm.output += e.output; dm.cacheRead += e.cacheRead; dm.cacheWrite += e.cacheWrite; dm.cost += e.cost
+          if (e.subscription) { subCalls += e.calls; subEquivalent += e.cost; subTokens += total }
+          else {
+            realCalls += e.calls; realCost += e.cost; realTokens += total
+            peakCost += e.peak; offCost += e.off; flatCost += e.flat
+          }
+        }
+      }
       const endKey = dayKey(now)
       let startKey = endKey
       if (days > 0) startKey = dayKey(cutoff)
       else if (filt.length > 0) startKey = dayKey(filt[0].ts)
+      const ruKeys = Object.keys(ru)
+      if (ruKeys.length) {
+        const earliest = ruKeys.sort()[0]
+        if (earliest < startKey) startKey = earliest
+      }
       const dates = enumerateDays(startKey, endKey)
       const dayAgg = {}
       for (const d of dates) dayAgg[d.key] = { peak: 0, off: 0, flat: 0 }
@@ -468,6 +488,15 @@ export default {
         if (r.period === 'peak') m.peak += r.cost
         else if (r.period === 'off-peak') m.off += r.cost
         else m.flat += r.cost
+      }
+      for (const dk of Object.keys(ru)) {
+        const m = dayAgg[dk]
+        if (!m) continue
+        for (const mk of Object.keys(ru[dk])) {
+          const e = ru[dk][mk]
+          if (e.subscription) continue
+          m.peak += e.peak; m.off += e.off; m.flat += e.flat
+        }
       }
       const byDay = dates.map(d => ({ date: d.key, label: d.label, peak: r4(dayAgg[d.key].peak), off: r4(dayAgg[d.key].off), flat: r4(dayAgg[d.key].flat) }))
       const keys = Object.keys(modelMap).sort((a, b) => modelMap[b].cost - modelMap[a].cost)
@@ -506,16 +535,18 @@ export default {
       const sid = args && typeof args.sessionId === 'string' ? args.sessionId : ''
       const now = Date.now()
       const todayKey = dayKey(now)
-      let sessionCost = 0, sessionCalls = 0, sessionSub = 0, sessionSubCalls = 0, todayCost = 0, totalCost = 0, totalCalls = 0
+      let sessionCost = 0, sessionCalls = 0, sessionSub = 0, sessionSubCalls = 0, todayCost = 0
+      // 会话/当日只可能出现在明细里（日汇总早于保留窗口）
       for (const r of records) {
         if (r.subscription) {
           if (r.sessionId === sid) { sessionSub += r.cost; sessionSubCalls += 1 }
         } else {
-          totalCost += r.cost; totalCalls += 1
           if (dayKey(r.ts) === todayKey) todayCost += r.cost
           if (r.sessionId === sid) { sessionCost += r.cost; sessionCalls += 1 }
         }
       }
+      // 全时段总量 = 明细 + 永久日汇总，永远精确
+      const full = collectTotals(records, rollups)
       let provider = '', model = ''
       const adm = ctx.get('agentDefaultModel')
       if (adm) {
@@ -534,7 +565,8 @@ export default {
       return {
         sessionCost: r4(sessionCost), sessionCalls,
         sessionSub: r4(sessionSub), sessionSubCalls,
-        todayCost: r4(todayCost), totalCost: r4(totalCost), totalCalls,
+        todayCost: r4(todayCost), totalCost: r4(full.realCost), totalCalls: full.realCalls,
+        subEquivalent: r4(full.subEquivalent), subCalls: full.subCalls, subTokens: full.subTokens,
         provider, model,
         isDeepSeek: np === 'deepseek',
         peak: isPeak(now),
@@ -544,8 +576,8 @@ export default {
     }
 
     function resetData() {
-      const n = records.length
-      records.length = 0
+      const n = store.counts().calls
+      store.clear()
       kimiCache = null
       persistNow()
       return { ok: true, cleared: n }
