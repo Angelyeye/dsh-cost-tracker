@@ -37,7 +37,25 @@ window.__ModuleLoader__.load({
 		const GRID = "var(--dsw-alias-border-l1, #e5e7eb)";
 		const TOKEN_COLORS = ["rgb(30,64,175)", "rgb(37,99,235)", "rgb(96,165,250)", "rgb(191,219,254)"];
 		const TOKEN_NAMES = ["输入", "缓存写入", "输出", "缓存命中"];
-		const MODEL_COLORS = [BLUE, "rgb(37,99,235)", "rgb(96,165,250)", AMBER, "rgb(191,219,254)"];
+		// 「顺序渐变色阶」配色方案：第 1 名（总消费最高）最深垫底，名次越靠后越浅，
+		// 色相按各自方向轻微漂移。三套可选（页内切换，localStorage 记忆）：
+		//   橙→黄：hue 20°→64°  蓝→紫：hue 212°→250°  蓝→浅蓝：hue 212°→200°
+		const COLOR_SCHEMES = {
+			"orange-yellow": { label: "橙→黄", dot: "#F96100", hue: 20, sat: 95, hueStep: 4 },
+			"blue-purple": { label: "蓝→紫", dot: "#2E7CE6", hue: 212, sat: 75, hueStep: 3.5 },
+			"blue-light": { label: "蓝→浅蓝", dot: "#7CC0F5", hue: 212, sat: 75, hueStep: -1 },
+		};
+		function schemeColor(i, s) {
+			const light = Math.min(50 + i * 5, 78);
+			const hue = s.hue + i * s.hueStep;
+			const sat = Math.max(s.sat - i * 2, 65);
+			return "hsl(" + hue + ", " + sat + "%, " + light + "%)";
+		}
+		// 色款：该方案从深（底）到浅（顶）的渐变条，直观展示色阶走向
+		function schemeSwatch(k) {
+			const s = COLOR_SCHEMES[k];
+			return "linear-gradient(to top, " + schemeColor(0, s) + ", " + schemeColor(7, s) + ")";
+		}
 		const MEMBERSHIP = { LEVEL_FREE: "免费版", LEVEL_BASIC: "基础版", LEVEL_INTERMEDIATE: "进阶版", LEVEL_ADVANCED: "高级版" };
 
 		// ---------- styles ----------
@@ -159,14 +177,16 @@ window.__ModuleLoader__.load({
 			const titles = props.titles || props.labels;
 			const segs = props.segs;
 			const rows = props.rows;
+			const daySegs = props.daySegs; // 可选：按天预排好的段列表 [{name,color,value}]（大段在前/底部）
 			const fmtY = props.fmtY;
 			const fmtValue = props.fmtValue || props.fmtY;
 			const [hover, setHover] = useState(-1);
 			const W = 640, H = 200, ml = 44, mr = 6, mt = 8, mb = 20;
 			const pw = W - ml - mr, ph = H - mt - mb;
-			const n = rows.length;
+			const n = daySegs ? daySegs.length : rows.length;
+			const perDay = (i) => daySegs ? daySegs[i] : rows[i].map((v, j) => ({ name: segs[j].name, color: segs[j].color, value: v }));
 			let max = 0;
-			for (const r of rows) { let s = 0; for (const v of r) s += v; if (s > max) max = s; }
+			for (let i = 0; i < n; i++) { let s = 0; for (const sg of perDay(i)) s += sg.value; if (s > max) max = s; }
 			if (max <= 0) max = 1;
 			const step = n > 0 ? pw / n : 0;
 			const children = [];
@@ -183,13 +203,13 @@ window.__ModuleLoader__.load({
 				for (let i = 0; i < n; i++) {
 					let acc = 0;
 					const x = ml + i * step + (step - bw) / 2;
-					const r = rows[i];
+					const r = perDay(i);
 					for (let j = 0; j < r.length; j++) {
-						const v = r[j];
+						const v = r[j].value;
 						if (v > 0) {
 							const h = Math.max(0.6, (v / max) * ph);
 							const y = mt + ph - ((acc + v) / max) * ph;
-							children.push(e("rect", { key: "b" + i + "-" + j, x: x, y: y, width: bw, height: h, rx: 1, style: { fill: segs[j].color } }));
+							children.push(e("rect", { key: "b" + i + "-" + j, x: x, y: y, width: bw, height: h, rx: 1, style: { fill: r[j].color } }));
 						}
 						acc += v;
 					}
@@ -212,17 +232,17 @@ window.__ModuleLoader__.load({
 			function onLeave() { setHover(-1); }
 			let tip = null;
 			if (hover >= 0 && hover < n) {
-				const row = rows[hover];
+				const row = perDay(hover);
 				let total = 0;
-				for (const v of row) total += v;
+				for (const sg of row) total += sg.value;
 				const segRows = [];
-				for (let j = 0; j < segs.length; j++) {
-					const v = row[j] || 0;
-					if (v <= 0) continue;
+				for (let j = 0; j < row.length; j++) {
+					const sg = row[j];
+					if (sg.value <= 0) continue;
 					segRows.push(e("div", { key: j, className: "cost-tip-row" },
-						e("span", { className: "cost-tip-dot", style: { background: segs[j].color } }),
-						e("span", { className: "cost-tip-name" }, segs[j].name),
-						e("span", { className: "cost-tip-val" }, fmtValue(v))));
+						e("span", { className: "cost-tip-dot", style: { background: sg.color } }),
+						e("span", { className: "cost-tip-name" }, sg.name),
+						e("span", { className: "cost-tip-val" }, fmtValue(sg.value))));
 				}
 				const pct = (ml + hover * step + step / 2) / W * 100;
 				const flip = pct > 62;
@@ -358,7 +378,7 @@ window.__ModuleLoader__.load({
 					"按量 " + fmtCompact(dash.realTokens) + " · 订阅 " + fmtCompact(dash.subTokens)));
 		}
 
-		function mainPanel(dash, tab, setTab) {
+		function mainPanel(dash, tab, setTab, scheme, setScheme) {
 			let chart = null;
 			let legend = [];
 			const labels = dash.byDay.map(d => d.label);
@@ -370,26 +390,34 @@ window.__ModuleLoader__.load({
 				chart = e(StackedBarsChart, { labels, titles, segs, rows, fmtY: fmtAxisMoney, fmtValue: fmtMoneyValue });
 				legend = segs;
 			} else {
+				// 模型按总消费降序排名（byModelDay 已按费用降序），全部展示、不合并、不循环：
+				// 第 1 名取色阶首色（最深，垫底），名次越靠后越浅；色相按所选方案漂移
 				const models = dash.byModelDay.filter(m => !m.subscription);
-				const top = models.slice(0, 5);
-				const rest = models.slice(5);
-				const segs = top.map((m, i) => ({ name: shortModel(m.model), color: MODEL_COLORS[i % MODEL_COLORS.length] }));
-				if (rest.length) segs.push({ name: "其他", color: GRAY });
-				const rows = dash.byDay.map((d, di) => {
-					const row = top.map(m => (m.days[di] ? m.days[di].cost : 0));
-					if (rest.length) {
-						let s = 0;
-						for (const m of rest) s += m.days[di] ? m.days[di].cost : 0;
-						row.push(s);
+				const sc = COLOR_SCHEMES[scheme] || COLOR_SCHEMES["orange-yellow"];
+				const segs = models.map((m, i) => ({ name: shortModel(m.model), color: schemeColor(i, sc) }));
+				const daySegs = dash.byDay.map((d, di) => {
+					const list = [];
+					for (let i = 0; i < models.length; i++) {
+						const c = models[i].days[di] ? models[i].days[di].cost : 0;
+						if (c > 0) list.push({ name: segs[i].name, color: segs[i].color, value: c });
 					}
-					return row;
+					return list;
 				});
-				chart = e(StackedBarsChart, { labels, titles, segs, rows, fmtY: fmtAxisMoney, fmtValue: fmtMoneyValue });
+				chart = e(StackedBarsChart, { labels, titles, segs, daySegs, rows: [], fmtY: fmtAxisMoney, fmtValue: fmtMoneyValue });
 				legend = segs;
 			}
 			return e("div", { className: "cost-panel" },
 				e("div", { className: "cost-row" },
 					e("span", { className: "cost-panel-title" }, "消费金额（CNY）¥" + fmtMoney(dash.realCost)),
+					tab === "model" ? e("span", { style: { display: "inline-flex", alignItems: "center", gap: "4px", marginLeft: "10px" } },
+						Object.keys(COLOR_SCHEMES).map(k => e("button", {
+							key: k,
+							className: "cost-tab" + (scheme === k ? " cost-tab-on" : ""),
+							onClick: () => setScheme(k),
+							title: COLOR_SCHEMES[k].label,
+							style: { padding: "3px 4px" },
+						},
+							e("span", { style: { display: "block", width: "20px", height: "14px", borderRadius: "2px", background: schemeSwatch(k) } })))) : null,
 					e("span", { className: "cost-spacer" }),
 					e("span", { className: "cost-tabs" },
 						e("button", { className: "cost-tab" + (tab === "period" ? " cost-tab-on" : ""), onClick: () => setTab("period") }, "按峰谷"),
@@ -518,6 +546,13 @@ window.__ModuleLoader__.load({
 			const [kimi, setKimi] = useState(null);
 			const [balance, setBalance] = useState(null);
 			const [tab, setTab] = useState("period");
+			const [scheme, setSchemeState] = useState(() => {
+				try { return localStorage.getItem("dsh-cost-tracker-scheme") || "orange-yellow" } catch (e) { return "orange-yellow" }
+			});
+			function setScheme(k) {
+				setSchemeState(k);
+				try { localStorage.setItem("dsh-cost-tracker-scheme", k) } catch (e) {}
+			}
 			const [msg, setMsg] = useState("");
 			const [busy, setBusy] = useState(false);
 			const [now, setNow] = useState(Date.now());
@@ -562,7 +597,7 @@ window.__ModuleLoader__.load({
 				dashErr ? e("div", { className: "cost-err", style: { marginTop: "8px" } }, dashErr) : null,
 				!dash && !dashErr ? e("div", { className: "cost-hint", style: { marginTop: "12px" } }, "加载中…") : null,
 				dash ? statCards(dash) : null,
-				dash ? mainPanel(dash, tab, setTab) : null,
+				dash ? mainPanel(dash, tab, setTab, scheme, setScheme) : null,
 				subPanel(kimi, dash, now, () => loadKimi(true)),
 				balancePanel(balance, manualKey, setManualKey, k => loadBalance(k)),
 				dash ? modelSections(dash) : null,

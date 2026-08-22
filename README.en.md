@@ -6,7 +6,7 @@
 
 [简体中文](./README.md) | **English**
 
-![version](https://img.shields.io/badge/version-v1.1.2-blue?style=flat-square)
+![version](https://img.shields.io/badge/version-v1.2.0-blue?style=flat-square)
 ![license](https://img.shields.io/badge/license-MIT-green?style=flat-square)
 ![status](https://img.shields.io/badge/status-stable-brightgreen?style=flat-square)
 ![platform](https://img.shields.io/badge/platform-DSH%20Web-blueviolet?style=flat-square)
@@ -30,6 +30,7 @@
 | --- | --- | --- |
 | 💰 | **Cost tracking** | Every API call is recorded automatically: input / output / cache-hit / cache-write tokens and cost, aggregated by day and by model |
 | ⏰ | **Peak/off-peak pricing** | Built-in price table; peak windows (9:00–12:00, 14:00–18:00 Beijing time) vs half-price off-peak are handled automatically; local models (e.g. ollama) count as 0 |
+| 👁️ | **Vision model** | Supports `deepseek-v4-flash-vision-exp`: same prices as flash; images are converted to tokens per the official rule (≤384 tokens each, billed per API usage) |
 | 📊 | **Visual dashboard** | A new "Cost Statistics" page in Settings: overview cards, cost bar charts (by peak period / by model), per-model request & token charts — **all with hover tooltips** |
 | 📈 | **Subscription quota** | Kimi Coding Plan and similar subscriptions: weekly quota, 5-hour rolling window limit, pay-as-you-go-equivalent cost for reference |
 | 💳 | **Balance lookup** | One-click DeepSeek account balance (total / topped-up / granted / status) |
@@ -108,6 +109,7 @@ dsh web
 
 - **Time range**: switch between last 7 days / 30 days / all time (top-right);
 - **Cost chart**: segment by peak period or by model; hover for daily breakdowns;
+- **Color schemes**: in "by model" view, three swatches next to the title switch between 橙→黄 / 蓝→紫 / 蓝→浅蓝 palettes. Models are ranked by total spend and colored in a sequential gradient (rank 1 = darkest at the bottom, getting lighter upwards; no cycling, no collisions). The choice is remembered in the browser (localStorage);
 - **Per-model sections**: one request-count chart and one token-composition chart (input / cache write / output / cache hit) per model;
 - **CSV export**: exports detail records (last 180 days) plus daily rollup rows (`purpose=rollup`).
 
@@ -147,6 +149,9 @@ No. Records are flushed to disk with debounced atomic writes and restored on sta
 **Q: How long is history kept? Is there a stats cap?**
 Detail records are kept for the last **180 days**; older records are auto-compressed into **permanent daily rollups** (aggregates only: calls / token breakdown / cost — no per-call details). So all-time totals and per-model stats stay **exact forever**, while memory, disk and write volume stay bounded no matter how long you run. The daily chart axis spans up to 730 days. Old-format data files migrate automatically; set the `DSH_COST_TRACKER_STORE` env var to override the store path (default `$DSH_HOME/storages`, or `~/.dsh` when `DSH_HOME` is unset).
 
+**Q: How do I enable/disable the startup logs?**
+The plugin starts **silently by default**. Set the environment variable `DSH_COST_TRACKER_LOG=1` (or `true` / `yes` / `on`) to enable startup logs: nav-icon self-check results, the data-restore report (`restored N detail records ...`) and the ready marker. **Error logs** (persist failures, corrupted files, etc.) are always printed and are not affected by this switch.
+
 **Q: What does "equivalent cost" mean for subscription models (kimi-coding)?**
 Subscriptions are not billed per token. The plugin estimates what those calls *would* cost at pay-as-you-go prices so you can judge whether your subscription pays off — **it is not a real charge**.
 
@@ -166,6 +171,7 @@ Run `git pull` inside the plugin directory. If only the UI (`client.js`) changed
 ```
 ├── index.js        Host half: usage capture, aggregation, HTTP API, agent tools
 ├── store.js        Storage layer: 180-day detail retention + permanent daily rollups + persistence (pure logic, unit-testable)
+├── pricing.js      Pricing & tokens: price tables, peak/off-peak billing, vision model (pure logic, unit-testable)
 ├── client.js       Client half: settings dashboard & status line UI
 ├── package.json    Plugin manifest (with dsh.client declaration)
 ├── test/           Storage unit tests (node test/storage.test.js)

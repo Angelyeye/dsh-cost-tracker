@@ -6,7 +6,7 @@
 
 **简体中文** | [English](./README.en.md)
 
-![version](https://img.shields.io/badge/version-v1.1.2-blue?style=flat-square)
+![version](https://img.shields.io/badge/version-v1.2.0-blue?style=flat-square)
 ![license](https://img.shields.io/badge/license-MIT-green?style=flat-square)
 ![status](https://img.shields.io/badge/status-stable-brightgreen?style=flat-square)
 ![platform](https://img.shields.io/badge/platform-DSH%20Web-blueviolet?style=flat-square)
@@ -30,6 +30,7 @@
 | --- | --- | --- |
 | 💰 | **花费统计** | 每一次 API 调用自动记账:输入 / 输出 / 缓存命中 / 缓存写入 Tokens 与费用,按天、按模型聚合 |
 | ⏰ | **峰谷定价** | 内置单价表,高峰时段(北京时间 9:00–12:00、14:00–18:00)与闲时半价自动区分,本地模型(ollama 等)计 0 |
+| 👁️ | **视觉模型** | 支持 `deepseek-v4-flash-vision-exp`:单价与 flash 一致,图片按官方规则换算 token(每张上限 384 个,以接口用量计费) |
 | 📊 | **可视化仪表盘** | 设置页新增「花费统计」:概览卡片、消费柱状图(按峰谷/按模型)、分模型的请求次数与 Tokens 图表,**全部支持鼠标悬停查看明细** |
 | 📈 | **订阅配额监控** | Kimi Coding Plan 等订阅套餐:本周配额、5 小时滚动窗口限额、等效按量费用参考 |
 | 💳 | **余额查询** | 一键查询 DeepSeek 官方账户余额(总余额 / 充值 / 赠送 / 状态) |
@@ -108,6 +109,7 @@ dsh web
 
 - **时间范围**:右上角可切换近 7 天 / 近 30 天 / 全部;
 - **消费金额图**:支持「按峰谷」「按模型」两种分段方式,鼠标悬停查看当日明细;
+- **配色切换**:「按模型」视图下,消费金额标题旁有三套装色款条(橙→黄 / 蓝→紫 / 蓝→浅蓝)可切换;模型按总消费降序排名取色(第 1 名最深夜底、逐级变浅,不循环不撞色),选择保存在浏览器本地;
 - **分模型区块**:每个模型一张请求次数图 + 一张 Tokens 构成图(输入/缓存写入/输出/缓存命中);
 - **导出 CSV**:导出明细记录(近 180 天)+ 日汇总行(`purpose=rollup`)。
 
@@ -147,6 +149,9 @@ POST /api/cost-tracker/export       导出 CSV
 **Q:历史记录会保留多久?统计有上限吗?**
 明细记录保留最近 **180 天**;更早的记录自动按「天 + 模型」压缩为**永久日汇总**(只保留聚合数字:调用数 / 各段 tokens / 费用,不再保留单次调用)。因此「全部」时间的总花费、分模型统计**永远精确**,且内存、磁盘、写入量有界,跑多久都不会膨胀。按天图表日期轴最长 730 天。数据文件支持旧版格式自动迁移;可用环境变量 `DSH_COST_TRACKER_STORE` 覆盖存储路径(默认 `$DSH_HOME/storages`,未设 `DSH_HOME` 时为 `~/.dsh`)。
 
+**Q:启动日志怎么开启/关闭?**
+插件默认**静默启动**,不打印日志。设置环境变量 `DSH_COST_TRACKER_LOG=1`(或 `true` / `yes` / `on`)可启用启动日志:nav-icon 自检结果、数据恢复报告(`restored N detail records ...`)、就绪标记。**错误日志**(持久化失败、文件损坏等)始终打印,不受此开关影响。
+
 **Q:订阅套餐(kimi-coding)的"等效费用"是什么意思?**
 订阅制不按量扣费。插件按内置单价估算出"如果这些调用走按量计费会花多少钱",仅供你评估订阅是否划算,**不是真实扣费**。
 
@@ -166,6 +171,7 @@ POST /api/cost-tracker/export       导出 CSV
 ```
 ├── index.js        Host 半端:用量采集、聚合、HTTP API、Agent 工具
 ├── store.js        存储层:明细保留 + 永久日汇总 + 持久化(纯逻辑,可独立测试)
+├── pricing.js      定价与 Token 层:单价表、峰谷计价、视觉模型(纯逻辑,可独立测试)
 ├── client.js       Client 半端:设置页仪表盘与状态栏 UI
 ├── package.json    插件清单(含 dsh.client 声明)
 ├── test/           存储层单元测试(node test/storage.test.js)

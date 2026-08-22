@@ -10,6 +10,18 @@ import { readFileSync, writeFileSync, mkdirSync, renameSync, existsSync, realpat
 import { join, dirname } from 'node:path'
 import { homedir } from 'node:os'
 import { createStore, collectTotals, DETAIL_DAYS, MAX_AXIS_DAYS } from './store.js'
+import { EXACT_MODELS, SUBSCRIPTION_RATES, PROVIDER_RATES, GENERIC_RATES, PEAK_WINDOWS, isPeak, priceFor, computeCost, normalizeTokens } from './pricing.js'
+
+// ============================================================
+// 启动信息日志开关（默认静默）
+//   设置 DSH_COST_TRACKER_LOG=1（或 true/yes/on）后，dsh web 启动时会打印：
+//   nav-icon 自检结果、数据恢复报告、就绪标记。
+//   错误日志（持久化失败、文件损坏等 console.error）始终打印，不受此开关影响。
+// ============================================================
+const STARTUP_LOG = /^(1|true|yes|on)$/i.test(String(process.env.DSH_COST_TRACKER_LOG || ''))
+function startupLog(msg) {
+  if (STARTUP_LOG) console.log(msg)
+}
 
 // ============================================================
 // 设置侧边栏图标补丁 · 启动自愈
@@ -63,24 +75,12 @@ export default {
   inject: ['tools', 'webServer'],
   apply(ctx) {
     // 侧边栏图标补丁自愈（DSH 升级覆盖外壳后自动重打；失败静默跳过）
-    ensureNavIconPatch({ log: (m) => console.log('[cost-tracker] nav-icon ' + m) })
+    ensureNavIconPatch({ log: (m) => startupLog('[cost-tracker] nav-icon ' + m) })
 
     // ---------- price tables (CNY per 1M tokens) ----------
-    const EXACT_MODELS = {
-      'deepseek-v4-flash': { input: 3.0, output: 9.0, cacheRead: 0.10, cacheWrite: 3.0 },
-      'deepseek-v4-pro': { input: 9.0, output: 27.0, cacheRead: 0.30, cacheWrite: 9.0 },
-    }
-    const SUBSCRIPTION_RATES = { 'kimi-coding': { input: 6.5, output: 27.0, cacheRead: 1.1, cacheWrite: 6.5 } }
-    const PROVIDER_RATES = {
-      deepseek: { rates: { input: 3.0, output: 9.0, cacheRead: 0.10, cacheWrite: 3.0 }, tiered: true },
-      openai: { rates: { input: 10.0, output: 30.0, cacheRead: 5.0, cacheWrite: 10.0 }, tiered: false },
-      anthropic: { rates: { input: 15.0, output: 75.0, cacheRead: 1.5, cacheWrite: 15.0 }, tiered: false },
-      gemini: { rates: { input: 2.5, output: 10.0, cacheRead: 0.625, cacheWrite: 2.5 }, tiered: false },
-      ollama: { rates: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, tiered: false },
-      local: { rates: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, tiered: false },
-    }
-    const GENERIC_RATES = { input: 2.0, output: 8.0, cacheRead: 0.5, cacheWrite: 2.0 }
-    const PEAK_WINDOWS = '9:00-12:00 · 14:00-18:00'
+    // 单价表 / 峰谷 / 费用计算集中在 pricing.js（纯模块，可独立测试）；
+    // 含 deepseek-v4-flash-vision-exp 视觉模型（单价与 flash 一致，
+    // 图片 token 按官方规则由接口 usage 计入 inputTokens）
 
     // ---------- state ----------
     // 注意：records/rollups 在 persistence 段由 store 初始化（details/rollups 引用）
@@ -90,11 +90,9 @@ export default {
     function pad2(n) { return n < 10 ? '0' + n : '' + n }
     function toInt(x) { const n = parseInt(x, 10); return isNaN(n) ? 0 : n }
     function toStr(x) { return x === undefined || x === null ? '' : String(x) }
-    function toNum(x) { const n = Number(x); return isNaN(n) ? 0 : n }
     function r2(x) { return Math.round(x * 100) / 100 }
     function r4(x) { return Math.round(x * 10000) / 10000 }
     function normProvider(p) { return toStr(p).toLowerCase().replace(/-official$/, '') }
-    function isPeak(ts) { const h = new Date(ts + 28800000).getUTCHours(); return (h >= 9 && h < 12) || (h >= 14 && h < 18) }
     function dayKey(ts) {
       const d = new Date(ts + 28800000)
       return d.getUTCFullYear() + '-' + pad2(d.getUTCMonth() + 1) + '-' + pad2(d.getUTCDate())
@@ -102,17 +100,6 @@ export default {
     function timeLabel(ts) {
       const d = new Date(ts + 28800000)
       return (d.getUTCMonth() + 1) + '/' + d.getUTCDate() + ' ' + pad2(d.getUTCHours()) + ':' + pad2(d.getUTCMinutes())
-    }
-    function priceFor(np, model) {
-      if (SUBSCRIPTION_RATES[np]) return { rates: SUBSCRIPTION_RATES[np], tiered: false, estimated: true, subscription: true }
-      if (EXACT_MODELS[model]) return { rates: EXACT_MODELS[model], tiered: true, estimated: false, subscription: false }
-      const p = PROVIDER_RATES[np]
-      if (p) return { rates: p.rates, tiered: p.tiered, estimated: true, subscription: false }
-      return { rates: GENERIC_RATES, tiered: false, estimated: true, subscription: false }
-    }
-    function computeCost(rates, tiered, peak, t) {
-      const f = tiered && !peak ? 0.5 : 1
-      return (t.input * rates.input + t.output * rates.output + t.cacheRead * rates.cacheRead + t.cacheWrite * rates.cacheWrite) * f / 1000000
     }
 
     // ---------- persistence ----------
@@ -129,7 +116,7 @@ export default {
     function loadRecords() {
       const n = store.load()
       const ru = Object.keys(rollups).length
-      if (n > 0 || ru > 0) console.log('cost tracker restored ' + n + ' detail records, ' + ru + ' rollup days from ' + STORE_FILE)
+      if (n > 0 || ru > 0) startupLog('cost tracker restored ' + n + ' detail records, ' + ru + ' rollup days from ' + STORE_FILE)
     }
 
     let persistPending = false
@@ -159,12 +146,9 @@ export default {
       const np = normProvider(provider)
       const price = priceFor(np, model)
       const peak = isPeak(ts)
-      const tokens = {
-        input: toNum(usage.inputTokens),
-        output: toNum(usage.outputTokens),
-        cacheRead: toNum(usage.cacheReadTokens),
-        cacheWrite: toNum(usage.cacheWriteTokens),
-      }
+      // 视觉模型（deepseek-v4-flash-vision-exp）的图片 token 已含在接口
+      // prompt_tokens 中（每张≤384 tokens），由 normalizeTokens 归入 input
+      const tokens = normalizeTokens(usage)
       store.add({
         ts, provider, model,
         sessionId: toStr(options && options.sessionId),
@@ -499,6 +483,7 @@ export default {
         }
       }
       const byDay = dates.map(d => ({ date: d.key, label: d.label, peak: r4(dayAgg[d.key].peak), off: r4(dayAgg[d.key].off), flat: r4(dayAgg[d.key].flat) }))
+      // 模型展示顺序：按总费用降序排名（与 DeepSeek 开放平台一致，排名决定取色/堆叠顺序）
       const keys = Object.keys(modelMap).sort((a, b) => modelMap[b].cost - modelMap[a].cost)
       const byModel = keys.map(k => {
         const m = modelMap[k]
@@ -650,7 +635,7 @@ export default {
       },
       output: {
         schema: { type: 'object', additionalProperties: true },
-        render: (args, v) => [{ type: 'text', text: '单价表（CNY / 百万 tokens）\n峰谷时段：' + v.peakWindows + '（北京时间），闲时 = 高峰价 × ' + v.offPeakFactor + '\ndeepseek-v4-flash：高峰 输入 3.0 / 输出 9.0 / 缓存命中 0.10 / 缓存写入 3.0\ndeepseek-v4-pro：高峰 输入 9.0 / 输出 27.0 / 缓存命中 0.30 / 缓存写入 9.0\nkimi-coding（订阅等效，估算）：输入 6.5 / 缓存命中 1.1 / 缓存写入 6.5 / 输出 27.0\n其他 provider 兜底为估算平价（openai 10/30/5/10，anthropic 15/75/1.5/15，gemini 2.5/10/0.625/2.5，未知 2/8/0.5/2）；ollama/local 为 0。' }],
+        render: (args, v) => [{ type: 'text', text: '单价表（CNY / 百万 tokens）\n峰谷时段：' + v.peakWindows + '（北京时间），闲时 = 高峰价 × ' + v.offPeakFactor + '\ndeepseek-v4-flash：高峰 输入 3.0 / 输出 9.0 / 缓存命中 0.10 / 缓存写入 3.0\ndeepseek-v4-pro：高峰 输入 9.0 / 输出 27.0 / 缓存命中 0.30 / 缓存写入 9.0\ndeepseek-v4-flash-vision-exp：高峰 输入 3.0 / 输出 9.0 / 缓存命中 0.10 / 缓存写入 3.0（图片按官方规则换算 token，每张上限 384，以接口用量计费）\nkimi-coding（订阅等效，估算）：输入 6.5 / 缓存命中 1.1 / 缓存写入 6.5 / 输出 27.0\n其他 provider 兜底为估算平价（openai 10/30/5/10，anthropic 15/75/1.5/15，gemini 2.5/10/0.625/2.5，未知 2/8/0.5/2）；ollama/local 为 0。' }],
       },
       execute: async () => prices(),
     })
@@ -673,6 +658,6 @@ export default {
     // ---------- lifecycle ----------
     loadRecords()
     ctx.effect(() => () => { try { writeRecords() } catch (e) {} }, 'cost-tracker: final flush')
-    console.log('cost tracker ready (static)')
+    startupLog('cost tracker ready (static)')
   },
 }
