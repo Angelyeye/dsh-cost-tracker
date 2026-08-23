@@ -33,7 +33,7 @@ function bj(y, mo, d, h, mi) { return Date.UTC(y, mo - 1, d, h - 8, mi) }
   approx(p.rates.input, 3.0, '视觉模型: 输入（缓存未命中）高峰 3.0')
   approx(p.rates.output, 9.0, '视觉模型: 输出高峰 9.0')
   approx(p.rates.cacheRead, 0.10, '视觉模型: 缓存命中 0.10')
-  approx(p.rates.cacheWrite, 3.0, '视觉模型: 缓存写入 3.0')
+  approx(p.rates.cacheWrite, 0.10, '视觉模型: 缓存写入 0.10（按命中价计）')
   ok(EXACT_MODELS[VISION_MODEL] !== undefined, '视觉模型: 在精确单价表中')
   ok(VISION_IMAGE_MAX_TOKENS === 384, '视觉模型: 每张图片 token 上限 384')
 }
@@ -142,6 +142,31 @@ function bj(y, mo, d, h, mi) { return Date.UTC(y, mo - 1, d, h - 8, mi) }
   approx(computeCost(lo.rates, false, true, { input: 99999, output: 99999, cacheRead: 0, cacheWrite: 0 }), 0, '回归: 本地模型计 0')
   ok(PEAK_WINDOWS === '周一至周五 9:00-12:00 · 14:00-18:00（周末全天闲时）', '回归: 峰谷窗口文案')
   ok(SUBSCRIPTION_RATES['kimi-coding'] !== undefined && SUBSCRIPTION_RATES.kimi !== undefined, '回归: 订阅表存在（两个键）')
+}
+
+// ---------- 6b. 缓存写入按命中价计（官方规则对齐） ----------
+{
+  const rates = EXACT_MODELS['deepseek-v4-flash']
+  // 缓存写入 token 与缓存命中 token 同价（均为 0.10），不再是未命中价 3.0
+  ok(rates.cacheWrite === rates.cacheRead, '缓存写入: flash cacheWrite === cacheRead（命中价）')
+  ok(rates.cacheWrite === 0.10, '缓存写入: flash cacheWrite = 0.10（命中价，非 3.0）')
+  ok(EXACT_MODELS['deepseek-v4-pro'].cacheWrite === 0.30, '缓存写入: pro cacheWrite = 0.30（命中价）')
+  // 计费：输入 1000×3 + 输出 500×9 + (读 2000 + 写 3000)×0.10，高峰
+  const t = { input: 1000, output: 500, cacheRead: 2000, cacheWrite: 3000 }
+  const expectPeak = (1000 * 3.0 + 500 * 9.0 + (2000 + 3000) * 0.10) / 1e6 // (3000+4500+500)/1e6 = 0.008
+  approx(computeCost(rates, true, true, t), expectPeak, '缓存写入: 读写都按命中价计（高峰）')
+  approx(computeCost(rates, true, false, t), expectPeak / 2, '缓存写入: 空闲半价')
+}
+
+// ---------- 6c. reasoning token 归一化与计费 ----------
+{
+  const n = normalizeTokens({ inputTokens: 10, outputTokens: 20, reasoningTokens: 30 })
+  ok(n.reasoning === 30, '归一化: reasoningTokens 归一')
+  // 模型带 reasoning 单价时才计费
+  const r = EXACT_MODELS['deepseek-v4-flash']
+  approx(computeCost(r, true, true, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 1000000 }), 0, '计费: 无 reasoning 单价 → 计 0')
+  const withR = { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, reasoning: 1 }
+  approx(computeCost({ input: 3, output: 9, cacheRead: 0.10, cacheWrite: 0.10, reasoning: 4 }, true, true, withR), (1 * 3 + 1 * 9 + 0 + 1 * 4) / 1e6, '计费: 有 reasoning 单价按单价计')
 }
 
 // ---------- 7. index.js 仍可加载（含 pricing 导入） ----------

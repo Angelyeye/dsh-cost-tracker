@@ -6,7 +6,7 @@
 
 [简体中文](./README.md) | **English**
 
-![version](https://img.shields.io/badge/version-v1.4.0-blue?style=flat-square)
+![version](https://img.shields.io/badge/version-v1.4.1-blue?style=flat-square)
 ![license](https://img.shields.io/badge/license-MIT-green?style=flat-square)
 ![status](https://img.shields.io/badge/status-stable-brightgreen?style=flat-square)
 ![platform](https://img.shields.io/badge/platform-DSH%20Web-blueviolet?style=flat-square)
@@ -28,7 +28,7 @@
 
 | | Feature | Description |
 | --- | --- | --- |
-| 💰 | **Cost tracking** | Every API call is recorded automatically: input / output / cache-hit / cache-write tokens and cost, aggregated by day and by model |
+| 💰 | **Cost tracking** | Every API call is recorded automatically: input / output / cache-hit / cache-write tokens and cost (cache write billed at the cache-hit price), aggregated by day and by model |
 | ⏰ | **Peak/off-peak pricing** | Built-in price table; peak windows (Mon–Fri 9:00–12:00, 14:00–18:00 Beijing time) vs half-price off-peak handled automatically; **weekends are fully off-peak**; local models (e.g. ollama) count as 0 |
 | 🔔 | **Peak-price notice** | A "Peak/off-peak pricing & notice" panel in Settings: current tier + countdown strip, style switch (compact/classic), popup alert + browser notification before a tier switch, lead time, popup position (bottom-right/center), alert type; a persistent strip in the sidebar footer (adapts to rail/collapsed). Mirrors `dsh-cost-meter` |
 | 📌 | **Six overview cards** | Six cards at the top of Settings: Today / This month / Total spend / API requests / Tokens / **Account balance**. The three spend cards **exclude subscription equivalent cost** (shown as an annotation instead) |
@@ -149,6 +149,18 @@ Example: `curl -X POST http://127.0.0.1:3080/api/cost-tracker/summary -d '{}'`
 ---
 
 ## Changelog
+
+### v1.4.1 (2026-08-23)
+
+**Fixed cache-write pricing and added reasoning billing (aligned with official rules & dsh-cost-meter)**
+
+- **Fixed cache-write (cacheWrite) pricing bug**: previously `cacheWrite` was billed at the **cache-miss** price (flash 3.0 / pro 9.0), badly overcharging sessions with heavy cache writes. The official rule (and `dsh-cost-meter`) sets **cache write = cache-hit price**, now unified as `(cacheRead + cacheWrite) × cache-hit price` (flash 0.10 / pro 0.30).
+- `computeCost()` is now `input×miss-price + output×output-price + (cacheRead+cacheWrite)×hit-price`, matching the official / reference formula exactly.
+- **Added reasoning-token billing**: `normalizeTokens()` now has a `reasoning` bucket (reads `usage.reasoningTokens`); a model price containing `reasoning` bills it at its own unit price (DeepSeek current models list no separate reasoning price → 0).
+- Synced `cacheWrite` to the hit price across `EXACT_MODELS` / `SUBSCRIPTION_RATES` / `PROVIDER_RATES` / `GENERIC_RATES`.
+- Updated the `cost_prices` tool text and unit tests (added "cache write at hit price" and "reasoning billing" cases).
+
+> Note: this release only fixes **per-model pricing**. Differences between plugins in "call counts / cumulative usage" stem from counting granularity (live `llm/stream` vs DSH session projection `(turn,step)`), which is not a pricing bug.
 
 ### v1.4.0 (2026-08-23)
 

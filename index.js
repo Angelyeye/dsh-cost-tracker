@@ -788,7 +788,7 @@ export default {
       },
       output: {
         schema: { type: 'object', additionalProperties: true },
-        render: (args, v) => [{ type: 'text', text: '单价表（CNY / 百万 tokens）\n峰谷时段：' + v.peakWindows + '（北京时间），闲时 = 高峰价 × ' + v.offPeakFactor + '\ndeepseek-v4-flash：高峰 输入 3.0 / 输出 9.0 / 缓存命中 0.10 / 缓存写入 3.0\ndeepseek-v4-pro：高峰 输入 9.0 / 输出 27.0 / 缓存命中 0.30 / 缓存写入 9.0\ndeepseek-v4-flash-vision-exp：高峰 输入 3.0 / 输出 9.0 / 缓存命中 0.10 / 缓存写入 3.0（图片按官方规则换算 token，每张上限 384，以接口用量计费）\nkimi-coding（订阅等效，估算）：输入 6.5 / 缓存命中 1.1 / 缓存写入 6.5 / 输出 27.0\n其他 provider 兜底为估算平价（openai 10/30/5/10，anthropic 15/75/1.5/15，gemini 2.5/10/0.625/2.5，未知 2/8/0.5/2）；ollama/local 为 0。' }],
+        render: (args, v) => [{ type: 'text', text: '单价表（CNY / 百万 tokens）\n峰谷时段：' + v.peakWindows + '（北京时间），闲时 = 高峰价 × ' + v.offPeakFactor + '\ndeepseek-v4-flash：高峰 输入 3.0 / 输出 9.0 / 缓存命中（含缓存写入）0.10\ndeepseek-v4-pro：高峰 输入 9.0 / 输出 27.0 / 缓存命中（含缓存写入）0.30\ndeepseek-v4-flash-vision-exp：高峰 输入 3.0 / 输出 9.0 / 缓存命中（含缓存写入）0.10（图片按官方规则换算 token，每张上限 384，以接口用量计费）\nkimi-coding（订阅等效，估算）：输入 6.5 / 缓存命中（含缓存写入）1.1 / 输出 27.0\n缓存写入(cache write)按缓存命中价计费，与官方规则及 dsh-cost-meter 一致。其他 provider 兜底为估算平价（openai 10/30/5，anthropic 15/75/1.5，gemini 2.5/10/0.625，未知 2/8/0.5）；ollama/local 为 0。' }],
       },
       execute: async () => prices(),
     })
