@@ -7,7 +7,7 @@
 import {
   EXACT_MODELS, PROVIDER_RATES, SUBSCRIPTION_RATES, GENERIC_RATES,
   PEAK_WINDOWS, VISION_MODEL, VISION_IMAGE_MAX_TOKENS,
-  isPeak, priceFor, computeCost, normalizeTokens,
+  isPeak, peakPhaseAt, priceFor, computeCost, normalizeTokens,
 } from '../pricing.js'
 
 let failures = 0
@@ -38,17 +38,48 @@ function bj(y, mo, d, h, mi) { return Date.UTC(y, mo - 1, d, h - 8, mi) }
   ok(VISION_IMAGE_MAX_TOKENS === 384, '视觉模型: 每张图片 token 上限 384')
 }
 
-// ---------- 2. 峰谷时段边界（北京时间） ----------
+// ---------- 2. 峰谷时段边界（北京时间，仅周一至周五为高峰；周末全天空闲） ----------
 {
-  ok(isPeak(bj(2026, 8, 22, 8, 59)) === false, '峰谷: 08:59 空闲')
-  ok(isPeak(bj(2026, 8, 22, 9, 0)) === true, '峰谷: 09:00 高峰')
-  ok(isPeak(bj(2026, 8, 22, 11, 59)) === true, '峰谷: 11:59 高峰')
-  ok(isPeak(bj(2026, 8, 22, 12, 0)) === false, '峰谷: 12:00 空闲')
-  ok(isPeak(bj(2026, 8, 22, 13, 59)) === false, '峰谷: 13:59 空闲')
-  ok(isPeak(bj(2026, 8, 22, 14, 0)) === true, '峰谷: 14:00 高峰')
-  ok(isPeak(bj(2026, 8, 22, 17, 59)) === true, '峰谷: 17:59 高峰')
-  ok(isPeak(bj(2026, 8, 22, 18, 0)) === false, '峰谷: 18:00 空闲')
-  ok(isPeak(bj(2026, 8, 22, 1, 30)) === false, '峰谷: 凌晨空闲')
+  // 2026-08-21 是周五 —— 高峰窗口边界
+  ok(isPeak(bj(2026, 8, 21, 8, 59)) === false, '峰谷: 周五 08:59 空闲')
+  ok(isPeak(bj(2026, 8, 21, 9, 0)) === true, '峰谷: 周五 09:00 高峰')
+  ok(isPeak(bj(2026, 8, 21, 11, 59)) === true, '峰谷: 周五 11:59 高峰')
+  ok(isPeak(bj(2026, 8, 21, 12, 0)) === false, '峰谷: 周五 12:00 空闲')
+  ok(isPeak(bj(2026, 8, 21, 13, 59)) === false, '峰谷: 周五 13:59 空闲')
+  ok(isPeak(bj(2026, 8, 21, 14, 0)) === true, '峰谷: 周五 14:00 高峰')
+  ok(isPeak(bj(2026, 8, 21, 17, 59)) === true, '峰谷: 周五 17:59 高峰')
+  ok(isPeak(bj(2026, 8, 21, 18, 0)) === false, '峰谷: 周五 18:00 空闲')
+  ok(isPeak(bj(2026, 8, 21, 1, 30)) === false, '峰谷: 周五凌晨空闲')
+  // 周末全天计为闲时（2026-08-22 周六 / 2026-08-23 周日）
+  ok(isPeak(bj(2026, 8, 22, 9, 0)) === false, '峰谷: 周六 09:00 空闲（周末全天空闲）')
+  ok(isPeak(bj(2026, 8, 22, 14, 0)) === false, '峰谷: 周六 14:00 空闲（周末全天空闲）')
+  ok(isPeak(bj(2026, 8, 23, 9, 0)) === false, '峰谷: 周日 09:00 空闲（周末全天空闲）')
+  ok(isPeak(bj(2026, 8, 23, 17, 59)) === false, '峰谷: 周日 17:59 空闲（周末全天空闲）')
+}
+
+// ---------- 2b. 峰谷相位与倒计时（peakPhaseAt） ----------
+{
+  // 工作日高峰中：下一切换点 = 当日 12:00 转谷
+  let p = peakPhaseAt(bj(2026, 8, 21, 10, 30))
+  ok(p !== null && p.inPeak === true && p.weekend === false, '相位: 周五 10:30 高峰')
+  ok(p.nextAtMs === bj(2026, 8, 21, 12, 0) && p.nextIntoPeak === false, '相位: 周五 10:30 下一切换 = 12:00 转谷')
+  // 工作日谷段（12:00-14:00）：下一切换 = 当日 14:00 转峰
+  p = peakPhaseAt(bj(2026, 8, 21, 13, 0))
+  ok(p !== null && p.inPeak === false, '相位: 周五 13:00 谷段')
+  ok(p.nextAtMs === bj(2026, 8, 21, 14, 0) && p.nextIntoPeak === true, '相位: 周五 13:00 下一切换 = 14:00 转峰')
+  // 工作日傍晚（18:00 后）：跨周末，下一转峰 = 下周一 09:00
+  p = peakPhaseAt(bj(2026, 8, 21, 19, 0))
+  ok(p !== null && p.inPeak === false, '相位: 周五 19:00 谷段')
+  ok(p.nextAtMs === bj(2026, 8, 24, 9, 0) && p.nextIntoPeak === true, '相位: 周五 19:00 跨周末 → 下周一 09:00 转峰')
+  // 周六：周末全谷价，下一转峰 = 下周一 09:00
+  p = peakPhaseAt(bj(2026, 8, 22, 10, 0))
+  ok(p !== null && p.weekend === true && p.inPeak === false, '相位: 周六 10:00 周末全谷价')
+  ok(p.nextAtMs === bj(2026, 8, 24, 9, 0) && p.nextIntoPeak === true, '相位: 周六 10:00 下一切换 = 下周一 09:00 转峰')
+  // 周日同理
+  p = peakPhaseAt(bj(2026, 8, 23, 15, 0))
+  ok(p !== null && p.weekend === true && p.nextAtMs === bj(2026, 8, 24, 9, 0), '相位: 周日 15:00 周末全谷价')
+  // 非法输入 → null
+  ok(peakPhaseAt(NaN) === null, '相位: 非法时刻返回 null')
 }
 
 // ---------- 3. 真实 API 用量计费（视觉调用实测 usage） ----------
@@ -109,7 +140,7 @@ function bj(y, mo, d, h, mi) { return Date.UTC(y, mo - 1, d, h - 8, mi) }
   // 本地模型 0 元
   const lo = priceFor('ollama', 'llama3')
   approx(computeCost(lo.rates, false, true, { input: 99999, output: 99999, cacheRead: 0, cacheWrite: 0 }), 0, '回归: 本地模型计 0')
-  ok(PEAK_WINDOWS === '9:00-12:00 · 14:00-18:00', '回归: 峰谷窗口文案')
+  ok(PEAK_WINDOWS === '周一至周五 9:00-12:00 · 14:00-18:00（周末全天闲时）', '回归: 峰谷窗口文案')
   ok(SUBSCRIPTION_RATES['kimi-coding'] !== undefined && SUBSCRIPTION_RATES.kimi !== undefined, '回归: 订阅表存在（两个键）')
 }
 

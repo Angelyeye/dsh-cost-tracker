@@ -6,7 +6,7 @@
 
 [简体中文](./README.md) | **English**
 
-![version](https://img.shields.io/badge/version-v1.2.0-blue?style=flat-square)
+![version](https://img.shields.io/badge/version-v1.4.0-blue?style=flat-square)
 ![license](https://img.shields.io/badge/license-MIT-green?style=flat-square)
 ![status](https://img.shields.io/badge/status-stable-brightgreen?style=flat-square)
 ![platform](https://img.shields.io/badge/platform-DSH%20Web-blueviolet?style=flat-square)
@@ -29,13 +29,16 @@
 | | Feature | Description |
 | --- | --- | --- |
 | 💰 | **Cost tracking** | Every API call is recorded automatically: input / output / cache-hit / cache-write tokens and cost, aggregated by day and by model |
-| ⏰ | **Peak/off-peak pricing** | Built-in price table; peak windows (9:00–12:00, 14:00–18:00 Beijing time) vs half-price off-peak are handled automatically; local models (e.g. ollama) count as 0 |
+| ⏰ | **Peak/off-peak pricing** | Built-in price table; peak windows (Mon–Fri 9:00–12:00, 14:00–18:00 Beijing time) vs half-price off-peak handled automatically; **weekends are fully off-peak**; local models (e.g. ollama) count as 0 |
+| 🔔 | **Peak-price notice** | A "Peak/off-peak pricing & notice" panel in Settings: current tier + countdown strip, style switch (compact/classic), popup alert + browser notification before a tier switch, lead time, popup position (bottom-right/center), alert type; a persistent strip in the sidebar footer (adapts to rail/collapsed). Mirrors `dsh-cost-meter` |
+| 📌 | **Six overview cards** | Six cards at the top of Settings: Today / This month / Total spend / API requests / Tokens / **Account balance**. The three spend cards **exclude subscription equivalent cost** (shown as an annotation instead) |
 | 👁️ | **Vision model** | Supports `deepseek-v4-flash-vision-exp`: same prices as flash; images are converted to tokens per the official rule (≤384 tokens each, billed per API usage) |
 | 📊 | **Visual dashboard** | A new "Cost Statistics" page in Settings: overview cards, cost bar charts (by peak period / by model), per-model request & token charts — **all with hover tooltips** |
 | 📈 | **Subscription quota** | Kimi Coding Plan and similar subscriptions: weekly quota, 5-hour rolling window limit, pay-as-you-go-equivalent cost for reference |
 | 💳 | **Balance lookup** | One-click DeepSeek account balance (total / topped-up / granted / status) |
 | 🤖 | **Agent tools** | Ask in any chat: "how much have I spent today?" — the agent answers via `cost_stats` / `cost_prices` |
-| 🔻 | **Status line** | A live line under the chat input: session cost, total cost, current peak/off-peak price indicator |
+| 🔻 | **Status line** | A live line under the chat input: **session cost** (segmented pills: session / subscription plan / per-model), split by the models actually used in the session; multi-model collapses to top2 by default, click to expand. Subscription shows the plan name; no quota or call-count clutter |
+| 🔥 | **Usage heatmap** | A "Token Usage" panel in Settings: a Codex-style **26-week daily-usage grid**, colored per-day by input / cache / output / cost with hover details and a today outline; all-time totals shown on top |
 | 💾 | **Local persistence** | Data lives in `~/.dsh/storages/cost-tracker-records.json`; survives restarts, never leaves your machine. **Details are kept for the last 180 days; older records are auto-compressed into permanent daily rollups, so all-time stats stay exact with bounded memory/disk** |
 | 📤 | **CSV export** | One-click export of details + daily rollups (`purpose=rollup`) for further analysis in Excel / Numbers |
 
@@ -108,9 +111,12 @@ dsh web
 ### The Settings dashboard
 
 - **Time range**: switch between last 7 days / 30 days / all time (top-right);
+- **Six overview cards**: Today / This month / Total spend / API requests / Tokens / Account balance. The three spend cards exclude subscription equivalent cost (shown as an annotation); month is by Beijing calendar month; total is all-time (details + permanent rollups, always exact);
 - **Cost chart**: segment by peak period or by model; hover for daily breakdowns;
 - **Color schemes**: in "by model" view, three swatches next to the title switch between 橙→黄 / 蓝→紫 / 蓝→浅蓝 palettes. Models are ranked by total spend and colored in a sequential gradient (rank 1 = darkest at the bottom, getting lighter upwards; no cycling, no collisions). The choice is remembered in the browser (localStorage);
 - **Per-model sections**: one request-count chart and one token-composition chart (input / cache write / output / cache hit) per model;
+- **Usage heatmap**: a Codex-style 26-week daily-usage grid; shade by the day's token count relative to the maximum; hover any cell for that day's breakdown (input / cache / output / cost), today outlined;
+- **Peak/off-peak pricing & notice**: set the tier strip style (compact / classic), the popup-alert lead time (1–30 min), alert type (both / entering peak / entering off-peak), popup position (bottom-right / center), and optional browser system notification; everything auto-saves. A persistent strip in the sidebar footer shows the current tier and countdown to the next switch;
 - **CSV export**: exports detail records (last 180 days) plus daily rollup rows (`purpose=rollup`).
 
 ### Agent tools
@@ -119,6 +125,7 @@ dsh web
 | --- | --- | --- |
 | `cost_stats` | Query usage & cost statistics | "How much did I spend today?" |
 | `cost_prices` | Show the built-in price table & peak rules | "What does deepseek-v4-flash cost right now?" |
+| `cost_peak` | Show the current peak tier & next-switch countdown | "Is it peak hour right now?" |
 | `cost_reset` | **Erase ALL statistics (irreversible)** | "Reset my cost statistics" |
 
 ### HTTP API (for other tools)
@@ -128,6 +135,9 @@ All endpoints are `POST` + JSON and listen on the loopback address:
 ```
 POST /api/cost-tracker/summary      Overview
 POST /api/cost-tracker/dashboard    Dashboard data
+POST /api/cost-tracker/usage        Usage heatmap (all-time totals + daily token aggregation)
+POST /api/cost-tracker/peak         Peak-phase snapshot (current tier / next switch / config)
+POST /api/cost-tracker/peak-config  Save peak-price notice config
 POST /api/cost-tracker/kimi-usage   Kimi subscription quota
 POST /api/cost-tracker/balance      Account balance
 POST /api/cost-tracker/prices       Price table
@@ -135,6 +145,23 @@ POST /api/cost-tracker/export       CSV export
 ```
 
 Example: `curl -X POST http://127.0.0.1:3080/api/cost-tracker/summary -d '{}'`
+
+---
+
+## Changelog
+
+### v1.4.0 (2026-08-23)
+
+**New**
+- **Peak-price notice (mirrors `dsh-cost-meter`)**: a "Peak/off-peak pricing & notice" panel in Settings — enable peak/off-peak pricing, prominent peak notice, strip style (compact / classic), popup alert before a tier switch, lead time (1–30 min), alert type (both / peak / off-peak), popup position (bottom-right / center), and optional browser system notification. All settings auto-save to `~/.dsh/storages/cost-tracker-config.json`. A persistent strip in the sidebar footer shows the current tier + countdown to the next switch, and adapts to the collapsed (rail) state. Adds `POST /api/cost-tracker/peak` and `POST /api/cost-tracker/peak-config`, plus the `cost_peak` agent tool.
+- **Six overview cards**: Today / This month / Total spend / API requests / Tokens / **Account balance**. The three spend cards **exclude subscription equivalent cost** (shown as an annotation); month is by Beijing calendar month; total is all-time (details + permanent rollups, always exact).
+
+**Improved**
+- **Synced with DeepSeek's latest pricing**: peak hours are now **Mon–Fri 9:00–12:00, 14:00–18:00 Beijing time**, with **weekends fully off-peak (half price)**; `isPeak()` no longer ignores the weekday, fixing weekends being wrongly billed at peak rates.
+- The notice strip now matches the reference project: a two-segment track (orange left / blue right) + marker + single-line colored chip.
+
+**Fixed**
+- The preview popup was hardcoded to center; it now **follows your configured popup position** (bottom-right / center).
 
 ---
 
@@ -171,10 +198,11 @@ Run `git pull` inside the plugin directory. If only the UI (`client.js`) changed
 ```
 ├── index.js        Host half: usage capture, aggregation, HTTP API, agent tools
 ├── store.js        Storage layer: 180-day detail retention + permanent daily rollups + persistence (pure logic, unit-testable)
-├── pricing.js      Pricing & tokens: price tables, peak/off-peak billing, vision model (pure logic, unit-testable)
-├── client.js       Client half: settings dashboard & status line UI
+├── pricing.js      Pricing & tokens: price tables, peak/off-peak billing, vision model, peak-phase math (pure logic, unit-testable)
+├── config.js       Config layer: defaults & normalization for the peak-price notice (pure logic, unit-testable)
+├── client.js       Client half: settings dashboard, status line & peak-price notice UI
 ├── package.json    Plugin manifest (with dsh.client declaration)
-├── test/           Storage unit tests (node test/storage.test.js)
+├── test/           Unit tests (node test/storage.test.js)
 └── docs/           README screenshots
 ```
 

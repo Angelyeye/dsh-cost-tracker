@@ -6,7 +6,7 @@
 
 **简体中文** | [English](./README.en.md)
 
-![version](https://img.shields.io/badge/version-v1.2.0-blue?style=flat-square)
+![version](https://img.shields.io/badge/version-v1.4.0-blue?style=flat-square)
 ![license](https://img.shields.io/badge/license-MIT-green?style=flat-square)
 ![status](https://img.shields.io/badge/status-stable-brightgreen?style=flat-square)
 ![platform](https://img.shields.io/badge/platform-DSH%20Web-blueviolet?style=flat-square)
@@ -29,7 +29,9 @@
 | | 功能 | 说明 |
 | --- | --- | --- |
 | 💰 | **花费统计** | 每一次 API 调用自动记账:输入 / 输出 / 缓存命中 / 缓存写入 Tokens 与费用,按天、按模型聚合 |
-| ⏰ | **峰谷定价** | 内置单价表,高峰时段(北京时间 9:00–12:00、14:00–18:00)与闲时半价自动区分,本地模型(ollama 等)计 0 |
+| ⏰ | **峰谷定价** | 内置单价表,高峰时段(北京时间周一至周五 9:00–12:00、14:00–18:00)与闲时半价自动区分,**周末全天计为闲时**,本地模型(ollama 等)计 0 |
+| 🔔 | **峰谷计价提示** | 设置页「峰谷计价与提示」面板:当前档位/距下次切换倒计时时段条、样式切换(简洁/经典)、峰/谷切换前弹窗提醒与浏览器系统通知、提前提醒分钟、弹窗位置(右下角/屏幕中心)、提醒类型;侧边栏底部常驻显示时段条(窄栏/展开自适应)。对齐 `dsh-cost-meter` 交互 |
+| 📌 | **六组概览卡** | 设置页顶部六张卡:今日费用 / 本月费用 / 总花费 / API 请求次数 / Tokens / **总余额**。前三个金额卡**不含订阅会员等效费用**,订阅以附注展示 |
 | 👁️ | **视觉模型** | 支持 `deepseek-v4-flash-vision-exp`:单价与 flash 一致,图片按官方规则换算 token(每张上限 384 个,以接口用量计费) |
 | 📊 | **可视化仪表盘** | 设置页新增「花费统计」:概览卡片、消费柱状图(按峰谷/按模型)、分模型的请求次数与 Tokens 图表,**全部支持鼠标悬停查看明细** |
 | 🔥 | **用量热力图** | 设置页新增「Token 用量统计」:类 Codex 的 **26 周日用量方格热图**,按天着色(输入 / 缓存 / 输出 / 费用),悬停看当日明细、今天高亮描边,顶部显示全时段累计 |
@@ -121,6 +123,7 @@ dsh web
 | --- | --- | --- |
 | `cost_stats` | 查询花费与用量统计 | "我今天花了多少钱?" |
 | `cost_prices` | 查看内置单价表与峰谷规则 | "现在 deepseek-v4-flash 什么价?" |
+| `cost_peak` | 查询当前峰谷档位与下次切换倒计时 | "现在是不是高峰时段?" |
 | `cost_reset` | **清空全部统计数据(不可恢复)** | "把花费统计清零" |
 
 ### HTTP API(供其他工具调用)
@@ -131,6 +134,8 @@ dsh web
 POST /api/cost-tracker/summary      概览(含本会话按模型拆分 / 订阅)
 POST /api/cost-tracker/dashboard    仪表盘数据
 POST /api/cost-tracker/usage        用量热力图(全时段累计 + 按天 token 聚合)
+POST /api/cost-tracker/peak         峰谷相位快照(当前档位/下次切换/配置)
+POST /api/cost-tracker/peak-config  保存峰谷计价提示配置
 POST /api/cost-tracker/kimi-usage   Kimi 订阅配额
 POST /api/cost-tracker/balance      账户余额
 POST /api/cost-tracker/prices       单价表
@@ -142,6 +147,19 @@ POST /api/cost-tracker/export       导出 CSV
 ---
 
 ## 更新记录
+
+### v1.4.0(2026-08-23)
+
+**新增**
+- **峰谷计价提示(对标 dsh-cost-meter)**:设置页新增「峰谷计价与提示」面板——启用峰谷时段价格、峰时高价时段显著提示、时段条样式(简洁/经典)、峰/谷切换前弹窗提醒、提前提醒分钟(1–30)、提醒类型(峰和谷/进入峰/进入谷)、弹窗位置(右下角/屏幕中心)、同步发送系统通知;全部设置即时保存到 `~/.dsh/storages/cost-tracker-config.json`。侧边栏底部常驻显示时段条(当前档位 + 距下次切换倒计时),窄栏(rail)自适应为短词。新增 `POST /api/cost-tracker/peak` 与 `POST /api/cost-tracker/peak-config`,以及 Agent 工具 `cost_peak`。
+- **六组概览卡**:设置页顶部改版为六张卡——今日费用 / 本月费用 / 总花费 / API 请求次数 / Tokens / **总余额**。今日、本月、总花费三个金额卡**不含订阅会员等效费用**(订阅以附注展示),本月按北京日历月统计,总花费为全时段累计(明细 + 永久日汇总,永远精确)。
+
+**改进**
+- **同步 DeepSeek 最新定价规则**:高峰时段限定为北京时间**周一至周五 9:00–12:00、14:00–18:00**,**周末全天计为闲时(闲时半价)**;`isPeak()` 不再忽略星期几,修复周末被误判为高峰价的问题。
+- 峰谷面板时段条对齐参考项目样式:两段轨道(左橙右蓝)+ 标记线 + 单行着色 chip。
+
+**修复**
+- 预览弹窗此前强制居中,现已**跟随用户配置的弹窗位置**(右下角/屏幕中心)。
 
 ### v1.3.0(2026-08-23)
 
@@ -193,8 +211,9 @@ POST /api/cost-tracker/export       导出 CSV
 ```
 ├── index.js        Host 半端:用量采集、聚合、HTTP API、Agent 工具
 ├── store.js        存储层:明细保留 + 永久日汇总 + 持久化(纯逻辑,可独立测试)
-├── pricing.js      定价与 Token 层:单价表、峰谷计价、视觉模型(纯逻辑,可独立测试)
-├── client.js       Client 半端:设置页仪表盘与状态栏 UI
+├── pricing.js      定价与 Token 层:单价表、峰谷计价、视觉模型、峰值相位(纯逻辑,可独立测试)
+├── config.js       配置层:峰谷计价提示的默认值与规范化(纯逻辑,可独立测试)
+├── client.js       Client 半端:设置页仪表盘、状态栏与峰谷提示 UI
 ├── package.json    插件清单(含 dsh.client 声明)
 ├── README.md       中文说明文档
 ├── README.en.md    英文说明文档

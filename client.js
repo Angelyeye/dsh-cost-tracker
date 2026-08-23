@@ -128,6 +128,40 @@ window.__ModuleLoader__.load({
 .cost-ug-tip-row { display: flex; align-items: center; gap: 6px; margin-top: 3px; }
 .cost-ug-tip-name { flex: 1; color: var(--dsw-alias-label-secondary, #5b6472); padding-right: 16px; }
 .cost-ug-tip-val { font-variant-numeric: tabular-nums; text-align: right; }
+/* 峰谷时段条（侧边栏 / 设置面板）——对标 dsh-cost-meter */
+.cost-ps { display: flex; align-items: center; gap: 6px; min-width: 0; flex-wrap: wrap; }
+.cost-ps-stack { flex-direction: column; align-items: stretch; gap: 4px; }
+.cost-ps-track { position: relative; display: flex; flex: 1 1 72px; min-width: 72px; height: 6px; border-radius: 999px; overflow: hidden; border: 1px solid var(--dsw-alias-border-l1, #e5e7eb); background: var(--dsw-alias-bg-layer-3, #eef0f3); }
+.cost-ps-seg { height: 100%; flex: 1; }
+.cost-ps-peakseg { background: #ff9800; }
+.cost-ps-offseg { background: var(--dsw-alias-state-business-primary, #4176e6); }
+.cost-ps-marker { position: absolute; top: 0; left: 50%; width: 2px; height: 100%; background: var(--dsw-alias-bg-base, #fff); box-shadow: 0 0 0 1px var(--dsw-alias-label-tertiary, #9ca3af); transform: translateX(-50%); transition: left .4s ease; z-index: 2; }
+.cost-ps-chip { font-size: 11px; font-weight: 600; line-height: 1.2; white-space: nowrap; color: var(--dsw-alias-label-secondary, #5b6472); }
+.cost-ps.peak .cost-ps-chip { color: #ff9800; }
+.cost-ps.off .cost-ps-chip { color: var(--dsw-alias-state-business-primary, #4176e6); }
+.cost-ps.weekend .cost-ps-chip { color: #34a853; }
+.cost-ps-foot { font-size: 11px; color: var(--dsw-alias-label-tertiary, #9ca3af); white-space: nowrap; }
+/* 窄栏（rail）态：只显示竖排短词 */
+.cost-ps-rail { display: inline-flex; flex-direction: column; gap: 1px; }
+.cost-ps-rail .cost-ps-word { font-size: 10px; font-weight: 600; line-height: 1.1; white-space: nowrap; color: var(--dsw-alias-label-secondary, #5b6472); }
+.cost-ps-rail.peak .cost-ps-word { color: #ff9800; }
+.cost-ps-rail.off .cost-ps-word { color: var(--dsw-alias-state-business-primary, #4176e6); }
+.cost-ps-rail.weekend .cost-ps-word { color: #34a853; }
+/* 峰谷切换前弹窗 */
+.cost-pa { position: fixed; z-index: 9999; width: 340px; max-width: calc(100vw - 32px); padding: 14px 16px; border-radius: 14px; background: var(--dsw-alias-bg-layer-2, #fff); border: 1px solid var(--dsw-alias-border-l2, #d1d5db); box-shadow: 0 14px 36px rgba(0,0,0,.22); display: flex; flex-direction: column; gap: 8px; font-size: 13px; animation: cost-pa-in .22s cubic-bezier(.2,.8,.2,1); }
+.cost-pa.cost-pa-corner { right: 20px; bottom: 20px; }
+.cost-pa.cost-pa-center { top: 50%; left: 50%; transform: translate(-50%,-50%); animation-name: cost-pa-in-center; }
+.cost-pa-peak { border-top: 3px solid var(--dsw-alias-state-warn-primary, #d97706); }
+.cost-pa-offpeak { border-top: 3px solid var(--dsw-alias-state-info-primary, #3b82f6); }
+.cost-pa-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 600; letter-spacing: .4px; text-transform: uppercase; }
+.cost-pa-badge::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 16%, transparent); }
+.cost-pa-peak .cost-pa-badge { color: var(--dsw-alias-state-warn-primary, #d97706); }
+.cost-pa-offpeak .cost-pa-badge { color: var(--dsw-alias-state-info-primary, #3b82f6); }
+.cost-pa-title { font-size: 14px; font-weight: 600; color: var(--dsw-alias-label-primary, #171a1f); }
+.cost-pa-body { color: var(--dsw-alias-label-secondary, #5b6472); line-height: 1.55; }
+.cost-pa-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 2px; }
+@keyframes cost-pa-in { from { opacity: 0; transform: translateY(10px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@keyframes cost-pa-in-center { from { opacity: 0; transform: translate(-50%, calc(-50% + 10px)); } to { opacity: 1; transform: translate(-50%,-50%); } }
 `;
 			const tag = document.createElement("style");
 			tag.setAttribute("data-plugin-css", "cost-tracker-plugin");
@@ -409,14 +443,29 @@ window.__ModuleLoader__.load({
 				e("span", { className: "cost-hint" }, "峰谷时段（北京时间）：" + peakWindows + " · 闲时半价"));
 		}
 
-		function statCards(dash) {
+		function statCards(dash, balance) {
+			const today = dash.today || { real: 0, calls: 0, tokens: 0, sub: 0, subCalls: 0, subTokens: 0 };
+			const month = dash.month || { real: 0, calls: 0, tokens: 0, sub: 0, subCalls: 0, subTokens: 0 };
+			const all = dash.all || { real: 0, calls: 0, tokens: 0, sub: 0, subCalls: 0, subTokens: 0 };
+			// 金额卡：主值为按量消费（不含订阅会员等效费用）；副行附注订阅等效
+			const moneySub = (t) => "调用 " + fmtInt(t.calls) + " 次 · Tokens " + fmtCompact(t.tokens) + (t.sub > 0 ? " · 订阅 ¥" + fmtMoney(t.sub) : "");
+			// 余额卡
+			let balValue = "—", balSub = "查询中…";
+			if (balance && balance.ok) {
+				balValue = "¥" + (balance.total || "0");
+				balSub = (balance.available ? "可用" : "不可用") + " · 充值 ¥" + (balance.toppedUp || "0") + " · 赠送 ¥" + (balance.granted || "0") + " · " + (balance.keySource || "");
+			} else if (balance && balance.error) {
+				balSub = balance.error;
+			}
 			return e("div", { className: "cost-cards" },
-				statCard("消费金额（CNY）", "¥" + fmtMoney(dash.realCost),
-					"高峰 ¥" + fmtMoney(dash.peakCost) + " · 闲时 ¥" + fmtMoney(dash.offCost) + (dash.flatCost > 0 ? " · 平峰 ¥" + fmtMoney(dash.flatCost) : "") + " · 仅含按量模型"),
-				statCard("API 请求次数", fmtInt(dash.realCalls + dash.subCalls),
-					"按量 " + fmtInt(dash.realCalls) + " · 订阅 " + fmtInt(dash.subCalls)),
-				statCard("Tokens", fmtInt(dash.realTokens + dash.subTokens),
-					"按量 " + fmtCompact(dash.realTokens) + " · 订阅 " + fmtCompact(dash.subTokens)));
+				statCard("今日费用（CNY）", "¥" + fmtMoney(today.real), moneySub(today)),
+				statCard("本月费用（CNY）", "¥" + fmtMoney(month.real), moneySub(month)),
+				statCard("总花费（CNY）", "¥" + fmtMoney(all.real), "调用 " + fmtInt(all.calls) + " 次 · Tokens " + fmtCompact(all.tokens) + (all.sub > 0 ? " · 订阅 ¥" + fmtMoney(all.sub) : "")),
+				statCard("API 请求次数", fmtInt(all.calls + all.subCalls),
+					"按量 " + fmtInt(all.calls) + " · 订阅 " + fmtInt(all.subCalls)),
+				statCard("Tokens", fmtInt(all.tokens + all.subTokens),
+					"按量 " + fmtCompact(all.tokens) + " · 订阅 " + fmtCompact(all.subTokens)),
+				statCard("总余额（CNY）", balValue, balSub));
 		}
 
 		function mainPanel(dash, tab, setTab, scheme, setScheme) {
@@ -692,6 +741,259 @@ window.__ModuleLoader__.load({
 					monthLabels.map((m, i) => e("span", { key: "m" + i, className: "cost-ug-month" }, m))));
 		}
 
+		// ---------- 峰谷计价提示 ----------
+		// 相位助记（与 dsh-cost-meter 一致）：weekend → 「周末全谷」；inPeak → 「峰时」；否则「平价」。
+		function peakWord(p) {
+			if (!p) return "";
+			if (p.weekend) return "周末全谷";
+			return p.inPeak ? "峰时" : "平价";
+		}
+		function peakWordClass(p) {
+			if (!p) return "";
+			return p.weekend ? " weekend" : p.inPeak ? " peak" : " off";
+		}
+		// 倒计时文本：向上取整到分钟。与 dsh-cost-meter 一致：{time}后进入高峰/平价。
+		function peakCountdown(p, now) {
+			if (!p) return "";
+			return peakCountdownTime(p, now) + "后进入" + (p.nextIntoPeak ? "高峰" : "平价");
+		}
+		// 仅倒计时（分钟粒度的时长文本），用于弹窗正文「约 X 后…」。
+		function peakCountdownTime(p, now) {
+			if (!p) return "";
+			const ms = Math.max(0, p.nextAtMs - now);
+			const totalMin = Math.max(1, Math.ceil(ms / 60000));
+			const h = Math.floor(totalMin / 60);
+			const m = totalMin % 60;
+			return h > 0 ? (m > 0 ? h + "小时" + m + "分" : h + "小时") : m + "分";
+		}
+		// 当前相位在轨道上的标记位置：峰=25%、平价=75%；周末中点=50%。
+		function peakMarkerLeft(p) {
+			if (!p) return "50%";
+			if (p.weekend) return "50%";
+			return p.inPeak ? "25%" : "75%";
+		}
+		// 单行时段条：两段轨道（橙+蓝）+ 标记线 + 着色 chip。对标 dsh-cost-meter 简洁款。
+		function PeakStrip(props) {
+			const snap = props.snap;
+			const style = props.style || "compact";
+			const wide = props.wide !== false;
+			if (!snap || !snap.phase || snap.notice === false) return null;
+			const p = snap.phase;
+			const now = props.now || Date.now();
+			const countdown = peakCountdown(p, now);
+			const wordClass = peakWordClass(p);
+			if (!wide) {
+				// 窄栏（rail）：竖排短词
+				return e("div", { className: "cost-ps-rail" + wordClass, title: peakWord(p) + " · " + countdown },
+					e("span", { className: "cost-ps-word" }, peakWord(p)));
+			}
+			if (style === "classic") {
+				// 经典：固定宽度轨道 + 两行（chip / 倒计时）
+				return e("div", { className: "cost-ps cost-ps-stack" + wordClass, title: countdown },
+					e("span", { className: "cost-ps-chip" }, peakWord(p)),
+					e("div", { className: "cost-ps-track" },
+						e("div", { className: "cost-ps-seg cost-ps-peakseg" }),
+						e("div", { className: "cost-ps-seg cost-ps-offseg" }),
+						e("div", { className: "cost-ps-marker", style: { left: peakMarkerLeft(p) } })),
+					e("div", { className: "cost-ps-foot" }, countdown));
+			}
+			// compact：单行「轨道 + chip·倒计时」
+			return e("div", { className: "cost-ps" + wordClass, title: countdown },
+				e("div", { className: "cost-ps-track" },
+					e("div", { className: "cost-ps-seg cost-ps-peakseg" }),
+					e("div", { className: "cost-ps-seg cost-ps-offseg" }),
+					e("div", { className: "cost-ps-marker", style: { left: peakMarkerLeft(p) } })),
+				e("span", { className: "cost-ps-chip" }, peakWord(p) + " · " + countdown));
+		}
+
+		// ---------- 峰谷切换前弹窗（真实 + 预览） ----------
+		// 常驻挂在 sidebar.footer.action；用 nextAtMs 作为唯一提醒点，同一切换点只提醒一次。
+		const PEAK_PREVIEW_EVENT = "dsh-cost-tracker-peak-preview";
+		let lastPeakNotifyAtMs = 0;
+		function PeakAlertPopup(props) {
+			const snap = props.snap;
+			const now = props.now || Date.now();
+			const onDismiss = props.onDismiss || (() => {});
+			if (!snap) return null;
+			const cfg = snap.config || {};
+			const alert = snap.alert || {};
+			// 定位/外观统一由宿主 snap 决定；可被预览配置覆盖。
+			const intoPeak = props.preview
+				? props.preview === "peak"
+				: (snap.phase ? snap.phase.nextIntoPeak === true : false);
+			const position = props.position || (alert.position === "center" ? "cost-pa-center" : "cost-pa-corner");
+			const title = intoPeak ? "即将进入峰时" : "即将进入谷时";
+			const body = "约 " + (props.countdownText || (snap.phase ? peakCountdownTime(snap.phase, now) : "2 分")) + " 后计费档位切换为" + (intoPeak ? "峰时" : "谷时") + "价，请注意本时段调用成本。";
+			const badge = intoPeak ? "峰价提醒" : "谷价提醒";
+			return e("div", { className: "cost-pa " + position + " " + (intoPeak ? "cost-pa-peak" : "cost-pa-offpeak"), role: "alert" },
+				e("div", { className: "cost-pa-badge" }, badge),
+				e("div", { className: "cost-pa-title" }, title),
+				e("div", { className: "cost-pa-body" }, body),
+				e("div", { className: "cost-pa-actions" },
+					e("button", { className: "cost-btn", onClick: onDismiss }, "知道了")));
+		}
+
+		// 侧边栏峰谷组件：时段条 + 切换前弹窗宿主（常驻，无需活跃会话）。
+		function PeakSidebar(props) {
+			const wide = props && props.wide !== false;
+			const [snap, setSnap] = useState(null);
+			const [now, setNow] = useState(Date.now());
+			const [dismissedAt, setDismissedAt] = useState(null);
+			const [preview, setPreview] = useState(null);
+			useEffect(() => {
+				let alive = true;
+				function load() {
+					apiCall("peak", {}).then(v => { if (alive && v && v.ok) setSnap(v); }).catch(() => {});
+				}
+				load();
+				const id = setInterval(load, 30000);
+				return () => { alive = false; clearInterval(id); };
+			}, []);
+			useEffect(() => {
+				const id = setInterval(() => setNow(Date.now()), 10000);
+				return () => clearInterval(id);
+			}, []);
+			// 预览通道（设置面板触发）
+			useEffect(() => {
+				const onPreview = (event) => {
+					const kind = event.detail && event.detail.kind === "offpeak" ? "offpeak" : "peak";
+					setPreview(kind);
+					// 预览系统通知
+					const cfg = snap && snap.config;
+					if (cfg && cfg.peakAlertWebNotify === true && window.Notification && Notification.permission === "granted") {
+						try {
+							new Notification((kind === "peak" ? "即将进入峰时" : "即将进入谷时") + "（预览）",
+								{ body: "约 2 分 后计费档位切换为" + (kind === "peak" ? "峰时" : "谷时") + "价。" });
+						} catch (_) {}
+					}
+				};
+				window.addEventListener(PEAK_PREVIEW_EVENT, onPreview);
+				return () => window.removeEventListener(PEAK_PREVIEW_EVENT, onPreview);
+			}, [snap]);
+			// 真实弹窗判定：提醒开启 + 峰谷启用生效 + 距下次切换 <= ahead + 类型匹配 + 未关闭过该切换点
+			let real = null;
+			if (snap && snap.enabled && snap.effective && snap.alert && snap.alert.enabled && snap.phase) {
+				const aheadMs = (Number.isFinite(snap.alert.ahead) && snap.alert.ahead >= 1 ? snap.alert.ahead : 2) * 60000;
+				const tgt = snap.alert.target || "both";
+				const intoPeak = snap.phase.nextIntoPeak === true;
+				if ((tgt === "both" || tgt === (intoPeak ? "peak" : "offpeak"))
+					&& now >= snap.phase.nextAtMs - aheadMs && now < snap.phase.nextAtMs && dismissedAt !== snap.phase.nextAtMs) real = snap.phase;
+			}
+			// 系统通知（Web）：与弹窗同判定，用 nextAtMs 去重
+			useEffect(() => {
+				if (!snap || !snap.enabled || !snap.effective) return;
+				const alert = snap.alert || {};
+				if (alert.enabled !== true || alert.webNotify !== true || !window.Notification || Notification.permission !== "granted") return;
+				if (!snap.phase) return;
+				const aheadMs = (Number.isFinite(alert.ahead) && alert.ahead >= 1 ? alert.ahead : 2) * 60000;
+				const intoPeak = snap.phase.nextIntoPeak === true;
+				const tgt = alert.target || "both";
+				if (now < snap.phase.nextAtMs - aheadMs || now >= snap.phase.nextAtMs) return;
+				if ((tgt !== "both" && tgt !== (intoPeak ? "peak" : "offpeak"))) return;
+				if (lastPeakNotifyAtMs === snap.phase.nextAtMs) return;
+				lastPeakNotifyAtMs = snap.phase.nextAtMs;
+				try {
+					new Notification(intoPeak ? "即将进入峰时" : "即将进入谷时",
+						{ body: peakCountdownTime(snap.phase, now) + " 后计费档位切换为" + (intoPeak ? "峰时" : "谷时") + "价。" });
+				} catch (_) {}
+			}, [now, snap]);
+			let popup = null;
+			if (real !== null) {
+				popup = e(PeakAlertPopup, { snap, now, onDismiss: () => setDismissedAt(real.nextAtMs) });
+			} else if (preview !== null) {
+				// 预览跟随用户配置的弹窗位置（右下角 / 屏幕中心），不强制覆盖
+				popup = e(PeakAlertPopup, { snap, preview, now: now + 120000, countdownText: "2 分", onDismiss: () => setPreview(null) });
+			}
+			return e("div", null,
+				e(PeakStrip, { snap, style: snap ? snap.style : "compact", wide, now }),
+				popup);
+		}
+
+		// 设置面板：峰谷计价与提示
+		function PeakPanel(props) {
+			const [snap, setSnap] = useState(null);
+			const [draft, setDraft] = useState(null);
+			const [now, setNow] = useState(Date.now());
+			const [savedMsg, setSavedMsg] = useState("");
+			function load() {
+				apiCall("peak", {}).then(v => {
+					if (v && v.ok) {
+						setSnap(v);
+						setDraft(Object.assign({}, v.config || {}));
+					}
+				}).catch(() => {});
+			}
+			useEffect(() => { load(); }, []);
+			useEffect(() => {
+				const id = setInterval(() => setNow(Date.now()), 30000);
+				return () => clearInterval(id);
+			}, []);
+			function setField(k, v) {
+				setDraft(d => Object.assign({}, d, { [k]: v }));
+			}
+			function save() {
+				apiCall("peak-config", draft || {}).then(v => {
+					if (v && typeof v === 'object') {
+						setSnap(s => Object.assign({}, s, { config: v, enabled: v.peakEnabled, notice: v.peakNotice, style: v.peakStyle, alert: { enabled: v.peakAlertEnabled, ahead: v.peakAlertAhead, target: v.peakAlertTarget, position: v.peakAlertPosition, webNotify: v.peakAlertWebNotify } }));
+						setDraft(Object.assign({}, v));
+						setSavedMsg("已保存");
+						setTimeout(() => setSavedMsg(""), 2000);
+					}
+				}).catch(() => setSavedMsg("保存失败"));
+			}
+			function preview(kind) {
+				window.dispatchEvent(new CustomEvent(PEAK_PREVIEW_EVENT, { detail: { kind } }));
+			}
+			const d = draft || {};
+			const cfgSnap = snap ? Object.assign({}, snap, { config: d }) : null;
+			const noticeOn = snap && snap.notice !== false && d.peakNotice !== false;
+			return e("div", { className: "cost-panel" },
+				e("div", { className: "cost-row" },
+					e("span", { className: "cost-panel-title" }, "峰谷计价与提示"),
+					e("span", { className: "cost-spacer" }),
+					e("button", { className: "cost-btn", onClick: save, disabled: !draft }, "保存设置")),
+				e("div", { style: { marginTop: "8px", display: "grid", gap: "6px" } },
+					e("label", { className: "cost-row", style: { gap: "8px" } },
+						e("input", { type: "checkbox", checked: d.peakEnabled !== false, onChange: ev => setField("peakEnabled", ev.target.checked) }),
+						e("span", null, "启用 DeepSeek 峰谷时段价格")),
+					e("label", { className: "cost-row", style: { gap: "8px" } },
+						e("input", { type: "checkbox", checked: d.peakNotice !== false, onChange: ev => setField("peakNotice", ev.target.checked) }),
+						e("span", null, "峰时高价时段显著提示（时段条显示）")),
+					e("div", { className: "cost-row", style: { gap: "8px" } },
+						e("span", null, "时段条样式"),
+						e("select", { className: "cost-select", value: d.peakStyle === "classic" ? "classic" : "compact", onChange: ev => setField("peakStyle", ev.target.value) },
+							e("option", { value: "compact" }, "简洁（单行紧凑）"),
+							e("option", { value: "classic" }, "经典（两行）"))),
+					e("label", { className: "cost-row", style: { gap: "8px" } },
+						e("input", { type: "checkbox", checked: d.peakAlertEnabled !== false, onChange: ev => setField("peakAlertEnabled", ev.target.checked) }),
+						e("span", null, "峰/谷切换前弹窗提醒")),
+					d.peakAlertEnabled !== false ? e("div", { className: "cost-row", style: { gap: "8px" } },
+						e("span", null, "提前提醒（分钟，1-30）"),
+						e("input", { className: "cost-input", style: { width: "80px" }, type: "number", min: 1, max: 30, value: String(d.peakAlertAhead == null ? 2 : d.peakAlertAhead), onChange: ev => { const n = parseInt(ev.target.value, 10); if (Number.isInteger(n) && n >= 1 && n <= 30) setField("peakAlertAhead", n); } }),
+						e("span", null, "提醒类型"),
+						e("select", { className: "cost-select", value: d.peakAlertTarget === "peak" || d.peakAlertTarget === "offpeak" ? d.peakAlertTarget : "both", onChange: ev => setField("peakAlertTarget", ev.target.value) },
+							e("option", { value: "both" }, "峰和谷"),
+							e("option", { value: "peak" }, "进入峰时"),
+							e("option", { value: "offpeak" }, "进入谷时")),
+						e("span", null, "弹窗位置"),
+						e("select", { className: "cost-select", value: d.peakAlertPosition === "center" ? "center" : "corner", onChange: ev => setField("peakAlertPosition", ev.target.value) },
+							e("option", { value: "corner" }, "右下角"),
+							e("option", { value: "center" }, "屏幕中心")))
+						: null,
+					e("label", { className: "cost-row", style: { gap: "8px" } },
+						e("input", { type: "checkbox", checked: d.peakAlertWebNotify === true, onChange: ev => setField("peakAlertWebNotify", ev.target.checked) }),
+						e("span", null, "同步发送系统通知（需授权通知权限）")),
+					e("div", { className: "cost-row", style: { gap: "8px", marginTop: "4px" } },
+						e("span", null, "预览弹窗"),
+						e("button", { className: "cost-btn", onClick: () => preview("peak") }, "预览进入峰"),
+						e("button", { className: "cost-btn", onClick: () => preview("offpeak") }, "预览进入谷"),
+						savedMsg ? e("span", { className: "cost-hint" }, savedMsg) : null),
+					e("div", { className: "cost-hint", style: { marginTop: "6px" } },
+						"峰时段（北京时间）：" + (snap ? snap.peakWindows : "周一至周五 9:00-12:00 · 14:00-18:00（周末全天闲时）") + "。生效时间：" + (snap ? snap.effectiveAt : "2026-08-01T00:00:00Z") + "。当前：" + (cfgSnap && cfgSnap.phase ? (cfgSnap.phase.weekend ? "周末全谷价" : cfgSnap.phase.inPeak ? "高峰时段" : "平价时段") : "…"))),
+				noticeOn ? e("div", { style: { marginTop: "8px" } }, e(PeakStrip, { snap: cfgSnap, style: d.peakStyle || "compact", wide: true, now }))
+					: e("p", { className: "cost-hint", style: { marginTop: "8px" } }, "提示已隐藏：需启用峰谷计价并开启「峰时高价时段显著提示」。"));
+		}
+
 		function Dashboard() {
 			const [days, setDays] = useState(7);
 			const [dash, setDash] = useState(null);
@@ -758,10 +1060,10 @@ window.__ModuleLoader__.load({
 
 			return e("div", { className: "cost-wrap" },
 				e("div", { className: "cost-h1" }, pluginIcon(18), "花费统计"),
-				filterRow(days, setDays, onExport, onRefresh, msg, busy, dash ? dash.peakWindows : "9:00-12:00 · 14:00-18:00"),
+				filterRow(days, setDays, onExport, onRefresh, msg, busy, dash ? dash.peakWindows : "周一至周五 9:00-12:00 · 14:00-18:00（周末全天闲时）"),
 				dashErr ? e("div", { className: "cost-err", style: { marginTop: "8px" } }, dashErr) : null,
 				!dash && !dashErr ? e("div", { className: "cost-hint", style: { marginTop: "12px" } }, "加载中…") : null,
-				dash ? statCards(dash) : null,
+				dash ? statCards(dash, balance) : null,
 				dash ? mainPanel(dash, tab, setTab, scheme, setScheme) : null,
 				e("div", { className: "cost-panel" },
 					e("div", { className: "cost-row" }, e("span", { className: "cost-panel-title" }, "Token 用量统计")),
@@ -772,7 +1074,8 @@ window.__ModuleLoader__.load({
 				subPanel(kimi, dash, now, () => loadKimi(true)),
 				balancePanel(balance, manualKey, setManualKey, k => loadBalance(k)),
 				dash ? modelSections(dash) : null,
-				dash ? recentPanel(dash) : null);
+				dash ? recentPanel(dash) : null,
+				e(PeakPanel, {}));
 		}
 
 		function StatusLine(props) {
@@ -851,6 +1154,11 @@ window.__ModuleLoader__.load({
 			slots.inject("conversation.composer.dock", () => slots.register(
 				{ name: "conversation.composer.dock", id: "cost", order: 1 },
 				(props) => e(StatusLine, props || {}),
+			));
+			// 侧边栏底部峰谷时段条 + 切换前弹窗（常驻，无需活跃会话；wide=false 为窄栏态）
+			slots.inject("sidebar.footer.action", () => slots.register(
+				{ name: "sidebar.footer.action", id: "cost-peak", order: 8 },
+				(props) => e(PeakSidebar, props || {}),
 			));
 		}
 

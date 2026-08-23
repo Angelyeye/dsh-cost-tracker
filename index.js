@@ -10,7 +10,8 @@ import { readFileSync, writeFileSync, mkdirSync, renameSync, existsSync, realpat
 import { join, dirname } from 'node:path'
 import { homedir } from 'node:os'
 import { createStore, collectTotals, DETAIL_DAYS, MAX_AXIS_DAYS } from './store.js'
-import { EXACT_MODELS, SUBSCRIPTION_RATES, PROVIDER_RATES, GENERIC_RATES, PEAK_WINDOWS, isPeak, priceFor, computeCost, normalizeTokens } from './pricing.js'
+import { EXACT_MODELS, SUBSCRIPTION_RATES, PROVIDER_RATES, GENERIC_RATES, PEAK_WINDOWS, isPeak, peakPhaseAt, priceFor, computeCost, normalizeTokens } from './pricing.js'
+import { normalizePeakConfig, defaultPeakConfig, peakEffective } from './config.js'
 
 // ============================================================
 // 启动信息日志开关（默认静默）
@@ -113,6 +114,67 @@ export default {
 
     function writeRecords() { store.persist() }
 
+    // ---------- plugin config (peak pricing notice) ----------
+    // 与记录分开存储：$DSH_HOME/storages/cost-tracker-config.json。
+    // 提供读写与校验（默认值见 config.js），写失败不阻断（下次改设置重试）。
+    const CONFIG_FILE = join(process.env.DSH_HOME || join(homedir(), '.dsh'), 'storages', 'cost-tracker-config.json')
+    let peakConfig = defaultPeakConfig()
+    let configLoadWarned = false
+
+    function loadConfig() {
+      try {
+        if (!existsSync(CONFIG_FILE)) return
+        const parsed = JSON.parse(readFileSync(CONFIG_FILE, 'utf8'))
+        peakConfig = normalizePeakConfig(parsed)
+      } catch (e) {
+        if (!configLoadWarned) { console.error('cost tracker config load failed, using defaults', e); configLoadWarned = true }
+      }
+    }
+
+    function saveConfig() {
+      try {
+        mkdirSync(dirname(CONFIG_FILE), { recursive: true })
+        const tmp = CONFIG_FILE + '.tmp'
+        writeFileSync(tmp, JSON.stringify(peakConfig), 'utf8')
+        renameSync(tmp, CONFIG_FILE)
+        return true
+      } catch (e) {
+        console.error('cost tracker config persist failed', e)
+        return false
+      }
+    }
+
+    function setPeakConfig(raw) {
+      peakConfig = normalizePeakConfig(raw)
+      saveConfig()
+      return peakConfig
+    }
+
+    // 峰谷相位快照（供客户端时段条 / 弹窗 / 倒计时）
+    function peakSnapshot() {
+      const now = Date.now()
+      const phase = peakPhaseAt(now)
+      return {
+        ok: true,
+        config: peakConfig,
+        enabled: peakConfig.peakEnabled,
+        effective: peakEffective(peakConfig, now),
+        notice: peakConfig.peakNotice,
+        style: peakConfig.peakStyle,
+        alert: {
+          enabled: peakConfig.peakAlertEnabled,
+          ahead: peakConfig.peakAlertAhead,
+          target: peakConfig.peakAlertTarget,
+          position: peakConfig.peakAlertPosition,
+          webNotify: peakConfig.peakAlertWebNotify,
+        },
+        phase,
+        peakWindows: PEAK_WINDOWS,
+        effectiveAt: peakConfig.peakEffectiveAt,
+        now,
+      }
+    }
+
     function loadRecords() {
       const n = store.load()
       const ru = Object.keys(rollups).length
@@ -145,7 +207,8 @@ export default {
       if (!provider && !model) return
       const np = normProvider(provider)
       const price = priceFor(np, model)
-      const peak = isPeak(ts)
+      // 峰谷计费开关：随配置峰谷启用 + 生效时间门控；未启用时按非峰谷档（平价）计费。
+      const peak = peakEffective(peakConfig, ts) ? isPeak(ts) : false
       // 视觉模型（deepseek-v4-flash-vision-exp）的图片 token 已含在接口
       // prompt_tokens 中（每张≤384 tokens），由 normalizeTokens 归入 input
       const tokens = normalizeTokens(usage)
@@ -404,6 +467,7 @@ export default {
     function buildDashboard(args) {
       const days = args && typeof args.days === 'number' && isFinite(args.days) ? Math.max(0, Math.floor(args.days)) : 7
       const now = Date.now()
+      const todayKey = dayKey(now)
       const cutoff = days > 0 ? now - days * 86400000 : 0
       const filt = []
       for (const r of records) if (r.ts >= cutoff) filt.push(r)
@@ -415,6 +479,11 @@ export default {
       }
       let realCost = 0, realTokens = 0, peakCost = 0, offCost = 0, flatCost = 0, realCalls = 0
       let subEquivalent = 0, subTokens = 0, subCalls = 0
+      // 今日（北京日历日）：消费 / 调用 / tokens，按量与订阅分开
+      let todayReal = 0, todayCalls = 0, todayTokens = 0, todaySub = 0, todaySubCalls = 0, todaySubTokens = 0
+      // 本月（北京日历月）：同样按量/订阅分开
+      const monthPrefix = todayKey.slice(0, 7) // YYYY-MM
+      let monthReal = 0, monthCalls = 0, monthTokens = 0, monthSub = 0, monthSubCalls = 0, monthSubTokens = 0
       const modelMap = {}
       for (const r of filt) {
         const t = r.tokens
@@ -427,6 +496,10 @@ export default {
         let dm = m.dayMap[dk]
         if (!dm) dm = m.dayMap[dk] = { calls: 0, tokens: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 }
         dm.calls += 1; dm.tokens += total; dm.input += t.input; dm.output += t.output; dm.cacheRead += t.cacheRead; dm.cacheWrite += t.cacheWrite; dm.cost += r.cost
+        if (dk === todayKey) {
+          if (r.subscription) { todaySub += r.cost; todaySubCalls += 1; todaySubTokens += total }
+          else { todayReal += r.cost; todayCalls += 1; todayTokens += total }
+        }
         if (r.subscription) { subCalls += 1; subEquivalent += r.cost; subTokens += total }
         else {
           realCalls += 1; realCost += r.cost; realTokens += total
@@ -435,6 +508,15 @@ export default {
           else flatCost += r.cost
         }
       }
+      // 本月（北京日历月）：与查询窗口无关，扫全部明细记录（本月必在 180 天明细窗口内）
+      for (const r of records) {
+        if (dayKey(r.ts).slice(0, 7) !== monthPrefix) continue
+        const total = r.tokens.input + r.tokens.output + r.tokens.cacheRead + r.tokens.cacheWrite
+        if (r.subscription) { monthSub += r.cost; monthSubCalls += 1; monthSubTokens += total }
+        else { monthReal += r.cost; monthCalls += 1; monthTokens += total }
+      }
+      // 全时段累计（明细 + 永久日汇总），永远精确
+      const full = collectTotals(records, rollups)
       // 合并日汇总到总量 / 模型 / 按天明细
       for (const dk of Object.keys(ru)) {
         for (const mk of Object.keys(ru[dk])) {
@@ -511,6 +593,9 @@ export default {
         realCost: r4(realCost), realCalls, realTokens,
         subEquivalent: r4(subEquivalent), subCalls, subTokens,
         peakCost: r4(peakCost), offCost: r4(offCost), flatCost: r4(flatCost),
+        today: { real: r4(todayReal), calls: todayCalls, tokens: todayTokens, sub: r4(todaySub), subCalls: todaySubCalls, subTokens: todaySubTokens },
+        month: { real: r4(monthReal), calls: monthCalls, tokens: monthTokens, sub: r4(monthSub), subCalls: monthSubCalls, subTokens: monthSubTokens },
+        all: { real: r4(full.realCost), calls: full.realCalls, tokens: full.realTokens, sub: r4(full.subEquivalent), subCalls: full.subCalls, subTokens: full.subTokens },
         byDay, byModel, byModelDay, recent,
         peakWindows: PEAK_WINDOWS,
       }
@@ -574,7 +659,7 @@ export default {
         subEquivalent: r4(full.subEquivalent), subCalls: full.subCalls, subTokens: full.subTokens,
         provider, model,
         isDeepSeek: np === 'deepseek',
-        peak: isPeak(now),
+        peak: peakEffective(peakConfig, now) ? isPeak(now) : false,
         subscription,
         kimiWeeklyRemaining,
       }
@@ -642,6 +727,8 @@ export default {
       export: () => exportCsv(),
       prices: () => prices(),
       usage: () => buildUsageHeat(),
+      peak: () => peakSnapshot(),
+      'peak-config': (args) => setPeakConfig(args),
     }
 
     async function handleRoute(req, res) {
@@ -721,8 +808,29 @@ export default {
       execute: async () => resetData(),
     })
 
+    ctx.tools.register({
+      name: 'cost_peak',
+      description: '查询当前 DeepSeek 峰谷计价档位与下次切换倒计时（北京时间：高峰时段为周一至周五 9:00-12:00、14:00-18:00，其余为闲时，周末全天闲时）。',
+      parameters: {
+        type: 'object',
+        properties: {},
+        additionalProperties: true,
+      },
+      output: {
+        schema: { type: 'object', additionalProperties: true },
+        render: (args, v) => {
+          const p = v.phase
+          const phaseText = !p ? '未知' : p.weekend ? '周末全天闲时（全谷价）' : p.inPeak ? '高峰时段（按峰时价）' : '闲时时段（按谷时价）'
+          const nextText = p ? new Date(p.nextAtMs + 28800000).toISOString().replace('T', ' ').slice(0, 16).replace(/-/g, '/') + ' 转' + (p.nextIntoPeak ? '峰' : '谷') : '未知'
+          return [{ type: 'text', text: '峰谷计价：' + (v.enabled ? '已启用' : '已停用') + '（' + v.peakWindows + '）\n当前档位：' + phaseText + '\n下次切换：' + nextText + (v.effective ? '' : '（峰谷未生效，按平价计费）') }]
+        },
+      },
+      execute: async () => peakSnapshot(),
+    })
+
     // ---------- lifecycle ----------
     loadRecords()
+    loadConfig()
     ctx.effect(() => () => { try { writeRecords() } catch (e) {} }, 'cost-tracker: final flush')
     startupLog('cost tracker ready (static)')
   },
