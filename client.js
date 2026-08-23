@@ -92,7 +92,16 @@ window.__ModuleLoader__.load({
 .cost-table { width: 100%; border-collapse: collapse; font-size: 12px; }
 .cost-table th { text-align: left; color: var(--dsw-alias-label-secondary, #5b6472); font-weight: 500; padding: 6px 8px; border-bottom: 1px solid var(--dsw-alias-border-l1, #e5e7eb); }
 .cost-table td { padding: 6px 8px; border-bottom: 1px solid var(--dsw-alias-border-l1, #eef0f2); font-variant-numeric: tabular-nums; }
-.cost-dock { font-size: 12px; color: var(--dsw-alias-label-secondary, #5b6472); display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.cost-dock { font-size: 12px; color: var(--dsw-alias-label-secondary, #5b6472); display: flex; gap: 6px; align-items: center; flex-wrap: wrap; line-height: 1; }
+.cost-seg { display: inline-flex; align-items: center; gap: 6px; padding-right: 2px; }
+.cost-seg + .cost-seg::before { content: ""; display: inline-block; width: 1px; height: 14px; margin-right: 6px; background: var(--dsw-alias-border-l2, #d1d5db); vertical-align: middle; }
+.cost-pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--dsw-alias-border-l2, #d1d5db); background: var(--dsw-alias-bg-layer-2, #f3f4f6); line-height: 1.3; }
+.cost-dock-main { color: var(--dsw-alias-label-primary, #171a1f); font-weight: 500; font-variant-numeric: tabular-nums; letter-spacing: 0.2px; }
+.cost-pill-sub { font-variant-numeric: tabular-nums; }
+.cost-chip { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11px; border: 1px solid var(--dsw-alias-border-l2, #d1d5db); color: var(--dsw-alias-label-secondary, #5b6472); background: var(--dsw-alias-bg-layer-1, #fff); font-variant-numeric: tabular-nums; }
+.cost-pill-sub-badge { border-color: var(--dsw-alias-state-warn-primary, #d97706); color: var(--dsw-alias-state-warn-primary, #d97706); background: color-mix(in srgb, var(--dsw-alias-state-warn-primary, #d97706) 8%, transparent); font-weight: 500; }
+.cost-model-toggle { padding: 1px 6px; font-size: 11px; line-height: 1.4; border-radius: 6px; border: 1px solid var(--dsw-alias-border-l2, #d1d5db); background: transparent; color: var(--dsw-alias-label-secondary, #5b6472); cursor: pointer; }
+.cost-model-toggle:hover { background: var(--dsw-alias-bg-layer-2, #f3f4f6); }
 .cost-chart-host { position: relative; }
 .cost-tip { position: absolute; top: 4px; background: var(--dsw-alias-bg-layer-1, #fff); border: 1px solid var(--dsw-alias-border-l1, #e5e7eb); border-radius: 10px; padding: 9px 12px; box-shadow: 0 6px 20px rgba(15, 23, 42, .10); font-size: 12px; pointer-events: none; white-space: nowrap; z-index: 10; }
 .cost-tip-title { display: flex; justify-content: space-between; align-items: baseline; gap: 20px; font-weight: 600; margin-bottom: 5px; }
@@ -101,6 +110,24 @@ window.__ModuleLoader__.load({
 .cost-tip-dot { display: inline-block; width: 8px; height: 8px; border-radius: 2px; flex: none; }
 .cost-tip-name { flex: 1; color: var(--dsw-alias-label-secondary, #5b6472); padding-right: 20px; }
 .cost-tip-val { font-variant-numeric: tabular-nums; text-align: right; }
+/* 用量热力图（Codex 风格 26 周方格） */
+.cost-ug { display: flex; flex-direction: column; gap: 12px; }
+.cost-ug-total { font-size: 13px; color: var(--dsw-alias-label-primary, #171a1f); }
+.cost-ug-grid { display: grid; grid-auto-flow: column; grid-template-rows: repeat(7, auto); gap: 3px; width: 100%; }
+.cost-ug-cell { width: 100%; aspect-ratio: 1/1; border-radius: 3px; box-sizing: border-box; background: color-mix(in srgb, var(--dsw-alias-label-primary, #171a1f) 8%, transparent); border: 1px solid var(--dsw-alias-border-l1, #e5e7eb); cursor: default; }
+.cost-ug-cell.l1 { background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4176e6) 25%, var(--dsw-alias-bg-layer-3, #eef0f3)); border-color: transparent; }
+.cost-ug-cell.l2 { background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4176e6) 50%, var(--dsw-alias-bg-layer-3, #eef0f3)); border-color: transparent; }
+.cost-ug-cell.l3 { background: color-mix(in srgb, var(--dsw-alias-state-business-primary, #4176e6) 75%, var(--dsw-alias-bg-layer-3, #eef0f3)); border-color: transparent; }
+.cost-ug-cell.l4 { background: var(--dsw-alias-state-business-primary, #4176e6); border-color: transparent; }
+.cost-ug-cell.today { outline: 1px solid var(--dsw-alias-label-secondary, #6b7280); outline-offset: 1px; }
+.cost-ug-months { display: grid; grid-auto-flow: column; gap: 3px; width: 100%; font-size: 10px; color: var(--dsw-alias-label-tertiary, #9ca3af); margin-top: 4px; }
+.cost-ug-month { white-space: nowrap; }
+.cost-ug-host { position: relative; }
+.cost-ug-tip { position: absolute; background: var(--dsw-alias-bg-layer-1, #fff); border: 1px solid var(--dsw-alias-border-l1, #e5e7eb); border-radius: 10px; padding: 9px 12px; box-shadow: 0 6px 20px rgba(15, 23, 42, .10); font-size: 12px; pointer-events: none; white-space: nowrap; z-index: 10; }
+.cost-ug-tip-total { font-weight: 600; font-variant-numeric: tabular-nums; margin-bottom: 4px; }
+.cost-ug-tip-row { display: flex; align-items: center; gap: 6px; margin-top: 3px; }
+.cost-ug-tip-name { flex: 1; color: var(--dsw-alias-label-secondary, #5b6472); padding-right: 16px; }
+.cost-ug-tip-val { font-variant-numeric: tabular-nums; text-align: right; }
 `;
 			const tag = document.createElement("style");
 			tag.setAttribute("data-plugin-css", "cost-tracker-plugin");
@@ -138,6 +165,14 @@ window.__ModuleLoader__.load({
 			if (n >= 1000) return (n / 1000).toFixed(1) + "K";
 			return String(Math.round(n));
 		}
+		// 热力图 token 显示：<1000 原样；≥1000 用 K（≥100 时取整），≥1000000 用 M（≥100 时取整）
+		function fmtTokens(n) {
+			const v = Math.max(0, Number(n) || 0);
+			const scaled = (x) => (x >= 100 ? String(Math.round(x)) : String(Math.round(x * 10) / 10));
+			if (v < 1000) return String(Math.round(v));
+			if (v < 1000000) return scaled(v / 1000) + "K";
+			return scaled(v / 1000000) + "M";
+		}
 		function fmtAxisMoney(v) {
 			if (v <= 0) return "0";
 			if (v >= 1000) return (v / 1000).toFixed(1) + "k";
@@ -148,6 +183,12 @@ window.__ModuleLoader__.load({
 		function fmtTickInt(v) { return v >= 1000 ? fmtCompact(v) : String(Math.round(v)); }
 		function periodText(p) { return p === "peak" ? "高峰" : p === "off-peak" ? "闲时" : "平峰"; }
 		function shortModel(m) { const i = m.lastIndexOf("/"); return i >= 0 ? m.slice(i + 1) : m; }
+		// 订阅套餐友好名称：kimi-coding / kimi → Kimi Coding Plan，其余保留 provider 名
+		function subPlanName(p) {
+			const np = String(p || "").toLowerCase().replace(/-official$/, "");
+			if (np === "kimi-coding" || np === "kimi") return "Kimi Coding Plan";
+			return np || "订阅";
+		}
 		function countdown(resetTime, now) {
 			const t = Date.parse(resetTime);
 			if (!t) return "";
@@ -539,6 +580,118 @@ window.__ModuleLoader__.load({
 						e("tbody", null, rows.length ? rows : e("tr", null, e("td", { colSpan: 5 }, e("span", { className: "cost-hint" }, "暂无记录")))))));
 		}
 
+		function UsageHeatmap(props) {
+			const data = props.data;
+			const days = Array.isArray(data.days) ? data.days : [];
+			const byDate = new Map();
+			for (const d of days) byDate.set(d.date, d);
+			const total = data.total || { tokens: 0, input: 0, cache: 0, output: 0, calls: 0, cost: 0 };
+			const [tip, setTip] = useState(null);
+			const hostRef = useRef(null);
+
+			// 与服务端 dayKey 同口径：一律按北京时间（UTC+8）生成 YYYY-MM-DD，
+			// 以「北京日序号」D = floor((ts+8h)/天) 表示，读 UTC 分量即为北京日期。
+			const DAY_MS = 86400000;
+			const pad2 = (n) => String(n).padStart(2, "0");
+			const keyOfDay = (D) => {
+				const d = new Date(D * DAY_MS);
+				return d.getUTCFullYear() + "-" + pad2(d.getUTCMonth() + 1) + "-" + pad2(d.getUTCDate());
+			};
+			const D0 = Math.floor((Date.now() + 28800000) / DAY_MS); // 今天的北京日序号
+			const todayDOW = new Date(D0 * DAY_MS).getUTCDay(); // 0=周日
+			const Dend = D0 + (6 - ((todayDOW + 6) % 7)); // 本周周日（北京）
+
+			const WEEKS = 26;
+			const columns = [];
+			const monthLabels = [];
+			let lastMonth = -1;
+			for (let w = WEEKS - 1; w >= 0; w -= 1) {
+				for (let i = 0; i < 7; i += 1) {
+					const Dcell = Dend - (w * 7 + (6 - i));
+					const key = keyOfDay(Dcell);
+					const day = byDate.get(key);
+					columns.push(day !== undefined ? { day, tokens: day.tokens } : { day: { date: key, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, calls: 0, cost: 0, tokens: 0 }, tokens: 0 });
+				}
+				const m = new Date((Dend - (w * 7 + 6)) * DAY_MS);
+				monthLabels.push(m.getUTCMonth() !== lastMonth ? String(m.getUTCMonth() + 1) + "月" : "");
+				lastMonth = m.getUTCMonth();
+			}
+			const todayKey = keyOfDay(D0);
+
+			let maxDay = 0;
+			for (const c of columns) if (c.tokens > maxDay) maxDay = c.tokens;
+			if (maxDay <= 0) maxDay = 1;
+			const levelOf = (tokens) => {
+				const ratio = tokens / maxDay;
+				return ratio < 0.25 ? 1 : ratio < 0.5 ? 2 : ratio < 0.75 ? 3 : 4;
+			};
+
+			function onCellEnter(ev, entry) {
+				const host = hostRef.current;
+				if (!host) return;
+				const hr = host.getBoundingClientRect();
+				const cr = ev.currentTarget.getBoundingClientRect();
+				const cellLeft = cr.left - hr.left;
+				const cellRight = cr.right - hr.left;
+				const cellCenter = cellLeft + cr.width / 2;
+				const top = cr.top - hr.top;
+				const hostWidth = hr.width;
+				setTip({ entry, cellLeft, cellRight, cellCenter, top, hostWidth });
+			}
+
+			const t = total;
+			const cells = columns.map((entry, i) => {
+				const day = entry.day;
+				const tokens = entry.tokens;
+				const cls = "cost-ug-cell" + (tokens > 0 ? " l" + levelOf(tokens) : "") + (day.date === todayKey ? " today" : "");
+				return e("div", {
+					key: i, className: cls,
+					onMouseEnter: (ev) => onCellEnter(ev, entry),
+					onMouseLeave: () => setTip(null),
+				});
+			});
+
+			let tipEl = null;
+			if (tip) {
+				const day = tip.entry.day;
+				const tokens = tip.entry.tokens;
+				const top = tip.top;
+				// 浮层自适应水平定位：默认以格中心居中；若靠近左/右边界则改为贴边对齐，避免被裁剪
+				const tipWidth = 170; // 估算浮层宽度（px）
+				let left = tip.cellCenter;
+				let transform = "translate(-50%, -100%)";
+				if (tip.cellCenter - tipWidth / 2 < 4) {
+					left = tip.cellLeft;
+					transform = "translate(0, -100%)";
+				} else if (tip.cellCenter + tipWidth / 2 > tip.hostWidth - 4) {
+					left = tip.cellRight;
+					transform = "translate(-100%, -100%)";
+				}
+				// 顶部格子：浮层上移后可能顶到容器顶边，改为贴底显示，避免被上边界裁掉
+				if (top < 60) {
+					transform = transform.replace(", -100%)", ", 8px)");
+				}
+				tipEl = e("div", {
+					className: "cost-ug-tip",
+					style: { left: left + "px", top: top + "px", transform: transform },
+				},
+					e("div", { className: "cost-ug-tip-total" }, day.date + " · " + fmtTokens(tokens) + " tokens" + (day.calls ? " · " + fmtInt(day.calls) + " 次调用" : "")),
+					e("div", { className: "cost-ug-tip-row" }, e("span", { className: "cost-ug-tip-name" }, "输入"), e("span", { className: "cost-ug-tip-val" }, fmtTokens(day.input))),
+					e("div", { className: "cost-ug-tip-row" }, e("span", { className: "cost-ug-tip-name" }, "缓存"), e("span", { className: "cost-ug-tip-val" }, fmtTokens((day.cacheRead || 0) + (day.cacheWrite || 0)))),
+					e("div", { className: "cost-ug-tip-row" }, e("span", { className: "cost-ug-tip-name" }, "输出"), e("span", { className: "cost-ug-tip-val" }, fmtTokens(day.output))),
+					e("div", { className: "cost-ug-tip-row" }, e("span", { className: "cost-ug-tip-name" }, "费用"), e("span", { className: "cost-ug-tip-val" }, "¥" + fmtMoney(day.cost))));
+			}
+
+			return e("div", { className: "cost-ug" },
+				e("div", { className: "cost-ug-total" },
+					"累计 " + fmtTokens(t.tokens) + " tokens · 输入 " + fmtTokens(t.input) + " · 缓存 " + fmtTokens(t.cache) + " · 输出 " + fmtTokens(t.output) + " · " + fmtInt(t.calls) + " 次调用"),
+				e("div", { className: "cost-ug-host", ref: hostRef },
+					e("div", { className: "cost-ug-grid", style: { gridTemplateColumns: "repeat(" + WEEKS + ", 1fr)" } }, cells),
+					tipEl),
+				e("div", { className: "cost-ug-months", style: { gridTemplateColumns: "repeat(" + WEEKS + ", 1fr)" } },
+					monthLabels.map((m, i) => e("span", { key: "m" + i, className: "cost-ug-month" }, m))));
+		}
+
 		function Dashboard() {
 			const [days, setDays] = useState(7);
 			const [dash, setDash] = useState(null);
@@ -557,6 +710,8 @@ window.__ModuleLoader__.load({
 			const [busy, setBusy] = useState(false);
 			const [now, setNow] = useState(Date.now());
 			const [manualKey, setManualKey] = useState("");
+			const [usage, setUsage] = useState(null);
+			const [usageErr, setUsageErr] = useState("");
 
 			function loadDash(d) {
 				apiCall("dashboard", { days: d }).then(v => {
@@ -566,6 +721,12 @@ window.__ModuleLoader__.load({
 			}
 			function loadKimi(force) {
 				apiCall("kimi-usage", { force: !!force }).then(v => setKimi(v)).catch(() => {});
+			}
+			function loadUsage() {
+				apiCall("usage", {}).then(v => {
+					if (v && v.ok) { setUsage(v); setUsageErr(""); }
+					else setUsageErr(v && v.error ? String(v.error) : "数据加载失败");
+				}).catch(err => setUsageErr(String(err && err.message ? err.message : err)));
 			}
 			function loadBalance(key) {
 				apiCall("balance", key ? { apiKey: key } : {}).then(v => setBalance(v)).catch(() => {});
@@ -580,12 +741,16 @@ window.__ModuleLoader__.load({
 			function onRefresh() {
 				setBusy(true);
 				apiCall("dashboard", { days }).then(v => { if (v && v.ok) setDash(v); }).catch(() => {});
+				apiCall("usage", {}).then(v => {
+					if (v && v.ok) { setUsage(v); setUsageErr(""); }
+					else setUsageErr(v && v.error ? String(v.error) : "数据加载失败");
+				}).catch(err => setUsageErr(String(err && err.message ? err.message : err)));
 				apiCall("kimi-usage", { force: false }).then(v => setKimi(v)).catch(() => {});
 				apiCall("balance", {}).then(v => { setBalance(v); setBusy(false); }).catch(() => setBusy(false));
 			}
 
 			useEffect(() => { loadDash(days); }, [days]);
-			useEffect(() => { loadKimi(false); loadBalance(""); }, []);
+			useEffect(() => { loadKimi(false); loadBalance(""); loadUsage(); }, []);
 			useEffect(() => {
 				const id = setInterval(() => setNow(Date.now()), 30000);
 				return () => clearInterval(id);
@@ -598,6 +763,12 @@ window.__ModuleLoader__.load({
 				!dash && !dashErr ? e("div", { className: "cost-hint", style: { marginTop: "12px" } }, "加载中…") : null,
 				dash ? statCards(dash) : null,
 				dash ? mainPanel(dash, tab, setTab, scheme, setScheme) : null,
+				e("div", { className: "cost-panel" },
+					e("div", { className: "cost-row" }, e("span", { className: "cost-panel-title" }, "Token 用量统计")),
+					e("div", { style: { marginTop: "8px" } },
+						usage ? e(UsageHeatmap, { data: usage })
+							: usageErr ? e("div", { className: "cost-err" }, "加载失败：" + usageErr)
+							: e("div", { className: "cost-hint" }, "加载中…"))),
 				subPanel(kimi, dash, now, () => loadKimi(true)),
 				balancePanel(balance, manualKey, setManualKey, k => loadBalance(k)),
 				dash ? modelSections(dash) : null,
@@ -607,6 +778,7 @@ window.__ModuleLoader__.load({
 		function StatusLine(props) {
 			const sessionId = props && props.sessionId ? String(props.sessionId) : "";
 			const [s, setS] = useState(null);
+			const [expanded, setExpanded] = useState(false);
 			useEffect(() => {
 				let alive = true;
 				function load() {
@@ -617,14 +789,54 @@ window.__ModuleLoader__.load({
 				return () => { alive = false; clearInterval(id); };
 			}, [sessionId]);
 			if (!s) return null;
-			if (s.subscription) {
-				return e("div", { className: "cost-dock" },
-					e("span", null, "本会话 订阅套餐 · 等效 ¥" + fmtMoney(s.sessionSub) + "（仅供参考）"),
-					s.kimiWeeklyRemaining !== null && s.kimiWeeklyRemaining !== undefined ? e("span", null, "· 周配额剩 " + fmtInt(s.kimiWeeklyRemaining)) : null);
+			// 按会话实际内容决定显示（而不是按当前选中的模型）：
+			//  - realModels 按量模型 / subModels 订阅模型（分开）
+			//  - 订阅只用一个着色徽标展示套餐名 + 总等效费用，订阅模型不再单独进模型区（避免重复）
+			// 布局：胶囊分段（主胶囊 / 订阅胶囊 / 模型胶囊），用细竖线分隔，悬停或点击展开模型。
+			const realModels = Array.isArray(s.sessionRealModels) ? s.sessionRealModels : [];
+			const subModels = Array.isArray(s.sessionSubModels) ? s.sessionSubModels : [];
+			const hasReal = realModels.length > 0 || s.sessionCost > 0;
+			const hasSub = subModels.length > 0 || s.sessionSub > 0;
+			const chip = (m, i) => e("span", { key: "r" + i, className: "cost-chip", title: m.model },
+				shortModel(m.model) + " ¥" + fmtMoney(m.cost));
+			// 主胶囊：标明「本会话」+ 本会话花费（不需要累计）
+			const costPill = e("span", { className: "cost-pill" },
+				e("span", { className: "cost-hint" }, "本会话"),
+				e("span", { className: "cost-dock-main" }, "¥" + fmtMoney(s.sessionCost)));
+			// 订阅徽标（单个着色胶囊，不再把订阅模型放进模型区）
+			let subPill = null;
+			if (hasSub) {
+				const plan = subPlanName(subModels.length ? subModels[0].provider : s.provider);
+				subPill = e("span", { className: "cost-badge cost-pill-sub-badge" }, plan + " · ¥" + fmtMoney(s.sessionSub));
 			}
-			return e("div", { className: "cost-dock" },
-				e("span", null, "本会话 ¥" + fmtMoney(s.sessionCost) + " · 累计 ¥" + fmtMoney(s.totalCost)),
-				s.isDeepSeek ? e("span", { style: { color: s.peak ? AMBER : GREEN } }, "· " + (s.peak ? "当前高峰价" : "当前闲时价（半价）")) : null);
+			// 模型胶囊：默认 top2 汇总，点击展开全部（仅按量模型）
+			let modelPill = null;
+			const modelCount = realModels.length;
+			if (realModels.length > 0) {
+				const topN = realModels.slice(0, 2);
+				const extraReal = realModels.length - 2;
+				const toggle = e("button", {
+					className: "cost-model-toggle",
+					onClick: () => setExpanded(!expanded),
+					title: expanded ? "收起模型明细" : "展开模型明细",
+					"aria-expanded": expanded,
+				}, expanded ? "▾" : "▸");
+				const modelLabel = e("span", { className: "cost-hint" }, "模型 ×" + modelCount + " ");
+				if (expanded) {
+					modelPill = e("span", { className: "cost-pill" }, modelLabel,
+						realModels.map((m, i) => chip(m, i)), toggle);
+				} else {
+					const topChips = topN.map((m, i) => chip(m, i));
+					const more = extraReal > 0 ? e("span", { className: "cost-hint" }, "+" + extraReal) : null;
+					modelPill = e("span", { className: "cost-pill" }, modelLabel, topChips, more, toggle);
+				}
+			}
+			// 分段组装：主胶囊 | 订阅胶囊 | 模型胶囊（细竖线分隔，换行时自动分段）
+			const segs = [];
+			segs.push(costPill);
+			if (subPill) segs.push(subPill);
+			if (modelPill) segs.push(modelPill);
+			return e("div", { className: "cost-dock" }, segs.map((seg, i) => e("span", { key: "seg" + i, className: "cost-seg" }, seg)));
 		}
 
 		const inject = ["slots"];

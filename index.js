@@ -521,6 +521,8 @@ export default {
       const now = Date.now()
       const todayKey = dayKey(now)
       let sessionCost = 0, sessionCalls = 0, sessionSub = 0, sessionSubCalls = 0, todayCost = 0
+      // 本会话按模型拆分（明细；订阅与按量分开，便于状态栏按会话实际内容展示）
+      const realMap = {}, subMap = {}
       // 会话/当日只可能出现在明细里（日汇总早于保留窗口）
       for (const r of records) {
         if (r.subscription) {
@@ -529,7 +531,21 @@ export default {
           if (dayKey(r.ts) === todayKey) todayCost += r.cost
           if (r.sessionId === sid) { sessionCost += r.cost; sessionCalls += 1 }
         }
+        if (r.sessionId === sid) {
+          const key = r.provider + '/' + r.model
+          const map = r.subscription ? subMap : realMap
+          let m = map[key]
+          if (!m) m = map[key] = { provider: r.provider, model: r.model, subscription: !!r.subscription, calls: 0, tokens: 0, cost: 0 }
+          m.calls += 1
+          m.tokens += (r.tokens.input + r.tokens.output + r.tokens.cacheRead + r.tokens.cacheWrite)
+          m.cost += r.cost
+        }
       }
+      const fmtModels = (map) => Object.keys(map).map(k => map[k]).sort((a, b) => b.cost - a.cost)
+        .map(m => ({ provider: m.provider, model: m.model, subscription: m.subscription, calls: m.calls, tokens: m.tokens, cost: r4(m.cost) }))
+      const realModels = fmtModels(realMap)
+      const subModels = fmtModels(subMap)
+      const sessionModels = realModels.concat(subModels).sort((a, b) => b.cost - a.cost)
       // 全时段总量 = 明细 + 永久日汇总，永远精确
       const full = collectTotals(records, rollups)
       let provider = '', model = ''
@@ -543,13 +559,17 @@ export default {
       const np = normProvider(provider)
       const subscription = !!SUBSCRIPTION_RATES[np]
       let kimiWeeklyRemaining = null
-      if (subscription) {
+      // 只要当前选择是订阅，或本会话实际用了订阅，就刷新 kimi 周配额
+      if (subscription || sessionSub > 0) {
         if (!kimiCache || now - kimiCache.fetchedAt >= 120000) kimiUsage(false).catch(() => {})
         if (kimiCache && kimiCache.data && kimiCache.data.ok) kimiWeeklyRemaining = kimiCache.data.weekly.remaining
       }
       return {
         sessionCost: r4(sessionCost), sessionCalls,
         sessionSub: r4(sessionSub), sessionSubCalls,
+        sessionRealModels: realModels,
+        sessionSubModels: subModels,
+        sessionModels,
         todayCost: r4(todayCost), totalCost: r4(full.realCost), totalCalls: full.realCalls,
         subEquivalent: r4(full.subEquivalent), subCalls: full.subCalls, subTokens: full.subTokens,
         provider, model,
@@ -568,6 +588,51 @@ export default {
       return { ok: true, cleared: n }
     }
 
+    // ---------- usage heatmap (Codex 风格 26 周每日用量方格热图) ----------
+    // 返回全时段累计 token + 按天聚合（明细 + 永久日汇总），供客户端渲染热力图。
+    // 汇总含按量与订阅（订阅为等效参考口径一致），days 覆盖最近约 27 周（含 26 周窗口余量）。
+    function buildUsageHeat() {
+      const now = Date.now()
+      const byDay = {}
+      const ensure = (dk) => {
+        let d = byDay[dk]
+        if (!d) d = byDay[dk] = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, calls: 0, cost: 0 }
+        return d
+      }
+      let totInput = 0, totOutput = 0, totCacheRead = 0, totCacheWrite = 0, totCalls = 0, totCost = 0
+      for (const r of records) {
+        const t = r.tokens
+        const d = ensure(dayKey(r.ts))
+        d.input += t.input; d.output += t.output; d.cacheRead += t.cacheRead; d.cacheWrite += t.cacheWrite; d.calls += 1; d.cost += r.cost
+        totInput += t.input; totOutput += t.output; totCacheRead += t.cacheRead; totCacheWrite += t.cacheWrite; totCalls += 1; totCost += r.cost
+      }
+      for (const dk of Object.keys(rollups)) {
+        for (const mk of Object.keys(rollups[dk])) {
+          const e = rollups[dk][mk]
+          const d = ensure(dk)
+          d.input += e.input; d.output += e.output; d.cacheRead += e.cacheRead; d.cacheWrite += e.cacheWrite; d.calls += e.calls; d.cost += e.cost
+          totInput += e.input; totOutput += e.output; totCacheRead += e.cacheRead; totCacheWrite += e.cacheWrite; totCalls += e.calls; totCost += e.cost
+        }
+      }
+      // 只保留最近约 27 周（客户端网格按周对齐，多留一周做余量，避免边缘缺格）
+      const startDk = dayKey(now - 27 * 7 * 86400000)
+      const days = []
+      for (const dk of Object.keys(byDay).sort()) {
+        if (dk < startDk) continue
+        const d = byDay[dk]
+        days.push({ date: dk, input: d.input, output: d.output, cacheRead: d.cacheRead, cacheWrite: d.cacheWrite, calls: d.calls, cost: r4(d.cost), tokens: d.input + d.output + d.cacheRead + d.cacheWrite })
+      }
+      return {
+        ok: true,
+        total: {
+          tokens: totInput + totOutput + totCacheRead + totCacheWrite,
+          input: totInput, cache: totCacheRead + totCacheWrite, output: totOutput,
+          calls: totCalls, cost: r4(totCost),
+        },
+        days,
+      }
+    }
+
     // ---------- HTTP routes (client → host) ----------
     const ROUTES = {
       summary: (args) => buildSummary(args),
@@ -576,6 +641,7 @@ export default {
       balance: (args) => balance(args),
       export: () => exportCsv(),
       prices: () => prices(),
+      usage: () => buildUsageHeat(),
     }
 
     async function handleRoute(req, res) {
