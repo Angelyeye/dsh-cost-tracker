@@ -1,0 +1,5 @@
+# dsh-cost-tracker bundle patch: registers the plugin when installed via
+# `dsh plugin add dsh-cost-tracker` (or from this repo directly).
+- insert:
+    - id: dsh-cost-tracker
+      name: dsh-cost-tracker

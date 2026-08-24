@@ -27,6 +27,9 @@
     "url": "https://github.com/Angelyeye/dsh-cost-tracker.git"
   },
   "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
     "client": {
       "platform": "web",
       "inject": [
