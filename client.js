@@ -153,6 +153,11 @@ window.__ModuleLoader__.load({
 .cost-ps-rail.peak .cost-ps-word { color: #ff9800; }
 .cost-ps-rail.off .cost-ps-word { color: var(--dsw-alias-state-business-primary, #4176e6); }
 .cost-ps-rail.weekend .cost-ps-word { color: #34a853; }
+/* 侧边栏底部(sidebar.footer.action)多插件 UI 兼容：
+   DSH 渲染器把该槽锚点设为 display:contents(见 dsh-client-ui-renderer ANCHOR_STYLE)，
+   多个插件内容会被并进同一行(如与 linxin666/dsh-web-ui-all 冲突)；改为纵向堆叠即可共存。
+   采用稳定 data-slot 选择器，收起(rail)态仅显示短词、内容极窄，天然不受影响。 */
+[data-slot="sidebar.footer.action"] { display: flex !important; flex-direction: column !important; align-items: stretch !important; gap: 4px !important; flex: 1 1 auto !important; min-width: 0 !important; }
 /* 峰谷切换前弹窗 */
 .cost-pa { position: fixed; z-index: 9999; width: 340px; max-width: calc(100vw - 32px); padding: 14px 16px; border-radius: 14px; background: var(--dsw-alias-bg-layer-2, #fff); border: 1px solid var(--dsw-alias-border-l2, #d1d5db); box-shadow: 0 14px 36px rgba(0,0,0,.22); display: flex; flex-direction: column; gap: 8px; font-size: 13px; animation: cost-pa-in .22s cubic-bezier(.2,.8,.2,1); }
 .cost-pa.cost-pa-corner { right: 20px; bottom: 20px; }

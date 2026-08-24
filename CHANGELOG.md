@@ -2,6 +2,13 @@
 
 本文件用中文记录 dsh-cost-tracker 的版本变更。
 
+## v1.5.1(2026-08-24)
+
+### 修复
+- **侧边栏底部(sidebar.footer.action)与多插件 UI 兼容**:DSH 渲染器把该槽锚点设为 `display:contents`(见 `dsh-client-ui-renderer` 的 `ANCHOR_STYLE`),导致多个往此槽注册内容的插件(如 `linxin666/dsh-web-ui-all`)被并进同一行、互相挤压。现通过覆盖样式把该锚点改为**纵向堆叠**(`display:flex; flex-direction:column`),使本插件的时段条与其它 footer 插件共存不重叠(思路与 `dsh-footer-order` 一致)。采用稳定 `data-slot` 选择器,收起(rail)态仅显示短词、天然不受影响。
+
+---
+
 ## v1.5.0(2026-08-24)
 
 ### 新增

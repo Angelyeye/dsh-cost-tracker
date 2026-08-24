@@ -6,7 +6,7 @@
 
 **简体中文** | [English](./README.en.md)
 
-![version](https://img.shields.io/badge/version-v1.5.0-blue?style=flat-square)
+![version](https://img.shields.io/badge/version-v1.5.1-blue?style=flat-square)
 ![license](https://img.shields.io/badge/license-MIT-green?style=flat-square)
 ![status](https://img.shields.io/badge/status-stable-brightgreen?style=flat-square)
 ![platform](https://img.shields.io/badge/platform-DSH%20Web-blueviolet?style=flat-square)
@@ -147,6 +147,11 @@ POST /api/cost-tracker/export       导出 CSV
 ---
 
 ## 更新记录
+
+### v1.5.1(2026-08-24)
+
+**修复**
+- **侧边栏底部(sidebar.footer.action)与多插件 UI 兼容**:DSH 渲染器把该槽锚点设为 `display:contents`,多个插件内容会被并进同一行(如与 `linxin666/dsh-web-ui-all` 冲突);改为纵向堆叠后,本插件的时段条与其它 footer 插件共存不重叠。
 
 ### v1.5.0(2026-08-24)
 

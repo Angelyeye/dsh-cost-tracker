@@ -6,7 +6,7 @@
 
 [简体中文](./README.md) | **English**
 
-![version](https://img.shields.io/badge/version-v1.5.0-blue?style=flat-square)
+![version](https://img.shields.io/badge/version-v1.5.1-blue?style=flat-square)
 ![license](https://img.shields.io/badge/license-MIT-green?style=flat-square)
 ![status](https://img.shields.io/badge/status-stable-brightgreen?style=flat-square)
 ![platform](https://img.shields.io/badge/platform-DSH%20Web-blueviolet?style=flat-square)
@@ -149,6 +149,11 @@ Example: `curl -X POST http://127.0.0.1:3080/api/cost-tracker/summary -d '{}'`
 ---
 
 ## Changelog
+
+### v1.5.1 (2026-08-24)
+
+**Fixed**
+- **Sidebar footer (`sidebar.footer.action`) UI compatibility with multiple plugins**: DSH's renderer sets that slot's anchor to `display: contents`, so several plugins registering there (e.g. `linxin666/dsh-web-ui-all`) get squeezed into one row and overlap. The anchor is now overridden to stack **vertically** (`display:flex; flex-direction:column`), so this plugin's tier strip coexists with other footer plugins without overlapping (same idea as `dsh-footer-order`); it uses the stable `data-slot` selector and is unaffected in the collapsed (rail) state.
 
 ### v1.5.0 (2026-08-24)
 
