@@ -10,7 +10,7 @@ import { readFileSync, writeFileSync, mkdirSync, renameSync, existsSync, realpat
 import { join, dirname } from 'node:path'
 import { homedir } from 'node:os'
 import { createStore, collectTotals, DETAIL_DAYS, MAX_AXIS_DAYS } from './store.js'
-import { EXACT_MODELS, SUBSCRIPTION_RATES, PROVIDER_RATES, GENERIC_RATES, PEAK_WINDOWS, isPeak, peakPhaseAt, priceFor, computeCost, normalizeTokens } from './pricing.js'
+import { EXACT_MODELS, SUBSCRIPTION_RATES, PROVIDER_RATES, GENERIC_RATES, PEAK_WINDOWS, PEAK_HOUR_WINDOWS, isPeak, peakPhaseAt, priceFor, computeCost, normalizeTokens } from './pricing.js'
 import { normalizePeakConfig, defaultPeakConfig, peakEffective } from './config.js'
 
 // ============================================================
@@ -170,6 +170,7 @@ export default {
         },
         phase,
         peakWindows: PEAK_WINDOWS,
+        peakHours: PEAK_HOUR_WINDOWS,
         effectiveAt: peakConfig.peakEffectiveAt,
         now,
       }

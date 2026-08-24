@@ -7,7 +7,8 @@
 // 字段：
 //   peakEnabled        启用 DeepSeek 峰谷时段价格（影响计费 + 提示显隐）
 //   peakNotice         峰时高价时段显著提示（时段条显示）
-//   peakStyle          时段条样式：compact（简洁单行）/ classic（经典两行）
+//   peakStyle          时段条样式：compact（简洁单行）/ classic（环形表盘，24h 中空圆环）
+//   peakShowTickLabels 环形表盘是否显示时间刻度（00:00–21:00），默认 true
 //   peakAlertEnabled   峰/谷切换前弹窗提醒
 //   peakAlertAhead     提前提醒分钟数（1-30，默认 2）
 //   peakAlertTarget    提醒类型：both（峰和谷）/ peak（进入峰时）/ offpeak（进入谷时）
@@ -25,6 +26,7 @@ export function defaultPeakConfig() {
     peakEnabled: true,
     peakNotice: true,
     peakStyle: 'compact',
+    peakShowTickLabels: true,
     peakAlertEnabled: true,
     peakAlertAhead: 2,
     peakAlertTarget: 'both',
@@ -49,6 +51,7 @@ export function normalizePeakConfig(raw) {
     peakEnabled: bool(raw.peakEnabled, def.peakEnabled),
     peakNotice: bool(raw.peakNotice, def.peakNotice),
     peakStyle: raw.peakStyle === 'classic' ? 'classic' : 'compact',
+    peakShowTickLabels: bool(raw.peakShowTickLabels, def.peakShowTickLabels),
     peakAlertEnabled: bool(raw.peakAlertEnabled, def.peakAlertEnabled),
     peakAlertAhead: intIn(raw.peakAlertAhead, 1, 30, def.peakAlertAhead),
     peakAlertTarget: (raw.peakAlertTarget === 'peak' || raw.peakAlertTarget === 'offpeak') ? raw.peakAlertTarget : def.peakAlertTarget,

@@ -133,6 +133,8 @@ window.__ModuleLoader__.load({
 .cost-ps-stack { flex-direction: column; align-items: stretch; gap: 4px; }
 .cost-ps-track { position: relative; display: flex; flex: 1 1 72px; min-width: 72px; height: 6px; border-radius: 999px; overflow: hidden; border: 1px solid var(--dsw-alias-border-l1, #e5e7eb); background: var(--dsw-alias-bg-layer-3, #eef0f3); }
 .cost-ps-seg { height: 100%; flex: 1; }
+/* 单行紧凑：24h 比例轨道（橙=高峰/蓝=平价按窗口比例绝对定位，白线=实时进度） */
+.cost-ps-track .cost-ps-seg { position: absolute; top: 0; bottom: 0; flex: none; }
 .cost-ps-peakseg { background: #ff9800; }
 .cost-ps-offseg { background: var(--dsw-alias-state-business-primary, #4176e6); }
 .cost-ps-marker { position: absolute; top: 0; left: 50%; width: 2px; height: 100%; background: var(--dsw-alias-bg-base, #fff); box-shadow: 0 0 0 1px var(--dsw-alias-label-tertiary, #9ca3af); transform: translateX(-50%); transition: left .4s ease; z-index: 2; }
@@ -141,6 +143,10 @@ window.__ModuleLoader__.load({
 .cost-ps.off .cost-ps-chip { color: var(--dsw-alias-state-business-primary, #4176e6); }
 .cost-ps.weekend .cost-ps-chip { color: #34a853; }
 .cost-ps-foot { font-size: 11px; color: var(--dsw-alias-label-tertiary, #9ca3af); white-space: nowrap; }
+/* 环形表盘（classic 改造）：24h 中空圆环，蓝=平价、橙=高峰、绿=周末 */
+.cost-ps-ring { flex-direction: column; align-items: center; justify-content: center; gap: 4px; }
+.cost-ps-ring svg { display: block; max-width: 100%; }
+.cost-ps-ringfoot { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: center; }
 /* 窄栏（rail）态：只显示竖排短词 */
 .cost-ps-rail { display: inline-flex; flex-direction: column; gap: 1px; }
 .cost-ps-rail .cost-ps-word { font-size: 10px; font-weight: 600; line-height: 1.1; white-space: nowrap; color: var(--dsw-alias-label-secondary, #5b6472); }
@@ -772,6 +778,56 @@ window.__ModuleLoader__.load({
 			if (p.weekend) return "50%";
 			return p.inPeak ? "25%" : "75%";
 		}
+		// 24h 环形表盘（classic 改造）：中空圆环。底环蓝=平价铺满 24h，高峰窗口叠加橙色弧段，
+		// 指针随当前时刻旋转，圆心显示相位 + 倒计时。窗口缺口数据来自后端 peakHours，与 isPeak/peakPhaseAt 同口径。
+		function peakBeijingMinute(now) {
+			const d = new Date((Number.isFinite(now) ? now : Date.now()) + 28800000);
+			return d.getUTCHours() * 60 + d.getUTCMinutes();
+		}
+		function PeakDial(props) {
+			const p = props.phase;
+			if (!p) return null;
+			const now = props.now || Date.now();
+			const windows = props.windows && props.windows.length ? props.windows : [{ start: 9, end: 12 }, { start: 14, end: 18 }];
+			const size = props.size || 150;
+			const showTimeLabels = props.showTimeLabels !== false;
+			const CX = 90, CY = 90, R = 62, SW = 18; // viewBox 180
+			const peakC = "#ff9800", offC = "#4176e6", weekC = "#34a853";
+			const dim = "#9ca3af";
+			const deg = (h) => h * 15; // 0:00 = 顶部，顺时针；6:00 右 · 12:00 底 · 18:00 左
+			const polar = (d, r) => [CX + r * Math.sin(d * Math.PI / 180), CY - r * Math.cos(d * Math.PI / 180)];
+			const children = [
+				// 平价底环（蓝）
+				e("circle", { cx: CX, cy: CY, r: R, fill: "none", stroke: offC, "stroke-width": SW }),
+			];
+			// 高峰弧（橙）；周末则不画任何峰时弧段
+			if (!p.weekend) {
+				for (const w of windows) {
+					const a = deg(w.start), b = deg(w.end);
+					const s = polar(a, R), e2 = polar(b, R);
+					const large = ((b - a) % 360) > 180 ? 1 : 0;
+					children.push(e("path", { d: "M " + s[0] + " " + s[1] + " A " + R + " " + R + " 0 " + large + " 1 " + e2[0] + " " + e2[1], fill: "none", stroke: peakC, "stroke-width": SW }));
+				}
+			}
+			// 时间刻度（每 3h 一个标签，随缩放等比；可由「显示时间」开关控制）
+			if (showTimeLabels) {
+				for (let h = 0; h < 24; h += 3) {
+					const pt = polar(deg(h), R + SW / 2 + 13);
+					children.push(e("text", { x: pt[0], y: pt[1], "text-anchor": "middle", "dominant-baseline": "middle", "font-size": "8.5", fill: dim }, (h < 10 ? "0" : "") + h + ":00"));
+				}
+			}
+			// 当前相位颜色（峰橙 / 平蓝 / 周末绿）—— 同时用于标记点与圆心文案
+			const color = p.weekend ? weekC : p.inPeak ? peakC : offC;
+			const word = p.weekend ? "周末全谷" : p.inPeak ? "高峰时段" : "平价时段";
+			// 当前时刻标记：相位色点（环上，随相位变色 + 白色描边）
+			const m = peakBeijingMinute(now);
+			const tip = polar(m / 1440 * 360, R);
+			children.push(e("circle", { cx: tip[0], cy: tip[1], r: "7", fill: color, stroke: "#fff", "stroke-width": "2.5" }));
+			// 圆心：当前相位 + 倒计时
+			children.push(e("text", { x: CX, y: CY - 4, "text-anchor": "middle", "dominant-baseline": "middle", "font-size": "12", "font-weight": "700", fill: color }, word));
+			children.push(e("text", { x: CX, y: CY + 12, "text-anchor": "middle", "dominant-baseline": "middle", "font-size": "8.5", fill: dim }, peakCountdown(p, now)));
+			return e("svg", { viewBox: "0 0 180 180", width: size, height: size, role: "img", style: { overflow: "visible" } }, ...children);
+		}
 		// 单行时段条：两段轨道（橙+蓝）+ 标记线 + 着色 chip。对标 dsh-cost-meter 简洁款。
 		function PeakStrip(props) {
 			const snap = props.snap;
@@ -788,21 +844,29 @@ window.__ModuleLoader__.load({
 					e("span", { className: "cost-ps-word" }, peakWord(p)));
 			}
 			if (style === "classic") {
-				// 经典：固定宽度轨道 + 两行（chip / 倒计时）
-				return e("div", { className: "cost-ps cost-ps-stack" + wordClass, title: countdown },
-					e("span", { className: "cost-ps-chip" }, peakWord(p)),
-					e("div", { className: "cost-ps-track" },
-						e("div", { className: "cost-ps-seg cost-ps-peakseg" }),
-						e("div", { className: "cost-ps-seg cost-ps-offseg" }),
-						e("div", { className: "cost-ps-marker", style: { left: peakMarkerLeft(p) } })),
-					e("div", { className: "cost-ps-foot" }, countdown));
+				// 环形表盘（classic 改造）：24h 中空圆环 + 圆心相位/倒计时
+				return e("div", { className: "cost-ps cost-ps-ring" + wordClass, title: countdown },
+					e(PeakDial, { phase: p, windows: snap.peakHours, now: now, size: props.ringSize || 150, showTimeLabels: !snap.config || snap.config.peakShowTickLabels !== false }),
+					e("div", { className: "cost-ps-ringfoot" },
+						e("span", { className: "cost-ps-chip" }, peakWord(p) + " · " + countdown)));
 			}
-			// compact：单行「轨道 + chip·倒计时」
+			// compact：单行「24h 比例轨道（橙=高峰/蓝=平价）+ 白色实时进度线 + chip·倒计时」
+			const win = snap.peakHours && snap.peakHours.length ? snap.peakHours : [{ start: 9, end: 12 }, { start: 14, end: 18 }];
+			const segs = [
+				// 平价底（蓝）铺满 24h
+				e("div", { className: "cost-ps-seg cost-ps-offseg", style: { left: "0%", width: "100%" } }),
+			];
+			// 高峰段（橙）按窗口在 24h 中的比例定位
+			if (!p.weekend) {
+				for (const w of win) {
+					segs.push(e("div", { className: "cost-ps-seg cost-ps-peakseg", style: { left: (w.start / 24 * 100) + "%", width: ((w.end - w.start) / 24 * 100) + "%" } }));
+				}
+			}
+			// 白色分割线：实时进度（北京时间当日占比）
+			segs.push(e("div", { className: "cost-ps-marker", style: { left: (peakBeijingMinute(now) / 1440 * 100) + "%" } }));
 			return e("div", { className: "cost-ps" + wordClass, title: countdown },
 				e("div", { className: "cost-ps-track" },
-					e("div", { className: "cost-ps-seg cost-ps-peakseg" }),
-					e("div", { className: "cost-ps-seg cost-ps-offseg" }),
-					e("div", { className: "cost-ps-marker", style: { left: peakMarkerLeft(p) } })),
+					segs),
 				e("span", { className: "cost-ps-chip" }, peakWord(p) + " · " + countdown));
 		}
 
@@ -905,7 +969,7 @@ window.__ModuleLoader__.load({
 				popup = e(PeakAlertPopup, { snap, preview, now: now + 120000, countdownText: "2 分", onDismiss: () => setPreview(null) });
 			}
 			return e("div", null,
-				e(PeakStrip, { snap, style: snap ? snap.style : "compact", wide, now }),
+				e(PeakStrip, { snap, style: snap ? snap.style : "compact", wide, now, ringSize: 112 }),
 				popup);
 		}
 
@@ -963,7 +1027,11 @@ window.__ModuleLoader__.load({
 						e("span", null, "时段条样式"),
 						e("select", { className: "cost-select", value: d.peakStyle === "classic" ? "classic" : "compact", onChange: ev => setField("peakStyle", ev.target.value) },
 							e("option", { value: "compact" }, "简洁（单行紧凑）"),
-							e("option", { value: "classic" }, "经典（两行）"))),
+							e("option", { value: "classic" }, "环形表盘（24h）"))),
+					d.peakStyle === "classic" ? e("label", { className: "cost-row", style: { gap: "8px" } },
+						e("input", { type: "checkbox", checked: d.peakShowTickLabels !== false, onChange: ev => setField("peakShowTickLabels", ev.target.checked) }),
+						e("span", null, "显示时间（00:00–21:00 刻度）"))
+						: null,
 					e("label", { className: "cost-row", style: { gap: "8px" } },
 						e("input", { type: "checkbox", checked: d.peakAlertEnabled !== false, onChange: ev => setField("peakAlertEnabled", ev.target.checked) }),
 						e("span", null, "峰/谷切换前弹窗提醒")),
@@ -990,7 +1058,7 @@ window.__ModuleLoader__.load({
 						savedMsg ? e("span", { className: "cost-hint" }, savedMsg) : null),
 					e("div", { className: "cost-hint", style: { marginTop: "6px" } },
 						"峰时段（北京时间）：" + (snap ? snap.peakWindows : "周一至周五 9:00-12:00 · 14:00-18:00（周末全天闲时）") + "。生效时间：" + (snap ? snap.effectiveAt : "2026-08-01T00:00:00Z") + "。当前：" + (cfgSnap && cfgSnap.phase ? (cfgSnap.phase.weekend ? "周末全谷价" : cfgSnap.phase.inPeak ? "高峰时段" : "平价时段") : "…"))),
-				noticeOn ? e("div", { style: { marginTop: "8px" } }, e(PeakStrip, { snap: cfgSnap, style: d.peakStyle || "compact", wide: true, now }))
+				noticeOn ? e("div", { style: { marginTop: "8px" } }, e(PeakStrip, { snap: cfgSnap, style: d.peakStyle || "compact", wide: true, now, ringSize: 150 }))
 					: e("p", { className: "cost-hint", style: { marginTop: "8px" } }, "提示已隐藏：需启用峰谷计价并开启「峰时高价时段显著提示」。"));
 		}
 

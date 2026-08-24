@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>峰谷环形表盘 · 指针式样预览</title>
+<style>
+  :root {
+    --ink1: #171a1f;
+    --ink2: #5b6472;
+    --ink3: #9ca3af;
+    --bg: #fff;
+    --bg2: #f3f4f6;
+    --bg3: #eef0f3;
+    --border: #e5e7eb;
+    --border2: #d1d5db;
+    --peak: #ff9800;
+    --off: #4176e6;
+    --weekend: #34a853;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #f6f7f9;
+    color: var(--ink1);
+    font-size: 14px;
+    line-height: 1.5;
+    padding: 28px 20px 60px;
+  }
+  .page { max-width: 1080px; margin: 0 auto; }
+  .head h1 { font-size: 20px; margin: 0 0 6px; font-weight: 650; }
+  .head p { margin: 0 0 4px; color: var(--ink2); font-size: 13px; }
+  .head code { background: #eef0f3; padding: 1px 5px; border-radius: 4px; font-size: 12px; color: #b45309; }
+
+  .card { background: var(--bg); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; margin-top: 18px; }
+  .card h2 { font-size: 15px; margin: 0 0 12px; font-weight: 650; }
+  .muted { color: var(--ink2); font-size: 12.5px; }
+  .badge-new { display: inline-block; background: var(--peak); color: #fff; font-size: 10.5px; padding: 1px 7px; border-radius: 999px; margin-left: 8px; vertical-align: 2px; }
+
+  /* ---------- scheme selector ---------- */
+  .schemes { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 16px; }
+  .scheme-pill {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 6px 12px; border-radius: 999px; border: 1px solid var(--border2);
+    background: #fff; cursor: pointer; font-size: 12.5px; color: var(--ink2);
+    font-weight: 500; transition: all .15s ease;
+  }
+  .scheme-pill .ico { width: 14px; height: 14px; display: inline-block; }
+  .scheme-pill:hover { border-color: var(--off); color: var(--off); }
+  .scheme-pill.on { background: var(--off); border-color: var(--off); color: #fff; }
+  .scheme-pill.on .ico { filter: brightness(0) invert(1); }
+
+  /* ---------- live demo ---------- */
+  .live { display: flex; gap: 26px; flex-wrap: wrap; align-items: center; }
+  .dial-holder { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  .dial-svg { display: block; }
+  .live-side { flex: 1 1 320px; min-width: 280px; }
+
+  .slider-row { display: flex; align-items: center; gap: 12px; margin: 6px 0 14px; }
+  .slider-row input[type="range"] { flex: 1; accent-color: var(--off); }
+  .slider-row .time-val { font-variant-numeric: tabular-nums; font-weight: 600; min-width: 52px; text-align: right; }
+  .slider-row .now-chip { font-size: 11.5px; color: var(--ink3); font-variant-numeric: tabular-nums; }
+
+  .phase-badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+  .phase-badge.peak { background: rgba(255,152,0,.12); color: var(--peak); }
+  .phase-badge.off { background: rgba(65,118,230,.12); color: var(--off); }
+  .phase-badge.weekend { background: rgba(52,168,83,.12); color: var(--weekend); }
+  .phase-badge .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+  .countdown { font-size: 12.5px; color: var(--ink2); margin-top: 8px; font-variant-numeric: tabular-nums; }
+  .windows-note { font-size: 12px; color: var(--ink2); margin-top: 10px; line-height: 1.6; }
+  .windows-note b { color: #b45309; }
+
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 12px; font-size: 12px; color: var(--ink2); }
+  .legend .lg { display: inline-flex; align-items: center; gap: 6px; }
+  .legend .sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+
+  .note { font-size: 12.5px; color: var(--ink2); }
+  .note b { color: var(--ink1); }
+
+  /* ---------- all-schemes grid ---------- */
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-top: 6px; }
+  .grid .cell { border: 1px solid var(--border); border-radius: 12px; padding: 14px 10px; background: #fff; text-align: center; cursor: pointer; transition: all .15s ease; }
+  .grid .cell:hover { border-color: var(--off); }
+  .grid .cell.on { border-color: var(--off); box-shadow: 0 0 0 1px var(--off); }
+  .grid .cell .nm { font-size: 12.5px; font-weight: 600; }
+  .grid .cell .ds { font-size: 11px; color: var(--ink3); margin-top: 3px; }
+  .grid .cell .dial-holder { margin-top: 8px; }
+
+  /* ---------- states / comparison ---------- */
+  .states { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin-top: 4px; }
+  .state { border: 1px solid var(--border); border-radius: 12px; padding: 14px; text-align: center; background: #fff; }
+  .state .label { font-size: 12px; color: var(--ink2); margin-bottom: 8px; font-weight: 600; }
+  .state .sub { font-size: 11.5px; color: var(--ink3); margin-top: 6px; }
+
+  .cmp { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; margin-top: 4px; }
+  .cmp .box { border: 1px solid var(--border); border-radius: 12px; padding: 16px; background: #fff; }
+  .cmp .box h3 { font-size: 13px; margin: 0 0 10px; font-weight: 650; }
+  .cmp .box h3 .tag { font-size: 11px; color: var(--ink3); font-weight: 500; margin-left: 8px; }
+  .cmp .box .now { font-size: 11px; color: var(--ink3); margin-bottom: 10px; }
+
+  .bar { position: relative; height: 8px; border-radius: 999px; overflow: hidden; background: var(--bg3); border: 1px solid var(--border); margin-top: 6px; }
+  .bar .seg { position: absolute; top: 0; bottom: 0; }
+  .bar .seg.pk { background: var(--peak); left: 0; width: 29%; }
+  .bar .seg.pk2 { background: var(--peak); left: 58%; width: 17%; }
+  .bar .marker { position: absolute; top: -3px; bottom: -3px; width: 2px; background: #fff; box-shadow: 0 0 0 1px var(--ink3); }
+  .chiprow { display: flex; justify-content: space-between; font-size: 11px; margin-top: 8px; color: var(--ink2); }
+  .chip { font-size: 11px; font-weight: 600; }
+  .chip.pk { color: var(--peak); }
+  .chip.off { color: var(--off); }
+
+  pre.code { background: #0f172a; color: #dbeafe; padding: 14px 16px; border-radius: 10px; overflow: auto; font-size: 12px; line-height: 1.55; margin-top: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  pre.code .kw { color: #93c5fd; }
+  pre.code .st { color: #fcd34d; }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="head">
+    <h1>峰谷环形表盘 · 指针式样多方案预览</h1>
+    <p>针对 <code>dsh-cost-tracker</code> 的「环形表盘（原经典两行）」，去掉原来从圆心连到边缘的黑色长指针，改为几种更干净、更聚焦的「当前时刻」标记式样。</p>
+    <p class="muted">橙色 = 高峰（9:00-12:00 · 14:00-18:00），蓝色 = 平价，绿色 = 周末；下面可任选一枚指针式样，其余示例会跟随切换。</p>
+  </div>
+
+  <!-- ===== SCHEME PICKER ===== -->
+  <div class="card">
+    <h2>① 选择指针式样 <span class="badge-new">实时切换</span></h2>
+    <p class="muted">点击任意式样，下方的实时表盘、三种状态、对比示例都会立即切换。滑块 / “跟随当前真实时间”可验证一天的流转。</p>
+    <div id="schemePicker" class="schemes"></div>
+    <div class="live">
+      <div class="dial-holder">
+        <svg id="liveSvg" class="dial-svg" width="180" height="180" viewBox="0 0 180 180"></svg>
+        <div class="legend">
+          <span class="lg"><span class="sw" style="background:var(--peak)"></span>高峰</span>
+          <span class="lg"><span class="sw" style="background:var(--off)"></span>平价</span>
+          <span class="lg"><span class="sw" style="background:var(--ink3)"></span>当前标记</span>
+        </div>
+      </div>
+      <div class="live-side">
+        <div class="slider-row">
+          <span class="time-val" id="liveTimeVal">--:--</span>
+          <input id="liveSlider" type="range" min="0" max="1440" value="630" step="1" />
+        </div>
+        <div class="slider-row" style="margin-top:-4px">
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ink2)">
+            <input id="liveNow" type="checkbox" /> 跟随当前真实时间（北京时间）
+          </label>
+        </div>
+        <div><span class="phase-badge" id="liveBadge"><span class="dot"></span><span id="liveBadgeText">--</span></span></div>
+        <div class="countdown" id="liveCd">--</div>
+        <div class="windows-note" id="liveWin"></div>
+        <div class="countdown" id="liveSchemeDesc" style="color:var(--ink3)"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== ABLE GRID ===== -->
+  <div class="card">
+    <h2>② 全部式样一览（每枚单独渲染）</h2>
+    <p class="muted">同一时刻（周三 10:30 · 高峰）下各指针式样的直观对比，点击任一枚可设为全局式样。</p>
+    <div id="ableGrid" class="grid"></div>
+  </div>
+
+  <!-- ===== STATES ===== -->
+  <div class="card">
+    <h2>③ 三种状态</h2>
+    <div class="states">
+      <div class="state">
+        <div class="label">工作日 · 高峰时段</div>
+        <div id="stPeak" class="dial-holder"></div>
+        <div class="sub">峰时 9:00-12:00 / 14:00-18:00</div>
+      </div>
+      <div class="state">
+        <div class="label">工作日 · 平价时段</div>
+        <div id="stOff" class="dial-holder"></div>
+        <div class="sub">非峰时按谷价（×0.5）</div>
+      </div>
+      <div class="state">
+        <div class="label">周末 · 全天谷价</div>
+        <div id="stWeekend" class="dial-holder"></div>
+        <div class="sub">周末 / 法定以官方为准</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== COMPARISON ===== -->
+  <div class="card">
+    <h2>④ 对比：改造前后</h2>
+    <div class="cmp">
+      <div class="box">
+        <h3>改造前 <span class="tag">经典（两行）· 线性轨道</span></h3>
+        <div class="now">当前：高峰时段（示例：周三 10:30）</div>
+        <div class="chip pk">峰时</div>
+        <div class="bar"><div class="seg pk"></div><div class="seg pk2"></div><div class="marker" style="left:44%"></div></div>
+        <div class="chiprow"><span>高峰</span><span>平价</span></div>
+        <div class="countdown" style="margin-top:8px;text-align:center">1小时30分后进入平价</div>
+      </div>
+      <div class="box">
+        <h3>改造后 <span class="tag" id="cmpTag">环形表盘（24h 中空圆环）</span></h3>
+        <div class="now">当前：高峰时段（示例：周三 10:30）</div>
+        <div id="cmpNew" class="dial-holder"></div>
+        <div class="countdown" style="text-align:center">1小时30分后进入平价</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== NOTES ===== -->
+  <div class="card">
+    <h2>⑤ 指针式样说明与实现</h2>
+    <p class="note"><b>共同点</b>：都去掉「圆心 → 边缘」的长指针；圆心仅保留相位词 + 倒计时；当前时刻用环上/环外的轻量标记表示。</p>
+    <div id="schemeNotes"></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var PEAK = "#ff9800", OFF = "#4176e6", WEEKEND = "#34a853", INK1="#171a1f", INK3="#9ca3af";
+  var WINDOWS = [{start:9,end:12},{start:14,end:18}];
+  var CX = 90, CY = 90, R = 62, SW = 18;
+
+  var NS = "http://www.w3.org/2000/svg";
+  function el(n, attrs, parent) { var e = document.createElementNS(NS, n); for (var k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; }
+  function polar(deg, r) { var rad = deg * Math.PI / 180; return [CX + r * Math.sin(rad), CY - r * Math.cos(rad)]; }
+  function arcPath(startDeg, endDeg, r) { var s = polar(startDeg, r), e2 = polar(endDeg, r); var large = (endDeg - startDeg) % 360 > 180 ? 1 : 0; return "M " + s[0] + " " + s[1] + " A " + r + " " + r + " 0 " + large + " 1 " + e2[0] + " " + e2[1]; }
+  function hourLabelDeg(h) { return h * 15; }
+
+  // ---- marker schemes ----
+  var SCHEMES = [
+    // —— 轻量点状 ——
+    { key: "dot",        nm: "圆点",        ds: "环上实心圆点，最短最干净" },
+    { key: "phase-dot",  nm: "相位色点",     ds: "点色随相位（峰橙/平蓝/周末绿）" },
+    { key: "halo",       nm: "圆点+光晕",    ds: "实心点外围加法光晕，突出当前" },
+    { key: "diamond",    nm: "菱形",        ds: "环上小菱形，棱角更醒目" },
+    { key: "inner-dot",  nm: "内缘圆点",     ds: "圆点贴环内缘，少遮弧段" },
+    // —— 线段/几何 ——
+    { key: "arrow",      nm: "外缘三角",     ds: "环外一个小三角，指向当前小时" },
+    { key: "inner-hand", nm: "短内针",       ds: "自环内缘向圆心的短针，不穿中心" },
+    { key: "tick",       nm: "外侧短刻度",   ds: "环外一条短刻度线，极简低调" },
+    // —— 弧带 / 信息 ——
+    { key: "arc",        nm: "高亮时弧",     ds: "当前 1 小时环段高亮光带" },
+    { key: "sweep",      nm: "扫光进度",     ds: "00:00→当前的半透明进度带+点" },
+    { key: "bubble",     nm: "数字气泡",     ds: "环外气泡标注当前时刻（10:30）" },
+    // —— 极简 ——
+    { key: "none",       nm: "无指针",       ds: "完全不标当前，仅圆环+圆心文案" }
+  ];
+
+  function markerFor(scheme, svg, phase) {
+    var minute = phase.minute;
+    var deg = (minute / 1440) * 360;
+    var tip = polar(deg, R);
+    var RingOut = R + SW/2, RingIn = R - SW/2;
+    var u = [(tip[0]-CX)/R, (tip[1]-CY)/R];   // 外向单位向量
+    var tg = [-u[1], u[0]];                    // 切向单位向量
+    var pc = phase.weekend ? WEEKEND : (phase.inPeak ? PEAK : OFF);
+    if (scheme === "dot") {
+      el("circle", { cx: tip[0], cy: tip[1], r: 6.5, fill: INK1, stroke: "#fff", "stroke-width": "2.5" }, svg);
+    } else if (scheme === "phase-dot") {
+      el("circle", { cx: tip[0], cy: tip[1], r: 7, fill: pc, stroke: "#fff", "stroke-width": "2.5" }, svg);
+    } else if (scheme === "halo") {
+      el("circle", { cx: tip[0], cy: tip[1], r: 13, fill: INK1, opacity: "0.14" }, svg);
+      el("circle", { cx: tip[0], cy: tip[1], r: 9,  fill: INK1, opacity: "0.30" }, svg);
+      el("circle", { cx: tip[0], cy: tip[1], r: 5,  fill: INK1, stroke: "#fff", "stroke-width": "2" }, svg);
+    } else if (scheme === "diamond") {
+      var s = 6.2;
+      var d = [ [tip[0]+u[0]*s, tip[1]+u[1]*s], [tip[0]+tg[0]*s, tip[1]+tg[1]*s], [tip[0]-u[0]*s, tip[1]-u[1]*s], [tip[0]-tg[0]*s, tip[1]-tg[1]*s] ];
+      el("polygon", { points: d.map(function(p){return p.join(",");}).join(" "), fill: INK1, stroke: "#fff", "stroke-width": "1.5" }, svg);
+    } else if (scheme === "inner-dot") {
+      var ip = polar(deg, RingIn + 3.5);
+      el("circle", { cx: ip[0], cy: ip[1], r: 5, fill: INK1, stroke: "#fff", "stroke-width": "2" }, svg);
+    } else if (scheme === "arrow") {
+      var apex = [CX + u[0]*(RingOut+2),  CY + u[1]*(RingOut+2)];
+      var b1   = [CX + u[0]*(RingOut+12) + tg[0]*5.5, CY + u[1]*(RingOut+12) + tg[1]*5.5];
+      var b2   = [CX + u[0]*(RingOut+12) - tg[0]*5.5, CY + u[1]*(RingOut+12) - tg[1]*5.5];
+      el("polygon", { points: apex.join(",")+" "+b1.join(",")+" "+b2.join(","), fill: INK1 }, svg);
+    } else if (scheme === "inner-hand") {
+      var ia = polar(deg, RingIn - 1), ib = polar(deg, RingIn - 14);
+      el("line", { x1: ia[0], y1: ia[1], x2: ib[0], y2: ib[1], stroke: INK1, "stroke-width": "3", "stroke-linecap": "round" }, svg);
+      el("circle", { cx: CX, cy: CY, r: 2.5, fill: INK1 }, svg);
+    } else if (scheme === "tick") {
+      var ta = polar(deg, RingOut + 2), tb = polar(deg, RingOut + 9);
+      el("line", { x1: ta[0], y1: ta[1], x2: tb[0], y2: tb[1], stroke: INK1, "stroke-width": "2.5", "stroke-linecap": "round" }, svg);
+    } else if (scheme === "arc") {
+      var half = 7.5; // 1 小时 = 15°，中心 ±7.5°
+      el("path", { d: arcPath(deg-half, deg+half, R), fill: "none", stroke: "#fff", "stroke-width": SW, "stroke-linecap": "round", opacity: "0.9" }, svg);
+      el("line", { x1: polar(deg, RingIn)[0], y1: polar(deg, RingIn)[1], x2: polar(deg, RingOut)[0], y2: polar(deg, RingOut)[1], stroke: INK1, "stroke-width": "2" }, svg);
+    } else if (scheme === "sweep") {
+      el("path", { d: arcPath(0, deg, R), fill: "none", stroke: INK1, opacity: "0.12", "stroke-width": SW }, svg);
+      el("circle", { cx: tip[0], cy: tip[1], r: 5.5, fill: INK1, stroke: "#fff", "stroke-width": "2" }, svg);
+    } else if (scheme === "bubble") {
+      var bp = polar(deg, RingOut + 21);
+      var mm = minute % 60, hh = Math.floor(minute/60);
+      var lbl = (hh<10?"0":"")+hh+":"+(mm<10?"0":"")+mm;
+      el("circle", { cx: bp[0], cy: bp[1], r: 16, fill: "#fff", stroke: INK1, "stroke-width": "1.5" }, svg);
+      el("line", { x1: tip[0], y1: tip[1], x2: bp[0], y2: bp[1], stroke: INK1, "stroke-width": "1", opacity: "0.45" }, svg);
+      el("circle", { cx: tip[0], cy: tip[1], r: 3, fill: INK1 }, svg);
+      var bt = el("text", { x: bp[0], y: bp[1], "text-anchor": "middle", "dominant-baseline": "middle", "font-size": "8", "font-weight": "600", fill: INK1 }, svg);
+      bt.textContent = lbl;
+    }
+    // "none": intentionally nothing
+  }
+
+  function phaseFor(minute, weekday) {
+    var weekend = (weekday === 0 || weekday === 6);
+    var h = minute / 60, inPeak = false;
+    if (!weekend) inPeak = WINDOWS.some(function (w) { return h >= w.start && h < w.end; });
+    return { weekend: weekend, inPeak: inPeak, hour: h, minute: minute };
+  }
+  function nextSwitch(minute, weekend) {
+    var boundaries = [];
+    if (!weekend) WINDOWS.forEach(function (w) { boundaries.push({m:w.start*60, into:true},{m:w.end*60, into:false}); });
+    boundaries.sort(function(a,b){return a.m-b.m;});
+    for (var i=0;i<boundaries.length;i++) if (boundaries[i].m > minute) return boundaries[i];
+    return { m: 9*60 + (1440-minute), into:true };
+  }
+
+  var WINDOW_CAPTION = "<b>周一至周五 9:00-12:00 · 14:00-18:00</b>（周末全天闲时）。";
+
+  function drawDial(container, phase, size, scheme) {
+    container.innerHTML = "";
+    var svg = el("svg", { viewBox: "0 0 180 180", width: size, height: size, class: "dial-svg" }, container);
+    el("circle", { cx: CX, cy: CY, r: R, fill: "none", stroke: OFF, "stroke-width": SW }, svg);
+    if (!phase.weekend) WINDOWS.forEach(function (w) {
+      el("path", { d: arcPath(hourLabelDeg(w.start), hourLabelDeg(w.end), R), fill: "none", stroke: PEAK, "stroke-width": SW }, svg);
+    });
+    for (var h = 0; h < 24; h += 3) {
+      var p = polar(hourLabelDeg(h), R + SW/2 + 13);
+      var t = el("text", { x: p[0], y: p[1], "text-anchor": "middle", "dominant-baseline": "middle", "font-size": "9", fill: INK3 }, svg);
+      t.textContent = (h < 10 ? "0" : "") + h + ":00";
+    }
+    // ---- marker ----
+    markerFor(scheme, svg, phase);
+    // ---- center ----
+    var color = phase.weekend ? WEEKEND : (phase.inPeak ? PEAK : OFF);
+    var word = phase.weekend ? "周末全谷" : (phase.inPeak ? "高峰时段" : "平价时段");
+    var t1 = el("text", { x: CX, y: CY - 4, "text-anchor": "middle", "dominant-baseline": "middle", "font-size": "12", "font-weight": "700", fill: color }, svg);
+    t1.textContent = word;
+    var sw = nextSwitch(phase.minute, phase.weekend);
+    var mins = sw.m - phase.minute; if (mins < 0) mins += 1440;
+    var hh = Math.floor(mins/60), mm = mins % 60;
+    var cd = (hh>0 ? hh+"小时"+(mm>0?mm+"分":"") : (mm>0?mm+"分":"0分")) + "后进入" + (sw.into ? "高峰" : "平价");
+    var t2 = el("text", { x: CX, y: CY + 12, "text-anchor": "middle", "dominant-baseline": "middle", "font-size": "8.5", fill: INK3 }, svg);
+    t2.textContent = cd;
+    return { color: color, word: word, cd: cd };
+  }
+
+  // ---- global current scheme ----
+  var current = "phase-dot"; // 默认采用「相位色点」
+  var liveSvg = document.getElementById("liveSvg");
+  var slider = document.getElementById("liveSlider");
+  var timeVal = document.getElementById("liveTimeVal");
+  var badge = document.getElementById("liveBadge");
+  var badgeText = document.getElementById("liveBadgeText");
+  var liveCd = document.getElementById("liveCd");
+  var liveWin = document.getElementById("liveWin");
+  var liveSchemeDesc = document.getElementById("liveSchemeDesc");
+  var followNow = document.getElementById("liveNow");
+  var bjOffset = 8 * 3600000;
+  var bjMinute = 0, weekdayIdx = 3;
+
+  function beijingNow() { return new Date(Date.now() + bjOffset); }
+  function setFromNow() { var d = beijingNow(); weekdayIdx = d.getUTCDay(); bjMinute = d.getUTCHours()*60 + d.getUTCMinutes(); slider.value = bjMinute; }
+  function fmt(m) { var h=Math.floor(m/60), mi=m%60; return (h<10?"0":"")+h+":"+(mi<10?"0":"")+mi; }
+  function schemeByKey(k) { for (var i=0;i<SCHEMES.length;i++) if (SCHEMES[i].key===k) return SCHEMES[i]; return SCHEMES[0]; }
+
+  function renderLive() {
+    var phase = phaseFor(bjMinute, weekdayIdx);
+    var res = drawDial(liveSvg, phase, 180, current);
+    timeVal.textContent = fmt(bjMinute);
+    badge.className = "phase-badge " + (phase.weekend ? "weekend" : phase.inPeak ? "peak" : "off");
+    badgeText.textContent = res.word;
+    liveCd.textContent = res.cd;
+    liveWin.innerHTML = "峰时段（北京时间）：" + WINDOW_CAPTION;
+    liveSchemeDesc.textContent = "当前式样：" + schemeByKey(current).nm + " —— " + schemeByKey(current).ds;
+  }
+
+  function renderSchemePicker() {
+    var host = document.getElementById("schemePicker");
+    host.innerHTML = "";
+    SCHEMES.forEach(function (s) {
+      var pill = document.createElement("button");
+      pill.className = "scheme-pill" + (s.key === current ? " on" : "");
+      pill.innerHTML = '<span class="ico">●</span>' + s.nm;
+      pill.onclick = function () { current = s.key; renderAll(); };
+      host.appendChild(pill);
+    });
+  }
+
+  function renderAbleGrid() {
+    var host = document.getElementById("ableGrid");
+    host.innerHTML = "";
+    SCHEMES.forEach(function (s) {
+      var cell = document.createElement("div");
+      cell.className = "cell" + (s.key === current ? " on" : "");
+      cell.innerHTML = '<div class="nm">' + s.nm + '</div><div class="ds">' + s.ds + '</div><div class="dial-holder"></div>';
+      var holder = cell.querySelector(".dial-holder");
+      // 固定高峰时刻 10:30 展示，看清式样差异
+      drawDial(holder, { weekend:false, inPeak:true, minute: 630 }, 150, s.key);
+      cell.onclick = function () { current = s.key; renderAll(); };
+      host.appendChild(cell);
+    });
+  }
+
+  function renderSchemeNotes() {
+    var host = document.getElementById("schemeNotes");
+    host.innerHTML = "<ul style='margin:6px 0 0;padding-left:20px'>";
+    SCHEMES.forEach(function (s) {
+      host.innerHTML += "<li style='margin:4px 0'><b>" + s.nm + "</b>：<span class='muted'>" + s.ds + "</span></li>";
+    });
+    host.innerHTML += "</ul>";
+  }
+
+  function renderStatic() {
+    // 三种状态跟随当前式样
+    drawDial(document.getElementById("stPeak"),    { weekend:false, inPeak:true,  minute: 630 }, 150, current);
+    drawDial(document.getElementById("stOff"),     { weekend:false, inPeak:false, minute: 1260 }, 150, current);
+    drawDial(document.getElementById("stWeekend"), { weekend:true,  inPeak:false, minute: 780 }, 150, current);
+    drawDial(document.getElementById("cmpNew"),   { weekend:false, inPeak:true,  minute: 630 }, 170, current);
+    document.getElementById("cmpTag").textContent = "环形表盘（24h 中空圆环）· " + schemeByKey(current).nm;
+  }
+
+  function renderAll() {
+    renderSchemePicker();
+    renderAbleGrid();
+    renderLive();
+    renderStatic();
+    renderSchemeNotes();
+  }
+
+  slider.addEventListener("input", function () { followNow.checked = false; bjMinute = parseInt(slider.value,10); renderLive(); });
+  followNow.addEventListener("change", function () { if (followNow.checked) setFromNow(); renderLive(); });
+  setFromNow();
+  // seed a nice peak time for the first impression
+  bjMinute = 630; slider.value = 630;
+  renderAll();
+  setInterval(function () { if (followNow.checked) { setFromNow(); renderLive(); } }, 15000);
+})();
+</script>
+</body>
+</html>
