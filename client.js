@@ -131,6 +131,8 @@ window.__ModuleLoader__.load({
 /* 峰谷时段条（侧边栏 / 设置面板）——对标 dsh-cost-meter */
 .cost-ps { display: flex; align-items: center; gap: 6px; min-width: 0; flex-wrap: wrap; }
 .cost-ps-stack { flex-direction: column; align-items: stretch; gap: 4px; }
+/* 双行紧凑：column 布局下轨道的 flex-basis(72px) 会落到纵轴变成高度，须收回，保持与单行一致的 6px 细条 */
+.cost-ps-stack .cost-ps-track { flex: 0 0 auto; width: 100%; min-width: 0; }
 .cost-ps-track { position: relative; display: flex; flex: 1 1 72px; min-width: 72px; height: 6px; border-radius: 999px; overflow: hidden; border: 1px solid var(--dsw-alias-border-l1, #e5e7eb); background: var(--dsw-alias-bg-layer-3, #eef0f3); }
 .cost-ps-seg { height: 100%; flex: 1; }
 /* 单行紧凑：24h 比例轨道（橙=高峰/蓝=平价按窗口比例绝对定位，白线=实时进度） */
@@ -869,10 +871,15 @@ window.__ModuleLoader__.load({
 			}
 			// 白色分割线：实时进度（北京时间当日占比）
 			segs.push(e("div", { className: "cost-ps-marker", style: { left: (peakBeijingMinute(now) / 1440 * 100) + "%" } }));
-			return e("div", { className: "cost-ps" + wordClass, title: countdown },
-				e("div", { className: "cost-ps-track" },
-					segs),
-				e("span", { className: "cost-ps-chip" }, peakWord(p) + " · " + countdown));
+			const track = e("div", { className: "cost-ps-track" }, segs);
+			const chip = e("span", { className: "cost-ps-chip" }, peakWord(p) + " · " + countdown);
+			const cfg = snap.config || {};
+			// 双行紧凑：勾选后由左右单行改为上下布局，可选「条上文下」或「文上条下」
+			if (cfg.peakCompactStack === true) {
+				const kids = cfg.peakCompactOrder === "text-first" ? [chip, track] : [track, chip];
+				return e("div", { className: "cost-ps cost-ps-stack" + wordClass, title: countdown }, kids[0], kids[1]);
+			}
+			return e("div", { className: "cost-ps" + wordClass, title: countdown }, track, chip);
 		}
 
 		// ---------- 峰谷切换前弹窗（真实 + 预览） ----------
@@ -1036,7 +1043,13 @@ window.__ModuleLoader__.load({
 					d.peakStyle === "classic" ? e("label", { className: "cost-row", style: { gap: "8px" } },
 						e("input", { type: "checkbox", checked: d.peakShowTickLabels !== false, onChange: ev => setField("peakShowTickLabels", ev.target.checked) }),
 						e("span", null, "显示时间（00:00–21:00 刻度）"))
-						: null,
+						: e("label", { className: "cost-row", style: { gap: "8px" } },
+							e("input", { type: "checkbox", checked: d.peakCompactStack === true, onChange: ev => setField("peakCompactStack", ev.target.checked) }),
+							e("span", null, "双行紧凑（上下布局）"),
+							d.peakCompactStack === true ? e("select", { className: "cost-select", value: d.peakCompactOrder === "text-first" ? "text-first" : "bar-first", onChange: ev => setField("peakCompactOrder", ev.target.value) },
+								e("option", { value: "bar-first" }, "时段条在上·文字在下"),
+								e("option", { value: "text-first" }, "文字在上·时段条在下"))
+								: null),
 					e("label", { className: "cost-row", style: { gap: "8px" } },
 						e("input", { type: "checkbox", checked: d.peakAlertEnabled !== false, onChange: ev => setField("peakAlertEnabled", ev.target.checked) }),
 						e("span", null, "峰/谷切换前弹窗提醒")),

@@ -30,7 +30,7 @@
 | --- | --- | --- |
 | 💰 | **Cost tracking** | Every API call is recorded automatically: input / output / cache-hit / cache-write tokens and cost (cache write billed at the cache-hit price), aggregated by day and by model |
 | ⏰ | **Peak/off-peak pricing** | Built-in price table; peak windows (Mon–Fri 9:00–12:00, 14:00–18:00 Beijing time) vs half-price off-peak handled automatically; **weekends are fully off-peak**; local models (e.g. ollama) count as 0 |
-| 🔔 | **Peak-price notice** | A "Peak/off-peak pricing & notice" panel in Settings: current tier + countdown strip, style switch (**compact single-row · 24h-proportional** / **ring dial · phase dot**), a "Show time" toggle, popup alert + browser notification before a tier switch, lead time, popup position (bottom-right/center), alert type; a persistent strip in the sidebar footer (adapts to rail/collapsed). Mirrors `dsh-cost-meter` |
+| 🔔 | **Peak-price notice** | A "Peak/off-peak pricing & notice" panel in Settings: current tier + countdown strip, style switch (**compact single-row · 24h-proportional** / **ring dial · phase dot**), an optional **two-row compact** stacked layout for the compact style (bar-above-text / text-above-bar), a "Show time" toggle, popup alert + browser notification before a tier switch, lead time, popup position (bottom-right/center), alert type; a persistent strip in the sidebar footer (adapts to rail/collapsed). Mirrors `dsh-cost-meter` |
 | 📌 | **Six overview cards** | Six cards at the top of Settings: Today / This month / Total spend / API requests / Tokens / **Account balance**. The three spend cards **exclude subscription equivalent cost** (shown as an annotation instead) |
 | 👁️ | **Vision model** | Supports `deepseek-v4-flash-vision-exp`: same prices as flash; images are converted to tokens per the official rule (≤384 tokens each, billed per API usage) |
 | 📊 | **Visual dashboard** | A new "Cost Statistics" page in Settings: overview cards, cost bar charts (by peak period / by model), per-model request & token charts — **all with hover tooltips** |
@@ -116,7 +116,7 @@ dsh web
 - **Color schemes**: in "by model" view, three swatches next to the title switch between 橙→黄 / 蓝→紫 / 蓝→浅蓝 palettes. Models are ranked by total spend and colored in a sequential gradient (rank 1 = darkest at the bottom, getting lighter upwards; no cycling, no collisions). The choice is remembered in the browser (localStorage);
 - **Per-model sections**: one request-count chart and one token-composition chart (input / cache write / output / cache hit) per model;
 - **Usage heatmap**: a Codex-style 26-week daily-usage grid; shade by the day's token count relative to the maximum; hover any cell for that day's breakdown (input / cache / output / cost), today outlined;
-- **Peak/off-peak pricing & notice**: pick the tier strip style (**compact single-row — a 24h-proportional bar with a white real-time line** / **ring dial — a 24h hollow dial with a phase-colored dot**), optionally toggle the "Show time" tick labels (00:00–21:00), set the popup-alert lead time (1–30 min), alert type (both / entering peak / entering off-peak), popup position (bottom-right / center), and optional browser system notification; everything auto-saves. A persistent strip in the sidebar footer shows the current tier and countdown to the next switch;
+- **Peak/off-peak pricing & notice**: pick the tier strip style (**compact single-row — a 24h-proportional bar with a white real-time line** / **ring dial — a 24h hollow dial with a phase-colored dot**), optionally switch the compact strip to a **two-row compact** stacked layout (bar-above-text or text-above-bar), toggle the "Show time" tick labels (00:00–21:00), set the popup-alert lead time (1–30 min), alert type (both / entering peak / entering off-peak), popup position (bottom-right / center), and optional browser system notification; everything auto-saves. A persistent strip in the sidebar footer shows the current tier and countdown to the next switch;
 - **CSV export**: exports detail records (last 180 days) plus daily rollup rows (`purpose=rollup`).
 
 ### Agent tools
@@ -149,6 +149,15 @@ Example: `curl -X POST http://127.0.0.1:3080/api/cost-tracker/summary -d '{}'`
 ---
 
 ## Changelog
+
+### v1.5.2 (2026-08-25)
+
+**Added**
+- **"Two-row compact (stacked layout)" option for the compact strip**: with the "Compact (single row)" style selected, a new checkbox switches the strip from left-right to a stacked two-row layout, with a further choice of "bar on top · text below" (default) or "text on top · bar below"; applies to both the sidebar footer and the settings preview.
+- New `peakCompactStack` (default `false`) and `peakCompactOrder` (`bar-first` / `text-first`, default `bar-first`) config options, covered by `defaultPeakConfig` / `normalizePeakConfig` and the config unit tests.
+
+**Fixed**
+- In stacked mode the track's `flex-basis` (72px) landed on the vertical axis, stretching the strip to 72px tall; overridden with `flex: 0 0 auto` to keep the same 6px slim bar as the single-row layout.
 
 ### v1.5.1 (2026-08-24)
 

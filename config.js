@@ -9,6 +9,8 @@
 //   peakNotice         峰时高价时段显著提示（时段条显示）
 //   peakStyle          时段条样式：compact（简洁单行）/ classic（环形表盘，24h 中空圆环）
 //   peakShowTickLabels 环形表盘是否显示时间刻度（00:00–21:00），默认 true
+//   peakCompactStack   简洁样式下的「双行紧凑」：true 时改为上下布局（默认 false，左右单行）
+//   peakCompactOrder   双行紧凑的排布顺序：bar-first（时段条在上·文字在下，默认）/ text-first（文字在上·时段条在下）
 //   peakAlertEnabled   峰/谷切换前弹窗提醒
 //   peakAlertAhead     提前提醒分钟数（1-30，默认 2）
 //   peakAlertTarget    提醒类型：both（峰和谷）/ peak（进入峰时）/ offpeak（进入谷时）
@@ -27,6 +29,8 @@ export function defaultPeakConfig() {
     peakNotice: true,
     peakStyle: 'compact',
     peakShowTickLabels: true,
+    peakCompactStack: false,
+    peakCompactOrder: 'bar-first',
     peakAlertEnabled: true,
     peakAlertAhead: 2,
     peakAlertTarget: 'both',
@@ -52,6 +56,8 @@ export function normalizePeakConfig(raw) {
     peakNotice: bool(raw.peakNotice, def.peakNotice),
     peakStyle: raw.peakStyle === 'classic' ? 'classic' : 'compact',
     peakShowTickLabels: bool(raw.peakShowTickLabels, def.peakShowTickLabels),
+    peakCompactStack: bool(raw.peakCompactStack, def.peakCompactStack),
+    peakCompactOrder: raw.peakCompactOrder === 'text-first' ? 'text-first' : 'bar-first',
     peakAlertEnabled: bool(raw.peakAlertEnabled, def.peakAlertEnabled),
     peakAlertAhead: intIn(raw.peakAlertAhead, 1, 30, def.peakAlertAhead),
     peakAlertTarget: (raw.peakAlertTarget === 'peak' || raw.peakAlertTarget === 'offpeak') ? raw.peakAlertTarget : def.peakAlertTarget,

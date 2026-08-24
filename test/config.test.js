@@ -18,6 +18,8 @@ function ok(cond, msg) {
   ok(d.peakEnabled === true, '默认: 启用峰谷计价')
   ok(d.peakNotice === true, '默认: 提示显示')
   ok(d.peakStyle === 'compact', '默认: 简洁样式')
+  ok(d.peakCompactStack === false, '默认: 双行紧凑关闭（左右单行）')
+  ok(d.peakCompactOrder === 'bar-first', '默认: 双行紧凑条上文下')
   ok(d.peakAlertEnabled === true, '默认: 切换前弹窗开启')
   ok(d.peakAlertAhead === 2, '默认: 提前提醒 2 分钟')
   ok(d.peakAlertTarget === 'both', '默认: 提醒峰和谷')
@@ -32,6 +34,8 @@ function ok(cond, msg) {
     peakAlertAhead: 99,           // 超范围 → 回退 2
     peakAlertTarget: 'weird',      // 非法 → both
     peakStyle: 'fancy',            // 非法 → compact
+    peakCompactStack: 'yes',       // 非布尔 → false
+    peakCompactOrder: 'weird',     // 非法 → bar-first
     peakAlertPosition: 'top',      // 非法 → corner
     peakAlertWebNotify: 'yes',     // 非布尔 → false
     peakNotice: 'on',              // 非布尔 → true(默认)
@@ -39,6 +43,8 @@ function ok(cond, msg) {
   ok(n.peakAlertAhead === 2, '回退: ahead 超范围 → 2')
   ok(n.peakAlertTarget === 'both', '回退: target 非法 → both')
   ok(n.peakStyle === 'compact', '回退: style 非法 → compact')
+  ok(n.peakCompactStack === false, '回退: compactStack 非布尔 → false')
+  ok(n.peakCompactOrder === 'bar-first', '回退: compactOrder 非法 → bar-first')
   ok(n.peakAlertPosition === 'corner', '回退: position 非法 → corner')
   ok(n.peakAlertWebNotify === false, '回退: webNotify 非布尔 → false')
   ok(n.peakNotice === true, '回退: notice 非布尔 → true')
@@ -48,8 +54,9 @@ function ok(cond, msg) {
   const na = normalizePeakConfig([])
   ok(na.peakEnabled === true, '回退: 数组 → 全默认')
   // 合法值通过
-  const g = normalizePeakConfig({ peakAlertAhead: 15, peakAlertTarget: 'peak', peakStyle: 'classic', peakAlertPosition: 'center', peakAlertWebNotify: true, peakEnabled: false })
+  const g = normalizePeakConfig({ peakAlertAhead: 15, peakAlertTarget: 'peak', peakStyle: 'classic', peakAlertPosition: 'center', peakAlertWebNotify: true, peakEnabled: false, peakCompactStack: true, peakCompactOrder: 'text-first' })
   ok(g.peakAlertAhead === 15 && g.peakAlertTarget === 'peak' && g.peakStyle === 'classic' && g.peakAlertPosition === 'center' && g.peakAlertWebNotify === true && g.peakEnabled === false, '合法值: 全部保留')
+  ok(g.peakCompactStack === true && g.peakCompactOrder === 'text-first', '合法值: 双行紧凑开启 + 文上条下')
 }
 
 // 3. 生效门控
