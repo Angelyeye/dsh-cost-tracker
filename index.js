@@ -687,6 +687,68 @@ export default {
       return { ok: true, cleared: n }
     }
 
+    // ---------- 一次性补账：按「计费时代」重算已入库记录 ----------
+    // 场景：价格时代切换时刻已过，但宿主仍加载着旧代码（插件未重启），
+    // 这段时间入库的记录用的是旧价。重启后调用一次即可按记录**自身的时间戳**
+    // 重新选版计费，无需重新采集。
+    // 只重算明细：明细保留最近 DETAIL_DAYS 天，更早的记录早已折叠进日汇总，
+    // 而日汇总覆盖的时间段远早于任何价格切换窗口，故不涉及。
+    // 默认只试算（不落盘），传 apply: true 才写回。
+    function recomputeCosts(args) {
+      const a = args || {}
+      const fallback = PRICE_ERAS[PRICE_ERAS.length - 1].since
+      let since = fallback
+      if (typeof a.since === 'string' && Number.isFinite(Date.parse(a.since))) since = Date.parse(a.since)
+      else if (Number.isFinite(a.since) && a.since > 0) since = a.since
+      const apply = a.apply === true
+      const byModel = {}
+      let scanned = 0, changed = 0, oldCost = 0, newCost = 0
+      for (const r of records) {
+        if (!(r.ts >= since)) continue
+        scanned += 1
+        const np = normProvider(r.provider)
+        const price = priceFor(np, r.model, r.ts)
+        const peak = peakEffective(peakConfig, r.ts) ? isPeak(r.ts) : false
+        const cost = computeCost(price.rates, price.tiered, peak, r.tokens)
+        const model = price.model || r.model
+        const period = price.tiered ? (peak ? 'peak' : 'off-peak') : 'flat'
+        oldCost += r.cost
+        newCost += cost
+        if (!(Math.abs(cost - r.cost) > 1e-9 || model !== r.model || period !== r.period)) continue
+        changed += 1
+        const key = r.provider + '|' + r.model + '|' + model
+        const m = byModel[key] || (byModel[key] = { provider: r.provider, from: r.model, to: model, calls: 0, oldCost: 0, newCost: 0 })
+        m.calls += 1
+        m.oldCost += r.cost
+        m.newCost += cost
+        if (apply) {
+          r.cost = cost
+          r.model = model
+          r.period = period
+          r.estimated = price.estimated
+          r.subscription = price.subscription
+        }
+      }
+      if (apply && changed > 0) persistNow()
+      const rows = Object.keys(byModel).map(k => {
+        const m = byModel[k]
+        return { provider: m.provider, from: m.from, to: m.to, calls: m.calls, oldCost: r4(m.oldCost), newCost: r4(m.newCost), delta: r4(m.newCost - m.oldCost) }
+      }).sort((x, y) => Math.abs(y.delta) - Math.abs(x.delta))
+      return {
+        ok: true,
+        applied: apply && changed > 0,
+        since,
+        era: eraAt(since).id,
+        scanned,
+        changed,
+        oldCost: r4(oldCost),
+        newCost: r4(newCost),
+        delta: r4(newCost - oldCost),
+        byModel: rows,
+        note: changed === 0 ? '没有需要重算的记录' : (apply ? '已重算并落盘' : '试算结果，未落盘（传 apply: true 生效）'),
+      }
+    }
+
     // ---------- usage heatmap (Codex 风格 26 周每日用量方格热图) ----------
     // 返回全时段累计 token + 按天聚合（明细 + 永久日汇总），供客户端渲染热力图。
     // 汇总含按量与订阅（订阅为等效参考口径一致），days 覆盖最近约 27 周（含 26 周窗口余量）。
@@ -740,6 +802,7 @@ export default {
       balance: (args) => balance(args),
       export: () => exportCsv(),
       prices: () => prices(),
+      recompute: (args) => recomputeCosts(args),
       usage: () => buildUsageHeat(),
       peak: () => peakSnapshot(),
       'peak-config': (args) => setPeakConfig(args),
@@ -838,6 +901,36 @@ export default {
         render: (args, v) => [{ type: 'text', text: '已清空 ' + v.cleared + ' 条花费记录。' }],
       },
       execute: async () => resetData(),
+    })
+
+    ctx.tools.register({
+      name: 'cost_recompute',
+      description: '按「计费时代」重算已入库记录的费用（一次性补账）。用于价格调整后宿主未及时重启、导致记录按旧价入库的情况；默认只试算不落盘，传 apply: true 才写回。',
+      parameters: {
+        type: 'object',
+        properties: {
+          apply: { type: 'boolean', description: '是否把重算结果写回（默认 false，仅试算）' },
+          since: { type: 'string', description: '重算起始时刻（ISO 字符串或 epoch ms）；默认取最近一次价格时代的生效时刻' },
+        },
+        additionalProperties: true,
+      },
+      output: {
+        schema: { type: 'object', additionalProperties: true },
+        render: (args, v) => {
+          const when = new Date(v.since + 28800000).toISOString().replace('T', ' ').slice(0, 16).replace(/-/g, '/')
+          const lines = [
+            '费用重算（自 ' + when + ' 北京起 · era=' + v.era + '）',
+            '扫描 ' + v.scanned + ' 条，需修正 ' + v.changed + ' 条',
+            '合计：¥' + v.oldCost + ' → ¥' + v.newCost + '（' + (v.delta >= 0 ? '+' : '') + v.delta + '）',
+          ]
+          for (const m of (v.byModel || []).slice(0, 8)) {
+            lines.push('  ' + m.from + (m.to !== m.from ? ' → ' + m.to : '') + '：' + m.calls + ' 次 · ¥' + m.oldCost + ' → ¥' + m.newCost)
+          }
+          lines.push(v.note)
+          return [{ type: 'text', text: lines.join('\n') }]
+        },
+      },
+      execute: async (args) => recomputeCosts(args),
     })
 
     ctx.tools.register({

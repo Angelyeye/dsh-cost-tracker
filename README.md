@@ -124,6 +124,7 @@ dsh web
 | `cost_stats` | 查询花费与用量统计 | "我今天花了多少钱?" |
 | `cost_prices` | 查看内置单价表与峰谷规则 | "现在 deepseek-v4-flash 什么价?" |
 | `cost_peak` | 查询当前峰谷档位与下次切换倒计时 | "现在是不是高峰时段?" |
+| `cost_recompute` | **按计费时代重算已入库记录的费用(一次性补账)**,默认只试算 | "把价格调整前的记录按新价重算一下" |
 | `cost_reset` | **清空全部统计数据(不可恢复)** | "把花费统计清零" |
 
 ### HTTP API(供其他工具调用)
@@ -139,6 +140,7 @@ POST /api/cost-tracker/peak-config  保存峰谷计价提示配置
 POST /api/cost-tracker/kimi-usage   Kimi 订阅配额
 POST /api/cost-tracker/balance      账户余额
 POST /api/cost-tracker/prices       单价表(按计费时代分版)
+POST /api/cost-tracker/recompute    按计费时代重算已入库记录(默认只试算,传 {"apply":true} 落盘)
 POST /api/cost-tracker/export       导出 CSV
 ```
 
@@ -157,6 +159,8 @@ POST /api/cost-tracker/export       导出 CSV
   - 新增导出 `V41_EFFECTIVE_AT` / `V41_FLASH_MODEL` / `PRICE_ERAS` / `eraAt()` / `exactModelsAt()` / `resolveModelInEra()` / `normalizeModelName()`。
 - **模型名归一化匹配**:小写并剔除分隔符,使 `deepseek-v4.1-flash` / `deepseek-v4-1-flash` / `deepseek-v41-flash` / `DeepSeek-V4.1-Flash` 等等价写法命中同一档价,避免官方模型 ID 措辞变化导致漏计而落入兜底估算。
 - `cost_prices` 工具与 HTTP `/prices` 接口改为**按版本渲染**:逐时代列出生效时刻、单价与路由规则,并标出当前生效版本(`era` / `eraLabel` / `eras` / `v41EffectiveAt`)。
+
+- **新增 `cost_recompute` 一次性补账工具**(同时开放 HTTP `/api/cost-tracker/recompute`):按记录自身时间戳重算已入库记录的费用与计费模型名。用于「价格时代已切换、但宿主尚未重启」期间按旧价入库的记录;**默认只试算不落盘**,传 `apply: true` 才写回,幂等可重复执行。只重算明细(明细保留最近 180 天;更早的记录已折叠进日汇总,其时间段远早于任何价格切换窗口)。
 
 **变更**
 - `priceFor(np, model, ts)` 新增第三个参数 `ts`(调用发生时刻),缺省为当前时间;返回值新增 `model`(**计费模型规范名**,命中路由时为被路由到的模型)与 `era` 字段。记账链路改为传入记录时间戳。

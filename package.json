@@ -10,7 +10,7 @@
     "./package.json": "./package.json"
   },
   "scripts": {
-    "test": "node test/storage.test.js && node test/pricing.test.js && node test/config.test.js"
+    "test": "node test/storage.test.js && node test/pricing.test.js && node test/config.test.js && node test/recompute.test.js"
   },
   "keywords": [
     "dsh-plugin",

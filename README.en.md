@@ -126,6 +126,7 @@ dsh web
 | `cost_stats` | Query usage & cost statistics | "How much did I spend today?" |
 | `cost_prices` | Show the built-in price table & peak rules | "What does deepseek-v4-flash cost right now?" |
 | `cost_peak` | Show the current peak tier & next-switch countdown | "Is it peak hour right now?" |
+| `cost_recompute` | **Re-price stored records by pricing era (one-off backfill)**, dry-run by default | "Re-price the records from before the price change" |
 | `cost_reset` | **Erase ALL statistics (irreversible)** | "Reset my cost statistics" |
 
 ### HTTP API (for other tools)
@@ -141,6 +142,7 @@ POST /api/cost-tracker/peak-config  Save peak-price notice config
 POST /api/cost-tracker/kimi-usage   Kimi subscription quota
 POST /api/cost-tracker/balance      Account balance
 POST /api/cost-tracker/prices       Price table (versioned by pricing era)
+POST /api/cost-tracker/recompute    Re-price stored records by era (dry-run unless {"apply":true})
 POST /api/cost-tracker/export       CSV export
 ```
 
@@ -159,6 +161,8 @@ Example: `curl -X POST http://127.0.0.1:3080/api/cost-tracker/summary -d '{}'`
   - New exports: `V41_EFFECTIVE_AT` / `V41_FLASH_MODEL` / `PRICE_ERAS` / `eraAt()` / `exactModelsAt()` / `resolveModelInEra()` / `normalizeModelName()`.
 - **Model-name normalization**: names are lowercased with separators stripped, so `deepseek-v4.1-flash` / `deepseek-v4-1-flash` / `deepseek-v41-flash` / `DeepSeek-V4.1-Flash` all resolve to the same rate, preventing a silently mis-priced fallback if the official model ID is spelled differently.
 - `cost_prices` and the HTTP `/prices` endpoint now **render every era**: effective time, rates and routing rules, plus the currently effective era (`era` / `eraLabel` / `eras` / `v41EffectiveAt`).
+
+- **New `cost_recompute` one-off backfill tool** (also exposed as HTTP `/api/cost-tracker/recompute`): re-prices stored records and rewrites the billed model name using the timestamp of each record. It targets records booked at the old price between the era switch and a host restart; it **dry-runs by default** and writes back only with `apply: true`, and it is idempotent. Only detail rows are recomputed (details cover the last 180 days; older records are already folded into daily rollups whose time range predates any pricing switch).
 
 **Changed**
 - `priceFor(np, model, ts)` gained a third `ts` argument (timestamp of the call, defaults to now) and now also returns `model` (the canonical **billed** model name) and `era`. The recording path passes the record timestamp.

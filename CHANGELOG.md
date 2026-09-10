@@ -12,6 +12,8 @@
 - **模型名归一化匹配**:小写并剔除分隔符,使 `deepseek-v4.1-flash` / `deepseek-v4-1-flash` / `deepseek-v41-flash` / `DeepSeek-V4.1-Flash` 等等价写法命中同一档价,避免官方模型 ID 措辞变化导致漏计而落入兜底估算。
 - `cost_prices` 工具与 HTTP `/prices` 接口改为**按版本渲染**:逐时代列出生效时刻、单价与路由规则,并标出当前生效版本(`era` / `eraLabel` / `eras` / `v41EffectiveAt`)。
 
+- **新增 `cost_recompute` 一次性补账工具**(同时开放 HTTP `/api/cost-tracker/recompute`):按记录自身时间戳重算已入库记录的费用与计费模型名。用于「价格时代已切换、但宿主尚未重启」期间按旧价入库的记录;**默认只试算不落盘**,传 `apply: true` 才写回,幂等可重复执行。只重算明细(明细保留最近 180 天;更早的记录已折叠进日汇总,其时间段远早于任何价格切换窗口)。
+
 **变更**
 - `priceFor(np, model, ts)` 新增第三个参数 `ts`(调用发生时刻),缺省为当前时间;返回值新增 `model`(**计费模型规范名**,命中路由时为被路由到的模型)与 `era` 字段。记账链路改为传入记录时间戳。
 - DeepSeek provider 兜底单价同步至 V4.1 Flash 档(`2.0 / 8.0 / 0.04`),未知 deepseek 模型不再按旧价高估。
