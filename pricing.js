@@ -4,9 +4,13 @@
 // 单价来源：DeepSeek 官方定价页
 //   https://api-docs.deepseek.com/zh-cn/quick_start/pricing
 //   - 高峰时段（北京时间周一至周五 9:00-12:00、14:00-18:00）为表内价格；
-//     空闲时段 = 高峰 × 0.5。周末（周六/周日）全天计入空闲时段。
-//   - deepseek-v4-flash-vision-exp 与 deepseek-v4-flash 单价一致
-//     （输入缓存未命中 3.0 / 命中 0.10 / 输出 9.0，百万 tokens）
+//     空闲时段 = 高峰 × 0.5。周末（周六/周日）全天计入空闲时段（该窗口两版价通用）。
+//   - **单价随时间调整**：故单价表按生效时刻分版（见 PRICE_ERAS），按记录时间戳选版。
+//       · legacy  ：V4-Flash 3.0/9.0/0.10、V4-Pro 9.0/27.0/0.30
+//       · v41     ：V4.1 Flash 2.0/8.0/0.04（北京时间 2026-09-10 12:00 起生效），
+//                   V4-Pro 与旧 V4-Flash 系（含 vision-exp）的请求全部路由到
+//                   V4.1 Flash 并按 V4.1 Flash 单价计费（V4.1 Pro 上线前）。
+//   - deepseek-v4-flash-vision-exp 与 deepseek-v4-flash 在 legacy 时代单价一致。
 //
 // 视觉模型 Token 规则：
 //   https://api-docs.deepseek.com/zh-cn/guides/vision#token-usage
@@ -16,14 +20,103 @@
 //   插件按接口用量记账（接口用量为准，估算可能有误差）。
 // ============================================================
 
-/** 精确单价表（CNY / 1M tokens，高峰价；tiered=true 时空闲时段自动 ×0.5）
- *  字段：input=输入未命中价 / output=输出价 / cacheRead=cacheWrite=缓存命中价。
- *  官方规则：缓存写入(cache write)与缓存命中(cache hit)同价(参考项目同口径)。 */
-export const EXACT_MODELS = {
-  'deepseek-v4-flash': { input: 3.0, output: 9.0, cacheRead: 0.10, cacheWrite: 0.10 },
-  'deepseek-v4-pro': { input: 9.0, output: 27.0, cacheRead: 0.30, cacheWrite: 0.30 },
-  'deepseek-v4-flash-vision-exp': { input: 3.0, output: 9.0, cacheRead: 0.10, cacheWrite: 0.10 },
+/**
+ * 计费时代（price era）——DeepSeek 单价是「随时间调整」的，因此单价表按
+ * 生效时刻（since，epoch ms）分版。计费与展示一律以「记录自身的时间戳」选版，
+ * 历史记录口径不会被新价改写。
+ *
+ * 字段：input=输入缓存未命中价 / output=输出价 / cacheRead=cacheWrite=缓存命中价
+ *      （官方规则：缓存写入(cache write)与缓存命中(cache hit)同价）。
+ * 均为「高峰时段」价；空闲时段 = 高峰 × 0.5（两版价格的空闲档都恰好是半价）。
+ *
+ * routes：某个时代内把指定模型名的请求**改按另一档单价计费**，记录也以被路由
+ *         到的模型名入账，便于按模型聚合时看到真实计费口径。
+ */
+
+/** V4.1 Flash 价格的生效时刻：北京时间 2026-09-10 12:00（UTC+8）= 2026-09-10T04:00:00Z */
+export const V41_EFFECTIVE_AT = Date.UTC(2026, 8, 10, 4, 0, 0)
+
+/** V4.1 Flash 的规范模型名（被路由的请求一律以此名入账） */
+export const V41_FLASH_MODEL = 'deepseek-v4.1-flash'
+
+export const PRICE_ERAS = [
+  {
+    id: 'legacy',
+    label: '2026-08 价（V4-Flash / V4-Pro 各自独立计价）',
+    since: 0,
+    models: {
+      'deepseek-v4-flash': { input: 3.0, output: 9.0, cacheRead: 0.10, cacheWrite: 0.10 },
+      'deepseek-v4-pro': { input: 9.0, output: 27.0, cacheRead: 0.30, cacheWrite: 0.30 },
+      'deepseek-v4-flash-vision-exp': { input: 3.0, output: 9.0, cacheRead: 0.10, cacheWrite: 0.10 },
+    },
+    routes: {},
+  },
+  {
+    id: 'v41',
+    label: 'V4.1 Flash 价（V4-Pro 与旧 V4-Flash 系均路由至此）',
+    since: V41_EFFECTIVE_AT,
+    models: {
+      // 高峰价：输入（缓存命中）0.04 / 输入（缓存未命中）2 / 输出 8；空闲减半
+      [V41_FLASH_MODEL]: { input: 2.0, output: 8.0, cacheRead: 0.04, cacheWrite: 0.04 },
+    },
+    // V4.1 Pro 上线前，V4-Pro 的请求全部路由到 V4.1 Flash 并按 V4.1 Flash 单价计费；
+    // 旧 V4-Flash 系（含视觉版）已被 V4.1 Flash 取代，一并按新价计费。
+    routes: {
+      'deepseek-v4-pro': V41_FLASH_MODEL,
+      'deepseek-v4-flash': V41_FLASH_MODEL,
+      'deepseek-v4-flash-vision-exp': V41_FLASH_MODEL,
+    },
+  },
+]
+
+/** 旧价精确单价表（legacy 时代）。保留导出，兼容既有调用与历史口径。 */
+export const EXACT_MODELS = PRICE_ERAS[0].models
+
+/** 归一化模型名：小写并剔除分隔符，使 v4.1 / v4-1 / v41 等写法命中同一档价。 */
+export function normalizeModelName(m) {
+  return String(m == null ? '' : m).toLowerCase().replace(/[^a-z0-9]/g, '')
 }
+
+const ERA_INDEX = new Map()
+function eraIndex(era) {
+  let idx = ERA_INDEX.get(era)
+  if (!idx) {
+    idx = { models: new Map(), routes: new Map() }
+    for (const k of Object.keys(era.models)) idx.models.set(normalizeModelName(k), k)
+    for (const k of Object.keys(era.routes || {})) idx.routes.set(normalizeModelName(k), era.routes[k])
+    ERA_INDEX.set(era, idx)
+  }
+  return idx
+}
+
+/**
+ * 某模型在指定时代下命中的**计费模型规范名**：先查本时代单价表，
+ * 再查路由表（路由目标须在本时代单价表内）；均未命中返回 null。
+ */
+export function resolveModelInEra(era, model) {
+  if (!era) return null
+  const n = normalizeModelName(model)
+  if (!n) return null
+  const idx = eraIndex(era)
+  if (idx.models.has(n)) return idx.models.get(n)
+  const target = idx.routes.get(n)
+  if (target) {
+    const hit = idx.models.get(normalizeModelName(target))
+    if (hit) return hit
+  }
+  return null
+}
+
+/** 某一时刻生效的价格时代（缺省用当前时间）。 */
+export function eraAt(ts) {
+  const t = Number.isFinite(ts) ? ts : Date.now()
+  let cur = PRICE_ERAS[0]
+  for (const e of PRICE_ERAS) if (t >= e.since) cur = e
+  return cur
+}
+
+/** 某一时刻生效的精确单价表（缺省用当前时间）。 */
+export function exactModelsAt(ts) { return eraAt(ts).models }
 
 /**
  * 订阅套餐（等效费用估算，仅供参考）。
@@ -37,9 +130,10 @@ export const SUBSCRIPTION_RATES = {
   kimi: { input: 6.5, output: 27.0, cacheRead: 1.1, cacheWrite: 1.1 },
 }
 
-/** Provider 兜底单价（估算）；缓存写入按缓存命中价计。 */
+/** Provider 兜底单价（估算）；缓存写入按缓存命中价计。
+ *  deepseek 兜底已同步至 V4.1 Flash 档（2.0/8.0/0.04），未知模型不再按旧价高估。 */
 export const PROVIDER_RATES = {
-  deepseek: { rates: { input: 3.0, output: 9.0, cacheRead: 0.10, cacheWrite: 0.10 }, tiered: true },
+  deepseek: { rates: { input: 2.0, output: 8.0, cacheRead: 0.04, cacheWrite: 0.04 }, tiered: true },
   openai: { rates: { input: 10.0, output: 30.0, cacheRead: 5.0, cacheWrite: 5.0 }, tiered: false },
   anthropic: { rates: { input: 15.0, output: 75.0, cacheRead: 1.5, cacheWrite: 1.5 }, tiered: false },
   gemini: { rates: { input: 2.5, output: 10.0, cacheRead: 0.625, cacheWrite: 0.625 }, tiered: false },
@@ -122,14 +216,21 @@ export function peakPhaseAt(ts, spanDays) {
  * 解析一次调用的价格信息。
  * @param {string} np - 归一化后的 provider 名（如 deepseek）
  * @param {string} model - 模型名（如 deepseek-v4-flash-vision-exp）
- * @returns {{rates:object, tiered:boolean, estimated:boolean, subscription:boolean}}
+ * @param {number} [ts] - 调用发生时刻（epoch ms）；决定用哪一版单价表。
+ *   缺省用当前时间——注意历史/测试场景应显式传入，否则跨价格时代会错。
+ * @returns {{rates:object, tiered:boolean, estimated:boolean, subscription:boolean,
+ *            model:string, era:string|null}}
+ *   model 为**计费模型规范名**：命中路由时是被路由到的模型（如 V4-Pro → V4.1 Flash），
+ *   记账应以它入账；未命中精确表时为原模型名。
  */
-export function priceFor(np, model) {
-  if (SUBSCRIPTION_RATES[np]) return { rates: SUBSCRIPTION_RATES[np], tiered: false, estimated: true, subscription: true }
-  if (EXACT_MODELS[model]) return { rates: EXACT_MODELS[model], tiered: true, estimated: false, subscription: false }
+export function priceFor(np, model, ts) {
+  if (SUBSCRIPTION_RATES[np]) return { rates: SUBSCRIPTION_RATES[np], tiered: false, estimated: true, subscription: true, model, era: null }
+  const era = eraAt(ts)
+  const hit = resolveModelInEra(era, model)
+  if (hit) return { rates: era.models[hit], tiered: true, estimated: false, subscription: false, model: hit, era: era.id }
   const p = PROVIDER_RATES[np]
-  if (p) return { rates: p.rates, tiered: p.tiered, estimated: true, subscription: false }
-  return { rates: GENERIC_RATES, tiered: false, estimated: true, subscription: false }
+  if (p) return { rates: p.rates, tiered: p.tiered, estimated: true, subscription: false, model, era: era.id }
+  return { rates: GENERIC_RATES, tiered: false, estimated: true, subscription: false, model, era: era.id }
 }
 
 /**

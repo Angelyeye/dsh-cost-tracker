@@ -29,10 +29,10 @@
 | | Feature | Description |
 | --- | --- | --- |
 | 💰 | **Cost tracking** | Every API call is recorded automatically: input / output / cache-hit / cache-write tokens and cost (cache write billed at the cache-hit price), aggregated by day and by model |
-| ⏰ | **Peak/off-peak pricing** | Built-in price table; peak windows (Mon–Fri 9:00–12:00, 14:00–18:00 Beijing time) vs half-price off-peak handled automatically; **weekends are fully off-peak**; local models (e.g. ollama) count as 0 |
+| ⏰ | **Peak/off-peak pricing** | Built-in price table; peak windows (Mon–Fri 9:00–12:00, 14:00–18:00 Beijing time) vs half-price off-peak handled automatically; **weekends are fully off-peak**; local models (e.g. ollama) count as 0; the table is **versioned by pricing era** and switches automatically to V4.1 Flash rates at 2026-09-10 12:00 Beijing time (peak 2.0 / 0.04 / 8.0), routing V4-Pro and the legacy V4-Flash family to V4.1 Flash billing per the official rules |
 | 🔔 | **Peak-price notice** | A "Peak/off-peak pricing & notice" panel in Settings: current tier + countdown strip, style switch (**compact single-row · 24h-proportional** / **ring dial · phase dot**), an optional **two-row compact** stacked layout for the compact style (bar-above-text / text-above-bar), a "Show time" toggle, popup alert + browser notification before a tier switch, lead time, popup position (bottom-right/center), alert type; a persistent strip in the sidebar footer (adapts to rail/collapsed). Mirrors `dsh-cost-meter` |
 | 📌 | **Six overview cards** | Six cards at the top of Settings: Today / This month / Total spend / API requests / Tokens / **Account balance**. The three spend cards **exclude subscription equivalent cost** (shown as an annotation instead) |
-| 👁️ | **Vision model** | Supports `deepseek-v4-flash-vision-exp`: same prices as flash; images are converted to tokens per the official rule (≤384 tokens each, billed per API usage) |
+| 👁️ | **Vision model** | Supports `deepseek-v4-flash-vision-exp`: priced as flash in the legacy era, billed at V4.1 Flash rates from 2026-09-10 12:00; images are converted to tokens per the official rule (≤384 tokens each, billed per API usage) |
 | 📊 | **Visual dashboard** | A new "Cost Statistics" page in Settings: overview cards, cost bar charts (by peak period / by model), per-model request & token charts — **all with hover tooltips** |
 | 📈 | **Subscription quota** | Kimi Coding Plan and similar subscriptions: weekly quota, 5-hour rolling window limit, pay-as-you-go-equivalent cost for reference |
 | 💳 | **Balance lookup** | One-click DeepSeek account balance (total / topped-up / granted / status) |
@@ -140,7 +140,7 @@ POST /api/cost-tracker/peak         Peak-phase snapshot (current tier / next swi
 POST /api/cost-tracker/peak-config  Save peak-price notice config
 POST /api/cost-tracker/kimi-usage   Kimi subscription quota
 POST /api/cost-tracker/balance      Account balance
-POST /api/cost-tracker/prices       Price table
+POST /api/cost-tracker/prices       Price table (versioned by pricing era)
 POST /api/cost-tracker/export       CSV export
 ```
 
@@ -149,6 +149,29 @@ Example: `curl -X POST http://127.0.0.1:3080/api/cost-tracker/summary -d '{}'`
 ---
 
 ## Changelog
+
+### v1.6.0 (2026-09-10)
+
+**Added**
+- **Support for the V4.1 Flash pricing rules (effective 2026-09-10 12:00 Beijing time)**: the price table is now **versioned by pricing era** (`PRICE_ERAS`) and each record is priced with **its own timestamp**, so historical records keep their original basis and the switch happens automatically — no restart or config change needed.
+  - New era `v41` (2026-09-10 12:00 Beijing = `2026-09-10T04:00:00Z`): V4.1 Flash peak rates are **input (cache hit) 0.04 / input (cache miss) 2 / output 8** (CNY per 1M tokens); off-peak remains exactly half (0.02 / 1 / 4). **Peak windows are unchanged**, so the peak strip and countdown need no changes.
+  - New **model routing** (per-era `routes`): until V4.1 Pro ships, V4-Pro requests are routed to V4.1 Flash and billed at V4.1 Flash rates; the legacy V4-Flash family (including `deepseek-v4-flash-vision-exp`) is superseded by V4.1 Flash and billed the same way. **Records are booked under the model that was actually billed** (e.g. `deepseek-v4-pro` → `deepseek-v4.1-flash`), so per-model aggregation reflects the real billing basis.
+  - New exports: `V41_EFFECTIVE_AT` / `V41_FLASH_MODEL` / `PRICE_ERAS` / `eraAt()` / `exactModelsAt()` / `resolveModelInEra()` / `normalizeModelName()`.
+- **Model-name normalization**: names are lowercased with separators stripped, so `deepseek-v4.1-flash` / `deepseek-v4-1-flash` / `deepseek-v41-flash` / `DeepSeek-V4.1-Flash` all resolve to the same rate, preventing a silently mis-priced fallback if the official model ID is spelled differently.
+- `cost_prices` and the HTTP `/prices` endpoint now **render every era**: effective time, rates and routing rules, plus the currently effective era (`era` / `eraLabel` / `eras` / `v41EffectiveAt`).
+
+**Changed**
+- `priceFor(np, model, ts)` gained a third `ts` argument (timestamp of the call, defaults to now) and now also returns `model` (the canonical **billed** model name) and `era`. The recording path passes the record timestamp.
+- The DeepSeek provider fallback rate now matches V4.1 Flash (`2.0 / 8.0 / 0.04`) so unknown deepseek models are no longer over-estimated at the old price.
+- `EXACT_MODELS` now means the **legacy era** table specifically; kept exported for compatibility.
+
+**Tests**
+- New era/routing cases in `test/pricing.test.js` (boundary 11:59:59 vs 12:00:00, V4-Pro routing, legacy V4-Flash routing, alias normalization, off-peak half price, dangling-route guard).
+- All rate assertions now pass an **explicit timestamp** so results no longer drift with wall-clock time across the 12:00 switch.
+
+**Cost impact (same call, peak)**
+- V4-Pro (100k input miss + 6k output + 20k cache hit): **¥1.068 → ¥0.2488** (about **-76.7%**).
+- Legacy V4-Flash, same volumes: **¥0.356 → ¥0.2488** (about **-30.1%**).
 
 ### v1.5.2 (2026-08-25)
 

@@ -10,7 +10,7 @@ import { readFileSync, writeFileSync, mkdirSync, renameSync, existsSync, realpat
 import { join, dirname } from 'node:path'
 import { homedir } from 'node:os'
 import { createStore, collectTotals, DETAIL_DAYS, MAX_AXIS_DAYS } from './store.js'
-import { EXACT_MODELS, SUBSCRIPTION_RATES, PROVIDER_RATES, GENERIC_RATES, PEAK_WINDOWS, PEAK_HOUR_WINDOWS, isPeak, peakPhaseAt, priceFor, computeCost, normalizeTokens } from './pricing.js'
+import { PRICE_ERAS, V41_EFFECTIVE_AT, exactModelsAt, eraAt, SUBSCRIPTION_RATES, PROVIDER_RATES, GENERIC_RATES, PEAK_WINDOWS, PEAK_HOUR_WINDOWS, isPeak, peakPhaseAt, priceFor, computeCost, normalizeTokens } from './pricing.js'
 import { normalizePeakConfig, defaultPeakConfig, peakEffective } from './config.js'
 
 // ============================================================
@@ -80,8 +80,10 @@ export default {
 
     // ---------- price tables (CNY per 1M tokens) ----------
     // 单价表 / 峰谷 / 费用计算集中在 pricing.js（纯模块，可独立测试）；
-    // 含 deepseek-v4-flash-vision-exp 视觉模型（单价与 flash 一致，
-    // 图片 token 按官方规则由接口 usage 计入 inputTokens）
+    // 单价按「计费时代」分版（PRICE_ERAS）：按记录时间戳选版，故历史记录口径不变。
+    // V4.1 Flash 价（北京时间 2026-09-10 12:00 起）生效后，V4-Pro 与旧 V4-Flash 系
+    // 的请求按官方规则路由到 V4.1 Flash 计费，记录亦以 V4.1 Flash 模型名入账。
+    // 视觉模型 deepseek-v4-flash-vision-exp 的图片 token 由接口 usage 计入 inputTokens
 
     // ---------- state ----------
     // 注意：records/rollups 在 persistence 段由 store 初始化（details/rollups 引用）
@@ -207,14 +209,17 @@ export default {
       const model = toStr(options && options.model)
       if (!provider && !model) return
       const np = normProvider(provider)
-      const price = priceFor(np, model)
+      // 按「调用发生的时刻」选单价版本（跨 2026-09-10 12:00 自动切换，无需重启）。
+      const price = priceFor(np, model, ts)
       // 峰谷计费开关：随配置峰谷启用 + 生效时间门控；未启用时按非峰谷档（平价）计费。
       const peak = peakEffective(peakConfig, ts) ? isPeak(ts) : false
       // 视觉模型（deepseek-v4-flash-vision-exp）的图片 token 已含在接口
       // prompt_tokens 中（每张≤384 tokens），由 normalizeTokens 归入 input
       const tokens = normalizeTokens(usage)
       store.add({
-        ts, provider, model,
+        // 被路由的请求以「实际计费模型名」入账（如 V4-Pro → deepseek-v4.1-flash），
+        // 使按模型聚合看到的就是真实计费口径。
+        ts, provider, model: price.model || model,
         sessionId: toStr(options && options.sessionId),
         purpose: toStr(options && options.purpose),
         cost: computeCost(price.rates, price.tiered, peak, tokens),
@@ -440,11 +445,19 @@ export default {
 
     // ---------- prices ----------
     function prices() {
+      const now = Date.now()
+      const era = eraAt(now)
       return {
         peakWindows: PEAK_WINDOWS,
         offPeakFactor: 0.5,
         unit: 'CNY / 1M tokens',
-        exact: EXACT_MODELS,
+        // exact = 当前生效时代的精确单价表（随价格时代自动切换）
+        exact: exactModelsAt(now),
+        era: era.id,
+        eraLabel: era.label,
+        // 全部价格时代（含生效时刻与路由规则），供工具/接口展示
+        eras: PRICE_ERAS.map((e) => ({ id: e.id, label: e.label, since: e.since, models: e.models, routes: e.routes || {} })),
+        v41EffectiveAt: V41_EFFECTIVE_AT,
         subscription: SUBSCRIPTION_RATES,
         providers: PROVIDER_RATES,
         generic: GENERIC_RATES,
@@ -789,7 +802,25 @@ export default {
       },
       output: {
         schema: { type: 'object', additionalProperties: true },
-        render: (args, v) => [{ type: 'text', text: '单价表（CNY / 百万 tokens）\n峰谷时段：' + v.peakWindows + '（北京时间），闲时 = 高峰价 × ' + v.offPeakFactor + '\ndeepseek-v4-flash：高峰 输入 3.0 / 输出 9.0 / 缓存命中（含缓存写入）0.10\ndeepseek-v4-pro：高峰 输入 9.0 / 输出 27.0 / 缓存命中（含缓存写入）0.30\ndeepseek-v4-flash-vision-exp：高峰 输入 3.0 / 输出 9.0 / 缓存命中（含缓存写入）0.10（图片按官方规则换算 token，每张上限 384，以接口用量计费）\nkimi-coding（订阅等效，估算）：输入 6.5 / 缓存命中（含缓存写入）1.1 / 输出 27.0\n缓存写入(cache write)按缓存命中价计费，与官方规则及 dsh-cost-meter 一致。其他 provider 兜底为估算平价（openai 10/30/5，anthropic 15/75/1.5，gemini 2.5/10/0.625，未知 2/8/0.5）；ollama/local 为 0。' }],
+        render: (args, v) => {
+          const when = (s) => (s === 0 ? '初始价（长期有效）' : new Date(s + 28800000).toISOString().replace('T', ' ').slice(0, 16).replace(/-/g, '/') + '（北京时间）')
+          const lines = ['单价表（CNY / 百万 tokens）', '峰谷时段（北京时间）：' + v.peakWindows + '，闲时 = 高峰价 × ' + v.offPeakFactor]
+          for (const e of v.eras) {
+            lines.push('', '【' + e.label + '】生效：' + when(e.since))
+            for (const name of Object.keys(e.models)) {
+              const r = e.models[name]
+              lines.push('  ' + name + '：高峰 输入（未命中）' + r.input + ' / 输入（命中）' + r.cacheRead + ' / 输出 ' + r.output + '（闲时半价）')
+            }
+            for (const from of Object.keys(e.routes)) {
+              lines.push('  ↳ 路由：' + from + ' → 按 ' + e.routes[from] + ' 单价计费')
+            }
+          }
+          lines.push('', '当前生效：' + v.eraLabel + '（era=' + v.era + '）')
+          lines.push('视觉模型 deepseek-v4-flash-vision-exp：图片按官方规则换算 token（每张上限 384），以接口用量计费（已含在 inputTokens 内）。')
+          lines.push('kimi-coding（订阅等效，估算）：输入 6.5 / 缓存命中（含缓存写入）1.1 / 输出 27.0')
+          lines.push('缓存写入(cache write)按缓存命中价计费，与官方规则一致。其他 provider 兜底为估算平价（openai 10/30/5，anthropic 15/75/1.5，gemini 2.5/10/0.625，未知 2/8/0.5）；ollama/local 为 0。')
+          return [{ type: 'text', text: lines.join('\n') }]
+        },
       },
       execute: async () => prices(),
     })
