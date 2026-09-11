@@ -6,7 +6,7 @@
 
 **简体中文** | [English](./README.en.md)
 
-![version](https://img.shields.io/badge/version-v1.5.1-blue?style=flat-square)
+![version](https://img.shields.io/badge/version-v1.6.0-blue?style=flat-square)
 ![license](https://img.shields.io/badge/license-MIT-green?style=flat-square)
 ![status](https://img.shields.io/badge/status-stable-brightgreen?style=flat-square)
 ![platform](https://img.shields.io/badge/platform-DSH%20Web-blueviolet?style=flat-square)
@@ -58,11 +58,23 @@
 
 ---
 
-## 安装(二选一)
+## 安装(三选一)
 
 > 前提:你已经在用 `dsh web`(DSH 的 Web 模式)。`~/.dsh` 即 DSH 的数据目录(如设置了 `DSH_HOME` 环境变量则指向该目录)。
+>
+> 走方式一时请注意:插件市场本身要求 `dsh web ≥ 0.1.0-rc.6`,更旧的宿主里根本不会出现「插件市场」这一项——那种情况请用方式二或方式三。
 
-### 方式一:让 DSH 帮你装(推荐,不懂命令行也能用)
+### 方式一:从插件市场安装(推荐)
+
+本插件已收录于 [awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) 精选列表(分类 `usage`)。在 DSH 里打开 **设置 → 插件市场**,搜索 `dsh-cost-tracker` 点安装即可;市场展示的等价命令行是:
+
+```bash
+dsh plugin --profile web add github:Angelyeye/dsh-cost-tracker
+```
+
+市场会把插件装进当前 profile 并自动写好 loader 配置,**装的是仓库 `main` 分支的最新提交**,装完按提示重启 `dsh web`、刷新浏览器,无需手工 `git clone`,也不用自己改 patch 文件。
+
+### 方式二:让 DSH 帮你装(不懂命令行也能用)
 
 打开 DSH 的任意会话,把下面这段话**原样粘贴**发送给 Agent 即可:
 
@@ -71,14 +83,14 @@
 1. git clone https://github.com/Angelyeye/dsh-cost-tracker.git 到 ~/.dsh/profiles/node_modules/dsh-cost-tracker(目录名必须叫 dsh-cost-tracker)
 2. 在 ~/.dsh/profiles/web/cordis.patch.yml 顶层数组追加一行:
    - insert:
-       - id: cost-tracker
+       - id: dsh-cost-tracker
          name: dsh-cost-tracker
 3. 完成后告诉我,我自己重启 dsh web
 ```
 
 看到提示后,在终端按 `Ctrl+C` 停掉 `dsh web`,再重新运行 `dsh web`,刷新浏览器即可。
 
-### 方式二:手动安装(3 条命令)
+### 方式三:手动安装(3 条命令)
 
 ```bash
 # 1. 下载插件(目录名必须与包名一致)
@@ -88,7 +100,7 @@ git clone https://github.com/Angelyeye/dsh-cost-tracker.git ~/.dsh/profiles/node
 # 2. 注册插件(往 patch 文件里追加配置)
 cat >> ~/.dsh/profiles/web/cordis.patch.yml <<'EOF'
 - insert:
-    - id: cost-tracker
+    - id: dsh-cost-tracker
       name: dsh-cost-tracker
 EOF
 
@@ -264,12 +276,15 @@ POST /api/cost-tracker/export       导出 CSV
 插件在本地按内置单价表估算,可能与官方实际计费存在细微差异(如官方价格调整、阶梯定价)。精确金额请以官方账单为准。余额以「余额查询」实时拉取的官方数据为准。
 
 **Q:如何卸载?**
-1. 打开 `~/.dsh/profiles/web/cordis.patch.yml`,删除 `cost-tracker` 那段 `- insert:`(共 4 行),或直接让 DSH Agent 帮你删;
+1. **先摘掉 loader 条目**——市场安装的:打开 **设置 → 插件市场 → 已安装** 点卸载;手工安装的:打开 `~/.dsh/profiles/web/cordis.patch.yml`,删除 `dsh-cost-tracker` 那段 `- insert:`(共 4 行),或直接让 DSH Agent 帮你删;
 2. 重启 `dsh web`;
 3. 可选:删除插件目录 `~/.dsh/profiles/node_modules/dsh-cost-tracker` 和数据文件 `~/.dsh/storages/cost-tracker-records.json`。
 
 **Q:如何更新插件?**
-进入插件目录执行 `git pull`,然后:只改了界面(client.js)的话**硬刷新浏览器**(Cmd/Ctrl+Shift+R)即可;改了 index.js 则需要重启 `dsh web`。
+- **市场安装的**:打开 **设置 → 插件市场 → 更新**,或重新执行 `dsh plugin --profile web add github:Angelyeye/dsh-cost-tracker`;
+- **手工安装的**:进入插件目录执行 `git pull`。
+
+两种情况更新后:只改了界面(client.js)的话**硬刷新浏览器**(Cmd/Ctrl+Shift+R)即可;改了 index.js 则需要重启 `dsh web`。
 
 ## 仓库结构
 
@@ -279,12 +294,14 @@ POST /api/cost-tracker/export       导出 CSV
 ├── pricing.js      定价与 Token 层:单价表、峰谷计价、视觉模型、峰值相位(纯逻辑,可独立测试)
 ├── config.js       配置层:峰谷计价提示的默认值与规范化(纯逻辑,可独立测试)
 ├── client.js       Client 半端:设置页仪表盘、状态栏与峰谷提示 UI
-├── package.json    插件清单(含 dsh.client 声明)
+├── package.json    插件清单:声明 dsh.bundle(插件可被安装的关键)与 dsh.client(前端 UI)
+├── cordis.patch.yml Bundle 补丁:把本插件注册进 DSH 的 loader,由 dsh.bundle 指向
+├── screenshots.json 插件市场详情页的截图清单(相对路径,1-8 张)
 ├── README.md       中文说明文档
 ├── README.en.md    英文说明文档
 ├── CHANGELOG.md    更新记录(中文)
-├── test/           存储层单元测试(node test/storage.test.js)
-└── docs/           README 截图
+├── test/           单元测试(storage / pricing / config / recompute,node test/*.test.js)
+└── docs/           README 截图与设计文档
 ```
 
 ## License

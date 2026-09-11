@@ -4,6 +4,15 @@
   "description": "DeepSeek Harness (DSH) plugin: LLM token usage & cost tracking with a settings dashboard, agent tools, HTTP API and persistent storage.",
   "type": "module",
   "main": "index.js",
+  "files": [
+    "index.js",
+    "client.js",
+    "store.js",
+    "pricing.js",
+    "config.js",
+    "cordis.patch.yml",
+    "CHANGELOG.md"
+  ],
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",
@@ -22,6 +31,9 @@
     "cost-tracking"
   ],
   "license": "MIT",
+  "engines": {
+    "dsh": ">=0.1.0-rc.1"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/Angelyeye/dsh-cost-tracker.git"

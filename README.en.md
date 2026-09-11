@@ -6,7 +6,7 @@
 
 [简体中文](./README.md) | **English**
 
-![version](https://img.shields.io/badge/version-v1.5.1-blue?style=flat-square)
+![version](https://img.shields.io/badge/version-v1.6.0-blue?style=flat-square)
 ![license](https://img.shields.io/badge/license-MIT-green?style=flat-square)
 ![status](https://img.shields.io/badge/status-stable-brightgreen?style=flat-square)
 ![platform](https://img.shields.io/badge/platform-DSH%20Web-blueviolet?style=flat-square)
@@ -61,8 +61,20 @@
 ## Installation (choose one)
 
 > Prerequisite: you already run DSH in web mode (`dsh web`). `~/.dsh` below means the DSH home directory (`${DSH_HOME:-$HOME/.dsh}`).
+>
+> One caveat for Option A: the plugin marketplace itself requires `dsh web ≥ 0.1.0-rc.6`. On an older host the **Plugin Marketplace** entry never appears at all — in that case use Option B or Option C.
 
-### Option A: Let DSH install it for you (recommended, no CLI knowledge needed)
+### Option A: Install from the plugin marketplace (recommended)
+
+This plugin is listed in the curated [awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) catalog (category `usage`). Open **Settings → Plugin Marketplace** inside DSH, search for `dsh-cost-tracker` and press install. The equivalent command line is:
+
+```bash
+dsh plugin --profile web add github:Angelyeye/dsh-cost-tracker
+```
+
+The marketplace installs the plugin into your profile and writes the loader config for you. It installs **the latest commit on the repository's `main` branch** — no manual `git clone`, no hand-editing the patch file. Restart `dsh web` and refresh the browser when prompted.
+
+### Option B: Let DSH install it for you (no CLI knowledge needed)
 
 Open any DSH session and paste this prompt verbatim to the agent:
 
@@ -71,14 +83,14 @@ Please install the DSH plugin dsh-cost-tracker for me:
 1. git clone https://github.com/Angelyeye/dsh-cost-tracker.git into ~/.dsh/profiles/node_modules/dsh-cost-tracker (the directory MUST be named dsh-cost-tracker)
 2. Append to the top-level array of ~/.dsh/profiles/web/cordis.patch.yml:
    - insert:
-       - id: cost-tracker
+       - id: dsh-cost-tracker
          name: dsh-cost-tracker
 3. Tell me when done — I will restart dsh web myself
 ```
 
 Then stop `dsh web` with `Ctrl+C`, start it again, and refresh your browser.
 
-### Option B: Manual install (3 commands)
+### Option C: Manual install (3 commands)
 
 ```bash
 # 1. Download the plugin (directory name must match the package name)
@@ -88,7 +100,7 @@ git clone https://github.com/Angelyeye/dsh-cost-tracker.git ~/.dsh/profiles/node
 # 2. Register the plugin (append to the patch file)
 cat >> ~/.dsh/profiles/web/cordis.patch.yml <<'EOF'
 - insert:
-    - id: cost-tracker
+    - id: dsh-cost-tracker
       name: dsh-cost-tracker
 EOF
 
@@ -251,12 +263,15 @@ Subscriptions are not billed per token. The plugin estimates what those calls *w
 Costs are estimated locally from a built-in price table and may differ slightly from the official bill (price updates, tiered pricing, etc.). Treat official billing as authoritative; the balance shown is fetched live from the official API.
 
 **Q: How do I uninstall?**
-1. Open `~/.dsh/profiles/web/cordis.patch.yml` and remove the 4-line `- insert:` block for `cost-tracker` (or ask the DSH agent to do it);
+1. **Remove the loader entry first** — marketplace install: open **Settings → Plugin Marketplace → Installed** and uninstall there (it also cleans up the patch entry it wrote); manual install: open `~/.dsh/profiles/web/cordis.patch.yml` and remove the 4-line `- insert:` block for `dsh-cost-tracker` (or ask the DSH agent to do it);
 2. Restart `dsh web`;
 3. Optionally delete `~/.dsh/profiles/node_modules/dsh-cost-tracker` and `~/.dsh/storages/cost-tracker-records.json`.
 
 **Q: How do I update the plugin?**
-Run `git pull` inside the plugin directory. If only the UI (`client.js`) changed, a **hard browser refresh** (Cmd/Ctrl+Shift+R) is enough; if `index.js` changed, restart `dsh web`.
+- **Marketplace install:** open **Settings → Plugin Marketplace → Updates**, or re-run `dsh plugin --profile web add github:Angelyeye/dsh-cost-tracker`;
+- **Manual install:** run `git pull` inside the plugin directory.
+
+Either way: if only the UI (`client.js`) changed, a **hard browser refresh** (Cmd/Ctrl+Shift+R) is enough; if `index.js` changed, restart `dsh web`.
 
 ## Repository layout
 
@@ -266,9 +281,11 @@ Run `git pull` inside the plugin directory. If only the UI (`client.js`) changed
 ├── pricing.js      Pricing & tokens: price tables, peak/off-peak billing, vision model, peak-phase math (pure logic, unit-testable)
 ├── config.js       Config layer: defaults & normalization for the peak-price notice (pure logic, unit-testable)
 ├── client.js       Client half: settings dashboard, status line & peak-price notice UI
-├── package.json    Plugin manifest (with dsh.client declaration)
-├── test/           Unit tests (node test/storage.test.js)
-└── docs/           README screenshots
+├── package.json    Plugin manifest: declares dsh.bundle (what makes it installable) and dsh.client (browser UI)
+├── cordis.patch.yml Bundle patch: registers the plugin with DSH's loader, pointed at by dsh.bundle
+├── screenshots.json Marketplace detail-page screenshot list (relative paths, 1-8 images)
+├── test/           Unit tests (storage / pricing / config / recompute, node test/*.test.js)
+└── docs/           README screenshots and design notes
 ```
 
 ## License
