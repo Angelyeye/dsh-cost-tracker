@@ -120,15 +120,27 @@ dsh web
 
 ### 从旧包名迁移(仅 v1.6.0 及更早的安装需要)
 
-v1.7.0 起包名由 `dsh-cost-tracker` 改为 `@angelyeye/dsh-cost-tracker` —— 因为 npm 上原名已被他人占用,而市场的 npm 映射要求「已发布的包名 = 仓库 `package.json` 的 `name`」。旧安装的 loader 条目指向旧目录,不会自动跟随,请手动换掉:
+v1.7.0 起包名由 `dsh-cost-tracker` 改为 `@angelyeye/dsh-cost-tracker` —— 因为 npm 上原名已被他人占用,而市场的 npm 映射要求「已发布的包名 = 仓库 `package.json` 的 `name`」。
+
+⚠️ **不要只是"再装一次新版"**:新旧两份的 `cordis.patch.yml` 用的是**同一个 loader id**(`dsh-cost-tracker`),叠加安装会让**两份同时被加载** —— 表现为重复的 HTTP 路由、Agent 工具与 UI 插槽。必须先清掉旧的:
+
+**市场安装的**(用 `dsh plugin add` 装的):
+
+```bash
+dsh plugin --profile web remove dsh-cost-tracker
+dsh plugin --profile web add github:Angelyeye/dsh-cost-tracker
+```
+
+**手工 clone 装的**:
 
 ```bash
 # 1. 编辑 ~/.dsh/profiles/web/cordis.patch.yml,删除 id 为 dsh-cost-tracker 的那段 - insert:(共 4 行)
 # 2. 删除旧目录
 rm -rf ~/.dsh/profiles/node_modules/dsh-cost-tracker
+# 3. 再按上面的「方式一」重新安装一次
 ```
 
-然后按上面的「方式一」重新安装一次。**数据不会丢**:用量记录在 `~/.dsh/storages/cost-tracker-records.json`,与插件目录无关。
+**数据不会丢**:用量记录在 `~/.dsh/storages/cost-tracker-records.json`,与插件目录无关。
 
 ---
 

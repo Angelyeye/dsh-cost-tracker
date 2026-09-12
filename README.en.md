@@ -120,15 +120,27 @@ dsh web
 
 ### Migrating from the old package name (only installs of v1.6.0 or older)
 
-As of v1.7.0 the package name changed from `dsh-cost-tracker` to `@angelyeye/dsh-cost-tracker` — the old name is held on npm by an unrelated package, and the marketplace's npm mapping requires the published name to equal the repository's `package.json` `name`. An existing install's loader entry points at the old directory and will not follow automatically, so switch it by hand:
+As of v1.7.0 the package name changed from `dsh-cost-tracker` to `@angelyeye/dsh-cost-tracker` — the old name is held on npm by an unrelated package, and the marketplace's npm mapping requires the published name to equal the repository's `package.json` `name`.
+
+⚠️ **Do not simply install the new version on top of the old one.** Both versions' `cordis.patch.yml` insert the **same loader id** (`dsh-cost-tracker`), so stacking them loads **both copies** — duplicated HTTP routes, agent tools and UI slots. Remove the old one first:
+
+**Marketplace install** (installed via `dsh plugin add`):
+
+```bash
+dsh plugin --profile web remove dsh-cost-tracker
+dsh plugin --profile web add github:Angelyeye/dsh-cost-tracker
+```
+
+**Manual clone install**:
 
 ```bash
 # 1. Edit ~/.dsh/profiles/web/cordis.patch.yml and remove the - insert: block whose id is dsh-cost-tracker (4 lines)
 # 2. Delete the old directory
 rm -rf ~/.dsh/profiles/node_modules/dsh-cost-tracker
+# 3. Reinstall once via Option A above
 ```
 
-Then reinstall once via Option A above. **No data is lost**: usage records live in `~/.dsh/storages/cost-tracker-records.json`, independent of the plugin directory.
+**No data is lost**: usage records live in `~/.dsh/storages/cost-tracker-records.json`, independent of the plugin directory.
 
 ---
 

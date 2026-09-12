@@ -7,7 +7,10 @@
 **变更(破坏性,仅影响安装方式,不影响功能与数据)**
 - **包名由 `dsh-cost-tracker` 改为 `@angelyeye/dsh-cost-tracker`**:npm 上原名已被他人占用,而插件市场的 npm 映射要求「已发布包名 = 仓库 `package.json` 的 `name`」并且该包的 `repository` 指回本仓库。改名后市场才能建立 npm 映射(下载量、宿主兼容徽章、版本化更新)。
 - `cordis.patch.yml` 的 bundle 补丁同步改为新包名。**注意 scoped 名在 YAML 里必须加引号**(`name: "@angelyeye/dsh-cost-tracker"`)——`@` 是 YAML 的保留起始字符,不加引号会导致整个 bundle 层解析失败。
-- **迁移**:旧安装需手动摘掉旧的 loader 条目、删除旧目录,再用新命令重装一次。`dsh plugin --profile web add github:Angelyeye/dsh-cost-tracker` 这种按仓库安装的写法改名后依然可用。详见 README「从旧包名迁移」。
+- **迁移**:旧安装必须**先清掉旧的、再装新的**,不能直接叠加安装 —— 新旧两份 `cordis.patch.yml` 用的是**同一个 loader id**(`dsh-cost-tracker`),叠加会让两份同时加载,表现为重复的 HTTP 路由、Agent 工具与 UI 插槽。
+  - 市场安装的(用 `dsh plugin add` 装的):`dsh plugin --profile web remove dsh-cost-tracker`,再 `dsh plugin --profile web add github:Angelyeye/dsh-cost-tracker`;
+  - 手工 clone 装的:删掉 `~/.dsh/profiles/web/cordis.patch.yml` 里 id 为 `dsh-cost-tracker` 的那段 `- insert:`,并 `rm -rf ~/.dsh/profiles/node_modules/dsh-cost-tracker`,然后重装一次。
+  - 按仓库安装的写法 `dsh plugin --profile web add github:Angelyeye/dsh-cost-tracker` 改名后依然可用(包名以包自己声明的为准)。详见 README「从旧包名迁移」。
 - README(中/英)安装章节同步更新。
 
 **不变**
