@@ -69,22 +69,24 @@
 本插件已收录于 [awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) 精选列表(分类 `usage`)。在 DSH 里打开 **设置 → 插件市场**,搜索 `dsh-cost-tracker` 点安装即可;市场展示的等价命令行是:
 
 ```bash
-dsh plugin --profile web add github:Angelyeye/dsh-cost-tracker
+dsh plugin --profile web add @angelyeye/dsh-cost-tracker
 ```
 
-市场会把插件装进当前 profile 并自动写好 loader 配置,**装的是仓库 `main` 分支的最新提交**,装完按提示重启 `dsh web`、刷新浏览器,无需手工 `git clone`,也不用自己改 patch 文件。
+> 若在 npm 映射生效前就看到这段:`dsh plugin --profile web add github:Angelyeye/dsh-cost-tracker` 同样可用——按仓库安装,装出来是同一个包。
+
+市场会把插件装进当前 profile 并自动写好 loader 配置,**装的是市场上架的最新版本**,装完按提示重启 `dsh web`、刷新浏览器,无需手工 `git clone`,也不用自己改 patch 文件。
 
 ### 方式二:让 DSH 帮你装(不懂命令行也能用)
 
 打开 DSH 的任意会话,把下面这段话**原样粘贴**发送给 Agent 即可:
 
 ```
-请帮我安装 DSH 插件 dsh-cost-tracker:
-1. git clone https://github.com/Angelyeye/dsh-cost-tracker.git 到 ~/.dsh/profiles/node_modules/dsh-cost-tracker(目录名必须叫 dsh-cost-tracker)
+请帮我安装 DSH 插件 @angelyeye/dsh-cost-tracker:
+1. git clone https://github.com/Angelyeye/dsh-cost-tracker.git 到 ~/.dsh/profiles/node_modules/@angelyeye/dsh-cost-tracker(目录名必须与包名一致)
 2. 在 ~/.dsh/profiles/web/cordis.patch.yml 顶层数组追加一行:
    - insert:
        - id: dsh-cost-tracker
-         name: dsh-cost-tracker
+         name: "@angelyeye/dsh-cost-tracker"
 3. 完成后告诉我,我自己重启 dsh web
 ```
 
@@ -94,14 +96,14 @@ dsh plugin --profile web add github:Angelyeye/dsh-cost-tracker
 
 ```bash
 # 1. 下载插件(目录名必须与包名一致)
-mkdir -p ~/.dsh/profiles/node_modules
-git clone https://github.com/Angelyeye/dsh-cost-tracker.git ~/.dsh/profiles/node_modules/dsh-cost-tracker
+mkdir -p ~/.dsh/profiles/node_modules/@angelyeye
+git clone https://github.com/Angelyeye/dsh-cost-tracker.git ~/.dsh/profiles/node_modules/@angelyeye/dsh-cost-tracker
 
 # 2. 注册插件(往 patch 文件里追加配置)
 cat >> ~/.dsh/profiles/web/cordis.patch.yml <<'EOF'
 - insert:
     - id: dsh-cost-tracker
-      name: dsh-cost-tracker
+      name: "@angelyeye/dsh-cost-tracker"
 EOF
 
 # 3. 重启 DSH(先 Ctrl+C 停掉当前 dsh web,再执行)
@@ -115,6 +117,18 @@ dsh web
 3. 对 Agent 说一句"查一下我现在的花费",能正常回答即全部就绪。
 
 > ⚠️ 如果 `~/.dsh/profiles/web/cordis.patch.yml` 里已有其他内容,请保留原有行,只追加上面那段;该文件顶层必须是 YAML 数组(每行以 `- ` 开头)。
+
+### 从旧包名迁移(仅 v1.6.0 及更早的安装需要)
+
+v1.7.0 起包名由 `dsh-cost-tracker` 改为 `@angelyeye/dsh-cost-tracker` —— 因为 npm 上原名已被他人占用,而市场的 npm 映射要求「已发布的包名 = 仓库 `package.json` 的 `name`」。旧安装的 loader 条目指向旧目录,不会自动跟随,请手动换掉:
+
+```bash
+# 1. 编辑 ~/.dsh/profiles/web/cordis.patch.yml,删除 id 为 dsh-cost-tracker 的那段 - insert:(共 4 行)
+# 2. 删除旧目录
+rm -rf ~/.dsh/profiles/node_modules/dsh-cost-tracker
+```
+
+然后按上面的「方式一」重新安装一次。**数据不会丢**:用量记录在 `~/.dsh/storages/cost-tracker-records.json`,与插件目录无关。
 
 ---
 
@@ -278,10 +292,10 @@ POST /api/cost-tracker/export       导出 CSV
 **Q:如何卸载?**
 1. **先摘掉 loader 条目**——市场安装的:打开 **设置 → 插件市场 → 已安装** 点卸载;手工安装的:打开 `~/.dsh/profiles/web/cordis.patch.yml`,删除 `dsh-cost-tracker` 那段 `- insert:`(共 4 行),或直接让 DSH Agent 帮你删;
 2. 重启 `dsh web`;
-3. 可选:删除插件目录 `~/.dsh/profiles/node_modules/dsh-cost-tracker` 和数据文件 `~/.dsh/storages/cost-tracker-records.json`。
+3. 可选:删除插件目录 `~/.dsh/profiles/node_modules/@angelyeye/dsh-cost-tracker` 和数据文件 `~/.dsh/storages/cost-tracker-records.json`。
 
 **Q:如何更新插件?**
-- **市场安装的**:打开 **设置 → 插件市场 → 更新**,或重新执行 `dsh plugin --profile web add github:Angelyeye/dsh-cost-tracker`;
+- **市场安装的**:打开 **设置 → 插件市场 → 更新**,或重新执行 `dsh plugin --profile web add @angelyeye/dsh-cost-tracker`;
 - **手工安装的**:进入插件目录执行 `git pull`。
 
 两种情况更新后:只改了界面(client.js)的话**硬刷新浏览器**(Cmd/Ctrl+Shift+R)即可;改了 index.js 则需要重启 `dsh web`。

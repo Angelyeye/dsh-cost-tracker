@@ -2,6 +2,17 @@
 
 本文件用中文记录 dsh-cost-tracker 的版本变更。
 
+## v1.7.0(2026-09-12)
+
+**变更(破坏性,仅影响安装方式,不影响功能与数据)**
+- **包名由 `dsh-cost-tracker` 改为 `@angelyeye/dsh-cost-tracker`**:npm 上原名已被他人占用,而插件市场的 npm 映射要求「已发布包名 = 仓库 `package.json` 的 `name`」并且该包的 `repository` 指回本仓库。改名后市场才能建立 npm 映射(下载量、宿主兼容徽章、版本化更新)。
+- `cordis.patch.yml` 的 bundle 补丁同步改为新包名。**注意 scoped 名在 YAML 里必须加引号**(`name: "@angelyeye/dsh-cost-tracker"`)——`@` 是 YAML 的保留起始字符,不加引号会导致整个 bundle 层解析失败。
+- **迁移**:旧安装需手动摘掉旧的 loader 条目、删除旧目录,再用新命令重装一次。`dsh plugin --profile web add github:Angelyeye/dsh-cost-tracker` 这种按仓库安装的写法改名后依然可用。详见 README「从旧包名迁移」。
+- README(中/英)安装章节同步更新。
+
+**不变**
+- 功能与数据格式无变化;用量记录、日汇总、配置与存储路径均保持原样。
+
 ## v1.6.0(2026-09-10)
 
 **新增**

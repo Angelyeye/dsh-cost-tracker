@@ -69,22 +69,24 @@
 This plugin is listed in the curated [awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) catalog (category `usage`). Open **Settings → Plugin Marketplace** inside DSH, search for `dsh-cost-tracker` and press install. The equivalent command line is:
 
 ```bash
-dsh plugin --profile web add github:Angelyeye/dsh-cost-tracker
+dsh plugin --profile web add @angelyeye/dsh-cost-tracker
 ```
 
-The marketplace installs the plugin into your profile and writes the loader config for you. It installs **the latest commit on the repository's `main` branch** — no manual `git clone`, no hand-editing the patch file. Restart `dsh web` and refresh the browser when prompted.
+> If you read this before the npm mapping is live, `dsh plugin --profile web add github:Angelyeye/dsh-cost-tracker` works too — it installs from the repository and yields the same package.
+
+The marketplace installs the plugin into your profile and writes the loader config for you. It installs **the latest published version** — no manual `git clone`, no hand-editing the patch file. Restart `dsh web` and refresh the browser when prompted.
 
 ### Option B: Let DSH install it for you (no CLI knowledge needed)
 
 Open any DSH session and paste this prompt verbatim to the agent:
 
 ```
-Please install the DSH plugin dsh-cost-tracker for me:
-1. git clone https://github.com/Angelyeye/dsh-cost-tracker.git into ~/.dsh/profiles/node_modules/dsh-cost-tracker (the directory MUST be named dsh-cost-tracker)
+Please install the DSH plugin @angelyeye/dsh-cost-tracker for me:
+1. git clone https://github.com/Angelyeye/dsh-cost-tracker.git into ~/.dsh/profiles/node_modules/@angelyeye/dsh-cost-tracker (the directory MUST match the package name)
 2. Append to the top-level array of ~/.dsh/profiles/web/cordis.patch.yml:
    - insert:
        - id: dsh-cost-tracker
-         name: dsh-cost-tracker
+         name: "@angelyeye/dsh-cost-tracker"
 3. Tell me when done — I will restart dsh web myself
 ```
 
@@ -94,14 +96,14 @@ Then stop `dsh web` with `Ctrl+C`, start it again, and refresh your browser.
 
 ```bash
 # 1. Download the plugin (directory name must match the package name)
-mkdir -p ~/.dsh/profiles/node_modules
-git clone https://github.com/Angelyeye/dsh-cost-tracker.git ~/.dsh/profiles/node_modules/dsh-cost-tracker
+mkdir -p ~/.dsh/profiles/node_modules/@angelyeye
+git clone https://github.com/Angelyeye/dsh-cost-tracker.git ~/.dsh/profiles/node_modules/@angelyeye/dsh-cost-tracker
 
 # 2. Register the plugin (append to the patch file)
 cat >> ~/.dsh/profiles/web/cordis.patch.yml <<'EOF'
 - insert:
     - id: dsh-cost-tracker
-      name: dsh-cost-tracker
+      name: "@angelyeye/dsh-cost-tracker"
 EOF
 
 # 3. Restart DSH (Ctrl+C the running dsh web first)
@@ -115,6 +117,18 @@ dsh web
 3. Ask the agent "check my current spending" — a correct answer means everything is ready.
 
 > ⚠️ If `~/.dsh/profiles/web/cordis.patch.yml` already contains entries, keep them and only append the block above; the file's top level must remain a YAML array.
+
+### Migrating from the old package name (only installs of v1.6.0 or older)
+
+As of v1.7.0 the package name changed from `dsh-cost-tracker` to `@angelyeye/dsh-cost-tracker` — the old name is held on npm by an unrelated package, and the marketplace's npm mapping requires the published name to equal the repository's `package.json` `name`. An existing install's loader entry points at the old directory and will not follow automatically, so switch it by hand:
+
+```bash
+# 1. Edit ~/.dsh/profiles/web/cordis.patch.yml and remove the - insert: block whose id is dsh-cost-tracker (4 lines)
+# 2. Delete the old directory
+rm -rf ~/.dsh/profiles/node_modules/dsh-cost-tracker
+```
+
+Then reinstall once via Option A above. **No data is lost**: usage records live in `~/.dsh/storages/cost-tracker-records.json`, independent of the plugin directory.
 
 ---
 
@@ -265,10 +279,10 @@ Costs are estimated locally from a built-in price table and may differ slightly 
 **Q: How do I uninstall?**
 1. **Remove the loader entry first** — marketplace install: open **Settings → Plugin Marketplace → Installed** and uninstall there (it also cleans up the patch entry it wrote); manual install: open `~/.dsh/profiles/web/cordis.patch.yml` and remove the 4-line `- insert:` block for `dsh-cost-tracker` (or ask the DSH agent to do it);
 2. Restart `dsh web`;
-3. Optionally delete `~/.dsh/profiles/node_modules/dsh-cost-tracker` and `~/.dsh/storages/cost-tracker-records.json`.
+3. Optionally delete `~/.dsh/profiles/node_modules/@angelyeye/dsh-cost-tracker` and `~/.dsh/storages/cost-tracker-records.json`.
 
 **Q: How do I update the plugin?**
-- **Marketplace install:** open **Settings → Plugin Marketplace → Updates**, or re-run `dsh plugin --profile web add github:Angelyeye/dsh-cost-tracker`;
+- **Marketplace install:** open **Settings → Plugin Marketplace → Updates**, or re-run `dsh plugin --profile web add @angelyeye/dsh-cost-tracker`;
 - **Manual install:** run `git pull` inside the plugin directory.
 
 Either way: if only the UI (`client.js`) changed, a **hard browser refresh** (Cmd/Ctrl+Shift+R) is enough; if `index.js` changed, restart `dsh web`.
