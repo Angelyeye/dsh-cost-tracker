@@ -72,7 +72,7 @@ This plugin is listed in the curated [awesome-dsh-plugin](https://github.com/awe
 dsh plugin --profile web add @angelyeye/dsh-cost-tracker
 ```
 
-> If you read this before the npm mapping is live, `dsh plugin --profile web add github:Angelyeye/dsh-cost-tracker` works too — it installs from the repository and yields the same package.
+> You can also install straight from the repository with `dsh plugin --profile web add github:Angelyeye/dsh-cost-tracker`. It yields the same package: the name comes from the bundle's own `package.json`, so the graph row id — and therefore the client-registration requirement — is identical either way.
 
 The marketplace installs the plugin into your profile and writes the loader config for you. It installs **the latest published version** — no manual `git clone`, no hand-editing the patch file. Restart `dsh web` and refresh the browser when prompted.
 
@@ -122,13 +122,15 @@ dsh web
 
 As of v1.7.0 the package name changed from `dsh-cost-tracker` to `@angelyeye/dsh-cost-tracker` — the old name is held on npm by an unrelated package, and the marketplace's npm mapping requires the published name to equal the repository's `package.json` `name`.
 
+> ⚠️ **The v1.7.0 migration guidance has been corrected.** v1.7.0 shipped a client-registration defect (see the v1.7.1 entry in [`CHANGELOG.md`](./CHANGELOG.md)): the client half fails to load for **every** install of v1.7.0, whichever way it was installed. Install **v1.7.1 or newer** — do not troubleshoot by reinstalling v1.7.0. Installing from the repository does not help either: the package name is the same, so the graph row id is the same, and the fault is inside the bundle.
+
 ⚠️ **Do not simply install the new version on top of the old one.** Both versions' `cordis.patch.yml` insert the **same loader id** (`dsh-cost-tracker`), so stacking them loads **both copies** — duplicated HTTP routes, agent tools and UI slots. Remove the old one first:
 
 **Marketplace install** (installed via `dsh plugin add`):
 
 ```bash
 dsh plugin --profile web remove dsh-cost-tracker
-dsh plugin --profile web add github:Angelyeye/dsh-cost-tracker
+dsh plugin --profile web add @angelyeye/dsh-cost-tracker
 ```
 
 **Manual clone install**:
@@ -140,7 +142,9 @@ rm -rf ~/.dsh/profiles/node_modules/dsh-cost-tracker
 # 3. Reinstall once via Option A above
 ```
 
-**No data is lost**: usage records live in `~/.dsh/storages/cost-tracker-records.json`, independent of the plugin directory.
+> Note: if you delete the old directory but leave that `- insert:` block in `cordis.patch.yml`, DSH fails to resolve the module name `dsh-cost-tracker` at startup and the profile will not load. Handle both together.
+
+**No data is lost**: usage records live in `~/.dsh/storages/cost-tracker-records.json`, independent of the plugin directory, the package name and the install method.
 
 ---
 

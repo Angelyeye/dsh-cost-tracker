@@ -2,15 +2,39 @@
 
 本文件用中文记录 dsh-cost-tracker 的版本变更。
 
+## v1.7.1(2026-09-14)
+
+**修复(严重,影响所有 v1.7.0 的干净安装)**
+- **修复客户端半端加载失败**:`client.js` 向浏览器端 `__ModuleLoader__.load()` 注册时用的 id 仍是旧裸名 `dsh-cost-tracker`,而加载器持有的图行 id 已是包名全称 `@angelyeye/dsh-cost-tracker`(v1.7.0 改包名时漏改了这一处手写字符串)。两者不等,加载器判定「bundle 已执行但没有以该 id 注册」并抛错:
+
+  ```
+  client-modules: bundle /plugins/??…@angelyeye/dsh-cost-tracker/client.js… loaded without
+  registering "@angelyeye/dsh-cost-tracker" via __ModuleLoader__.load
+  ```
+
+  表现为 `HARNESS / Failed to load plugins`:插件的服务端部分正常(Agent 工具仍可用),但客户端整半端(设置页「花费统计」、输入框花费状态条、侧边栏峰谷条)全部不出现。
+- **影响范围**:`npm` / 插件市场 / `github:Angelyeye/dsh-cost-tracker` / 手工 clone —— **所有**安装路径下的干净安装都会命中。图行 id 由包自己声明的 `name` 推导,与安装方式无关;v1.7.0 是此前唯一已发布版本,因此本修复针对的就是全部现存安装。
+
+**加固(防回归)**
+- `client.js` 末尾新增注册名护栏:以单一事实源常量表述注册 id,执行时自检「实际写入 `factories` 的 id」是否等于包名。**一致时不介入**(不会安装对 `loader.load` 的包装);不一致时在控制台直接点名根因 —— 若注册的是历史裸名,会明确说明这是 v1.7.0 的缺陷及改法,而不是只留加载器那句难以定位的报错。
+- 新增 `test/client-registration.test.js`(11 项断言):在 `node:vm` 沙箱里按宿主的真实注册语义运行 bundle,断言注册名严格等于 `package.json` 的 `name`、允许尾部 `/client` 写法(会被宿主的 `stripClientSuffix` 去掉)、并**反向验证**注册名不一致时护栏必须报错。已接入 `npm test`。
+
+**文档**
+- **更正 v1.7.0 条目里的迁移指引**:原文让人用 `dsh plugin --profile web add github:Angelyeye/dsh-cost-tracker` 重装 —— 该写法在 v1.7.0 上**同样无法修复**客户端加载失败(包名不变、图行 id 不变,问题在 bundle 内部)。已装坏的用户正确出路是**升级到 1.7.1**,不需要重装。中英文 README 同步更正。
+- 明确一条开发约定:**客户端 bundle 注册的 id 必须与 `package.json` 的 `name` 逐字一致**(允许尾部带 `/client`)。包名带 scope 时尤其容易漏。
+
+**升级**
+- 1.7.0 → 1.7.1 直接升级即可,**无需**先卸载;`cordis.patch.yml` 的 loader id 未变,不会产生重复注册。功能、数据格式、存储路径均无变化。
+
 ## v1.7.0(2026-09-12)
 
 **变更(破坏性,仅影响安装方式,不影响功能与数据)**
 - **包名由 `dsh-cost-tracker` 改为 `@angelyeye/dsh-cost-tracker`**:npm 上原名已被他人占用,而插件市场的 npm 映射要求「已发布包名 = 仓库 `package.json` 的 `name`」并且该包的 `repository` 指回本仓库。改名后市场才能建立 npm 映射(下载量、宿主兼容徽章、版本化更新)。
 - `cordis.patch.yml` 的 bundle 补丁同步改为新包名。**注意 scoped 名在 YAML 里必须加引号**(`name: "@angelyeye/dsh-cost-tracker"`)——`@` 是 YAML 的保留起始字符,不加引号会导致整个 bundle 层解析失败。
 - **迁移**:旧安装必须**先清掉旧的、再装新的**,不能直接叠加安装 —— 新旧两份 `cordis.patch.yml` 用的是**同一个 loader id**(`dsh-cost-tracker`),叠加会让两份同时加载,表现为重复的 HTTP 路由、Agent 工具与 UI 插槽。
-  - 市场安装的(用 `dsh plugin add` 装的):`dsh plugin --profile web remove dsh-cost-tracker`,再 `dsh plugin --profile web add github:Angelyeye/dsh-cost-tracker`;
+  - 市场安装的(用 `dsh plugin add` 装的):`dsh plugin --profile web remove dsh-cost-tracker`,再 `dsh plugin --profile web add @angelyeye/dsh-cost-tracker`;
   - 手工 clone 装的:删掉 `~/.dsh/profiles/web/cordis.patch.yml` 里 id 为 `dsh-cost-tracker` 的那段 `- insert:`,并 `rm -rf ~/.dsh/profiles/node_modules/dsh-cost-tracker`,然后重装一次。
-  - 按仓库安装的写法 `dsh plugin --profile web add github:Angelyeye/dsh-cost-tracker` 改名后依然可用(包名以包自己声明的为准)。详见 README「从旧包名迁移」。
+  - ~~按仓库安装的写法 `dsh plugin --profile web add github:Angelyeye/dsh-cost-tracker` 改名后依然可用(包名以包自己声明的为准)。~~ **【v1.7.1 更正】** 该写法在 v1.7.0 上同样无法修复客户端加载失败(包名不变、图行 id 不变,故障在 bundle 内部),且会让人误以为排障成功。已装坏的用户请直接升级到 v1.7.1。详见 README「从旧包名迁移」。
 - README(中/英)安装章节同步更新。
 
 **不变**

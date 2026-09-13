@@ -72,7 +72,7 @@
 dsh plugin --profile web add @angelyeye/dsh-cost-tracker
 ```
 
-> 若在 npm 映射生效前就看到这段:`dsh plugin --profile web add github:Angelyeye/dsh-cost-tracker` 同样可用——按仓库安装,装出来是同一个包。
+> 也可以直接按仓库安装:`dsh plugin --profile web add github:Angelyeye/dsh-cost-tracker`。装出来是同一个包——包名以包自己声明的 `package.json` 为准,所以图行 id、以及随之而来的客户端注册要求,两种装法完全一致。
 
 市场会把插件装进当前 profile 并自动写好 loader 配置,**装的是市场上架的最新版本**,装完按提示重启 `dsh web`、刷新浏览器,无需手工 `git clone`,也不用自己改 patch 文件。
 
@@ -122,13 +122,15 @@ dsh web
 
 v1.7.0 起包名由 `dsh-cost-tracker` 改为 `@angelyeye/dsh-cost-tracker` —— 因为 npm 上原名已被他人占用,而市场的 npm 映射要求「已发布的包名 = 仓库 `package.json` 的 `name`」。
 
+> ⚠️ **v1.7.0 的迁移指引已更正**:v1.7.0 存在客户端注册名缺陷(详见 [`CHANGELOG.md`](./CHANGELOG.md) 的 v1.7.1 条目),**任何安装方式装出来的 v1.7.0 都无法加载客户端**。请直接装 **v1.7.1 或更高版本**,不要用重装 v1.7.0 的方式排障 —— 按仓库装同样不行(包名一样,图行 id 一样,问题出在 bundle 内部)。
+
 ⚠️ **不要只是"再装一次新版"**:新旧两份的 `cordis.patch.yml` 用的是**同一个 loader id**(`dsh-cost-tracker`),叠加安装会让**两份同时被加载** —— 表现为重复的 HTTP 路由、Agent 工具与 UI 插槽。必须先清掉旧的:
 
 **市场安装的**(用 `dsh plugin add` 装的):
 
 ```bash
 dsh plugin --profile web remove dsh-cost-tracker
-dsh plugin --profile web add github:Angelyeye/dsh-cost-tracker
+dsh plugin --profile web add @angelyeye/dsh-cost-tracker
 ```
 
 **手工 clone 装的**:
@@ -140,7 +142,9 @@ rm -rf ~/.dsh/profiles/node_modules/dsh-cost-tracker
 # 3. 再按上面的「方式一」重新安装一次
 ```
 
-**数据不会丢**:用量记录在 `~/.dsh/storages/cost-tracker-records.json`,与插件目录无关。
+> 提示:清理旧目录后,如果 `cordis.patch.yml` 里那段 `- insert:` 没删掉,DSH 启动时会因为找不到模块名 `dsh-cost-tracker` 而解析失败。两者要一起处理。
+
+**数据不会丢**:用量记录在 `~/.dsh/storages/cost-tracker-records.json`,与插件目录、包名、安装方式全都无关。
 
 ---
 

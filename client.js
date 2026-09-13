@@ -7,7 +7,7 @@
 // 输出为浏览器 ModuleLoader bundle：exports.apply / exports.inject
 // ============================================================
 window.__ModuleLoader__.load({
-	id: "dsh-cost-tracker",
+	id: "@angelyeye/dsh-cost-tracker",
 	factory: (require) => {
 		var module = { exports: {} };
 		var exports = module.exports;
@@ -1253,3 +1253,78 @@ window.__ModuleLoader__.load({
 		return module.exports;
 	}
 });
+
+// ------------------------------------------------------------
+// 注册名护栏（防回归）
+//
+// 背景：DSH 客户端 ModuleLoader 按模块图里的 row.id 拉取 bundle，脚本执行后要求
+// __ModuleLoader__.load() 的 id 与之「完全一致」（允许尾部带 "/client"，会被
+// stripClientSuffix 去掉），否则抛：
+//     client-modules: bundle <url> loaded without registering "<id>" via __ModuleLoader__.load
+//
+// 该 id 历史上是手写字符串。v1.7.0 发布时漏了 scope 前缀（写成裸名
+// "dsh-cost-tracker"），导致所有从插件市场安装的用户客户端加载失败、插件无法加载。
+//
+// 下面两层都指向同一个单一事实源 _DSH_BUNDLE_ID，改动包名时只需改这一处；
+// 同时若宿主将来改变约定，也能在控制台给出明确指引，而不是只留一句加载器报错。
+// ------------------------------------------------------------
+(function () {
+	/** 单一事实源：必须与 package.json 的 name 完全一致。 */
+	var _DSH_BUNDLE_ID = "@angelyeye/dsh-cost-tracker";
+	/** v1.7.0 发布时用过的旧裸名，仅用于给出针对性提示。 */
+	var _DSH_LEGACY_BARE_ID = "dsh-cost-tracker";
+
+	var loader = (typeof window !== "undefined" && window.__ModuleLoader__) || null;
+	if (!loader || typeof loader.load !== "function") return;
+
+	/** 实际写入 factories 的 id：与加载器内部 stripClientSuffix 保持一致（尾部 "/client" 会被去掉）。 */
+	function storedIdOf(id) {
+		return String(id).replace(/\/client$/, "");
+	}
+
+	function report(registeredId) {
+		var detail = '  bundle 内注册的 id = "' + registeredId + '"（strip 后 = "' + storedIdOf(registeredId) + '"）'
+			+ "\n  包名（加载器期望的 id） = \"" + _DSH_BUNDLE_ID + "\"";
+		if (registeredId === _DSH_LEGACY_BARE_ID) {
+			detail += "\n  这是 v1.7.0 的历史缺陷：包改成 scoped 名后，bundle 内的 id 忘了同步加上 scope 前缀。"
+				+ "\n  修复：把 client.js 里 __ModuleLoader__.load({ id: ... }) 改成包名全称（含 scope）。";
+		}
+		if (typeof console !== "undefined" && console.error) {
+			console.error("[dsh-cost-tracker] client bundle 注册名与包名不一致，插件将无法加载。\n" + detail);
+		}
+	}
+
+	// 第 1 层：自检本次 load() 实际写进 factories 的 id。
+	// 只在确认不一致时才动，避免覆盖别人的 loader 行为或产生误报。
+	if (typeof loader.factories !== "undefined") {
+		if (loader.factories.has(storedIdOf(_DSH_BUNDLE_ID))) return;
+		report(_DSH_BUNDLE_ID);
+		var originalLoad = loader.load;
+		loader.load = function (registration) {
+			var r = originalLoad.apply(this, arguments);
+			if (registration && typeof registration.id === "string"
+				&& storedIdOf(registration.id) !== storedIdOf(_DSH_BUNDLE_ID)) {
+				report(registration.id);
+			}
+			return r;
+		};
+		return;
+	}
+
+	// 第 2 层：loader 尚未就绪（HTML 里的 pending queue 模式）。
+	// load() 此时只是入队，等模块系统构造时会逐条重放；这里同样不改变原行为。
+	var queue = loader.pendingQueue;
+	if (!Array.isArray(queue)) return;
+	var queuedLoad = loader.load;
+	loader.load = function (registration) {
+		var r = queuedLoad.apply(this, arguments);
+		if (registration && typeof registration.id === "string"
+			&& storedIdOf(registration.id) !== storedIdOf(_DSH_BUNDLE_ID)) {
+			report(registration.id);
+		}
+		return r;
+	};
+	if (queue.length === 0) return;
+	if (storedIdOf(queue[queue.length - 1].id) === storedIdOf(_DSH_BUNDLE_ID)) return;
+	report(queue[queue.length - 1].id);
+})();
