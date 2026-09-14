@@ -163,11 +163,51 @@ rm -rf ~/.dsh/profiles/node_modules/dsh-cost-tracker
 
 | 工具 | 作用 | 你可以这样问 |
 | --- | --- | --- |
-| `cost_stats` | 查询花费与用量统计 | "我今天花了多少钱?" |
+| `cost_stats` | 查询花费与用量统计（`scope=local`（默认，仅本机）/ `cloud`（云端多机汇总）/ `both`） | "我今天花了多少钱?" · "我所有电脑加起来花了多少?" |
 | `cost_prices` | 查看内置单价表与峰谷规则 | "现在 deepseek-v4-flash 什么价?" |
 | `cost_peak` | 查询当前峰谷档位与下次切换倒计时 | "现在是不是高峰时段?" |
 | `cost_recompute` | **按计费时代重算已入库记录的费用(一次性补账)**,默认只试算 | "把价格调整前的记录按新价重算一下" |
+| `cost_sync` | **云端同步**：查看状态 / 立即同步 / 测试连接 / 改配置 | "把花费同步到云端" · "云端同步正常吗?" |
 | `cost_reset` | **清空全部统计数据(不可恢复)** | "把花费统计清零" |
+
+### 多机汇总（云端同步，v1.8.0）
+
+在多台电脑上使用时，把用量汇总到**自建云端服务**，即可在任一机器上查看全网合计，并按「设备 × Agent」拆分。
+
+**部署云端服务**（独立仓库，零运行时依赖）：
+
+```bash
+git clone <你的仓库地址> dsh-cost-cloud && cd dsh-cost-cloud
+cp .env.example .env      # 填 SESSION_SECRET 与 ADMIN_PASSWORD_HASH（node scripts/hash-password.js "口令"）
+docker compose up -d      # 打开 http://<服务器>:8787 ，在「设置」页生成共享引导令牌
+```
+
+**在每台设备上配置**：打开 **设置 → 插件 → 插件配置 → 花费统计**，填写：
+
+| 字段 | 说明 |
+| --- | --- |
+| 设备名 | 该机器在看板上显示的名字（如「办公台式机」） |
+| 服务地址 | 云端地址，如 `https://cost.example.com` |
+| 共享令牌 | 云端「设置」页生成的 `dshc_...` |
+| 同步间隔 | 默认 60 秒 |
+
+然后点 `测试连接` → `立即同步`。回到 **设置 → 花费统计**，顶部会出现三态开关：
+
+| 视图 | 含义 |
+| --- | --- |
+| **本机** | 只统计这台电脑（与未启用云端时完全一致） |
+| **本机+云端** | 本机 + **其他整机的全部** + **本机上其它 agent**（服务端并集口径，不重复计数） |
+| **仅云端** | 以云端记录为准（含本机已同步部分） |
+
+> 「本机+云端」的服务端口径是**并集**：`其他整机` ∪ `本机上的非 dsh 来源`。
+> 因此多机 + 多 agent 混用时，本机的 DSH 数字来自本地，本机上的 ZCode/Codex 等来自云端，其他电脑全部来自云端 —— 三者相加恰好等于全网，不重不漏。
+
+配合「维度」下拉还能看 **按机器 / 按 Agent / 按模型** 的拆分，以及**设备 × Agent 矩阵**（行合计 = 列合计 = 总计）。
+
+**其它 agent 也能接入**：云端的上报协议是开放的，任何 agent 的统计插件按 `dsh-cost-cloud` 仓库的 `docs/INGEST-API.md` 实现即可接入，云端无需改动，看板会自动出现新的 Agent 列。
+**关键约定**：同一台机器上的所有 agent 必须共用同一个 `machineId`（共享文件 `~/.dsh-cost/device.json`），否则会被统计成多台设备。
+
+**隐私**：只上报 token 数量、费用、时间戳与标识符（不涉及 prompt / 回复 / 文件内容）；可在配置卡开启「会话脱敏」（`sessionId` 上报前替换为不可逆哈希）与「不含 purpose」。
 
 ### HTTP API(供其他工具调用)
 
@@ -179,6 +219,11 @@ POST /api/cost-tracker/dashboard    仪表盘数据
 POST /api/cost-tracker/usage        用量热力图(全时段累计 + 按天 token 聚合)
 POST /api/cost-tracker/peak         峰谷相位快照(当前档位/下次切换/配置)
 POST /api/cost-tracker/peak-config  保存峰谷计价提示配置
+POST /api/cost-tracker/sync         云端同步状态(设备 ID/水位/待上报/最近错误)
+POST /api/cost-tracker/sync-now     立即同步(传 {"full":true} 全量补传)
+POST /api/cost-tracker/sync-test    测试云端连接
+POST /api/cost-tracker/sync-config  保存云端同步配置
+POST /api/cost-tracker/cloud        云端只读聚合(route/days/excludeSelf/devices/sources)
 POST /api/cost-tracker/kimi-usage   Kimi 订阅配额
 POST /api/cost-tracker/balance      账户余额
 POST /api/cost-tracker/prices       单价表(按计费时代分版)

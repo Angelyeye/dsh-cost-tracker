@@ -165,11 +165,48 @@ rm -rf ~/.dsh/profiles/node_modules/dsh-cost-tracker
 
 | Tool | Purpose | Example prompt |
 | --- | --- | --- |
-| `cost_stats` | Query usage & cost statistics | "How much did I spend today?" |
+| `cost_stats` | Query usage & cost statistics (`scope=local` (default, this machine) / `cloud` (all machines) / `both`) | "How much did I spend today?" · "What did all my machines cost together?" |
 | `cost_prices` | Show the built-in price table & peak rules | "What does deepseek-v4-flash cost right now?" |
 | `cost_peak` | Show the current peak tier & next-switch countdown | "Is it peak hour right now?" |
 | `cost_recompute` | **Re-price stored records by pricing era (one-off backfill)**, dry-run by default | "Re-price the records from before the price change" |
+| `cost_sync` | **Cloud sync**: status / sync now / test connection / update config | "Sync my usage to the cloud" |
 | `cost_reset` | **Erase ALL statistics (irreversible)** | "Reset my cost statistics" |
+
+### Multi-machine aggregation (cloud sync, v1.8.0)
+
+Running DSH on several computers? Send usage to your own **self-hosted cloud service** and see the network-wide totals — broken down by device and by agent — from any of them.
+
+**Deploy the service** (separate repo, zero runtime dependencies):
+
+```bash
+git clone <your repo url> dsh-cost-cloud && cd dsh-cost-cloud
+cp .env.example .env      # fill SESSION_SECRET and ADMIN_PASSWORD_HASH (node scripts/hash-password.js "pw")
+docker compose up -d      # open http://<server>:8787 and generate a shared bootstrap token under Settings
+```
+
+**Configure each device**: open **Settings → Plugins → Plugin configuration → Cost Tracker** and fill in:
+
+| Field | Meaning |
+| --- | --- |
+| Device name | How this machine shows up on the dashboard |
+| Service URL | e.g. `https://cost.example.com` |
+| Shared token | the `dshc_...` value from the cloud Settings page |
+| Sync interval | 60s by default |
+
+Then hit `Test connection` → `Sync now`. Back in **Settings → Cost Tracker** the view switcher appears:
+
+| View | Meaning |
+| --- | --- |
+| **This machine** | local-only (identical to running without cloud sync) |
+| **This machine + cloud** | local **plus** other devices — the server excludes this machine, so nothing is double-counted |
+| **Cloud only** | cloud records only (includes this machine's synced part) |
+
+The dimension selector adds per-device / per-agent / per-model breakdowns and a **device × Agent matrix** (row totals = column totals = grand total).
+
+**Other agents can report too**: the ingest protocol is open. Any agent's stats plugin that implements `docs/INGEST-API.md` in the `dsh-cost-cloud` repo is aggregated with no server changes, and a new agent column shows up automatically.
+**Key rule**: every agent on the same machine must share one `machineId` (the shared `~/.dsh-cost/device.json` file); otherwise one computer is counted as several devices.
+
+**Privacy**: only token counts, cost, timestamps and identifiers are uploaded — never prompts, responses, file paths or code. The config card offers "mask session id" (irreversible hash) and "omit purpose".
 
 ### HTTP API (for other tools)
 
@@ -181,6 +218,11 @@ POST /api/cost-tracker/dashboard    Dashboard data
 POST /api/cost-tracker/usage        Usage heatmap (all-time totals + daily token aggregation)
 POST /api/cost-tracker/peak         Peak-phase snapshot (current tier / next switch / config)
 POST /api/cost-tracker/peak-config  Save peak-price notice config
+POST /api/cost-tracker/sync         Cloud sync status (device id / watermark / pending / last error)
+POST /api/cost-tracker/sync-now     Sync now ({"full":true} to re-send everything)
+POST /api/cost-tracker/sync-test    Test the cloud connection
+POST /api/cost-tracker/sync-config  Save cloud sync config
+POST /api/cost-tracker/cloud        Read-only cloud aggregation (route/days/excludeSelf/devices/sources)
 POST /api/cost-tracker/kimi-usage   Kimi subscription quota
 POST /api/cost-tracker/balance      Account balance
 POST /api/cost-tracker/prices       Price table (versioned by pricing era)

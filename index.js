@@ -11,7 +11,31 @@ import { join, dirname } from 'node:path'
 import { homedir } from 'node:os'
 import { createStore, collectTotals, DETAIL_DAYS, MAX_AXIS_DAYS } from './store.js'
 import { PRICE_ERAS, V41_EFFECTIVE_AT, exactModelsAt, eraAt, SUBSCRIPTION_RATES, PROVIDER_RATES, GENERIC_RATES, PEAK_WINDOWS, PEAK_HOUR_WINDOWS, isPeak, peakPhaseAt, priceFor, computeCost, normalizeTokens } from './pricing.js'
-import { normalizePeakConfig, defaultPeakConfig, peakEffective } from './config.js'
+import {
+  normalizePeakConfig, defaultPeakConfig, peakEffective,
+  normalizeCloudConfig, defaultCloudConfig, normalizePluginConfig,
+} from './config.js'
+import { createSyncEngine, setPluginVersion, SOURCE as SYNC_SOURCE, SYNC_VERSION, loadIdentity } from './sync.js'
+import { Schema } from './schema.js'
+
+/** 插件版本（写入上报信封，便于云端排查版本差异） */
+const PLUGIN_VERSION = '1.8.0'
+setPluginVersion(PLUGIN_VERSION)
+
+/** 「设置 → 插件 → 插件配置」里的卡片字段（与 settings 命名空间一致） */
+const SyncSchema = Schema.object({
+  deviceName: Schema.string().default(undefined).description('本机在看板上显示的名字'),
+  cloudEnabled: Schema.boolean().default(undefined).description('启用云端同步'),
+  cloudUrl: Schema.string().default(undefined).description('云端服务地址，如 https://cost.example.com'),
+  cloudToken: Schema.string().role('secret').default(undefined).description('共享引导令牌 / 设备令牌'),
+  syncIntervalSec: Schema.natural().default(undefined).description('自动同步间隔秒（15-3600）'),
+  syncBatchSize: Schema.natural().default(undefined).description('单批明细条数（50-2000）'),
+  maskSessionId: Schema.boolean().default(undefined).description('会话脱敏（上报前做不可逆哈希）'),
+  includePurpose: Schema.boolean().default(undefined).description('上报 purpose（项目归属）'),
+  syncRollups: Schema.boolean().default(undefined).description('上报历史日汇总快照'),
+  syncSinceDays: Schema.natural().default(undefined).description('补传起始窗口天数（0 = 不限）'),
+  cloudView: Schema.string().default(undefined).description('看板视图：local / local+cloud / cloud'),
+})
 
 // ============================================================
 // 启动信息日志开关（默认静默）
@@ -116,11 +140,15 @@ export default {
 
     function writeRecords() { store.persist() }
 
-    // ---------- plugin config (peak pricing notice) ----------
+    // ---------- plugin config（峰谷计价 + 云端同步） ----------
     // 与记录分开存储：$DSH_HOME/storages/cost-tracker-config.json。
     // 提供读写与校验（默认值见 config.js），写失败不阻断（下次改设置重试）。
+    // 若部署里存在 @deepseek-ai/dsh-settings（本机 DSH 自带），另外注册一个
+    // `cost-tracker` 命名空间：用户在「设置 → 插件 → 插件配置」里改的字段
+    // 通过 settings/updated 回灌到本文件，保证两个入口读写同一份配置。
     const CONFIG_FILE = join(process.env.DSH_HOME || join(homedir(), '.dsh'), 'storages', 'cost-tracker-config.json')
     let peakConfig = defaultPeakConfig()
+    let cloudConfig = defaultCloudConfig()
     let configLoadWarned = false
 
     function loadConfig() {
@@ -128,6 +156,7 @@ export default {
         if (!existsSync(CONFIG_FILE)) return
         const parsed = JSON.parse(readFileSync(CONFIG_FILE, 'utf8'))
         peakConfig = normalizePeakConfig(parsed)
+        cloudConfig = normalizeCloudConfig(parsed)
       } catch (e) {
         if (!configLoadWarned) { console.error('cost tracker config load failed, using defaults', e); configLoadWarned = true }
       }
@@ -137,7 +166,7 @@ export default {
       try {
         mkdirSync(dirname(CONFIG_FILE), { recursive: true })
         const tmp = CONFIG_FILE + '.tmp'
-        writeFileSync(tmp, JSON.stringify(peakConfig), 'utf8')
+        writeFileSync(tmp, JSON.stringify(Object.assign({}, peakConfig, cloudConfig)), 'utf8')
         renameSync(tmp, CONFIG_FILE)
         return true
       } catch (e) {
@@ -147,9 +176,56 @@ export default {
     }
 
     function setPeakConfig(raw) {
-      peakConfig = normalizePeakConfig(raw)
+      peakConfig = normalizePeakConfig(Object.assign({}, peakConfig, raw))
       saveConfig()
       return peakConfig
+    }
+
+    function setCloudConfig(raw) {
+      cloudConfig = normalizeCloudConfig(Object.assign({}, cloudConfig, raw))
+      saveConfig()
+      return cloudConfig
+    }
+
+    // ---------- settings 命名空间（可选服务） ----------
+    // 字段全部 .default(undefined)：只有用户在卡片里显式保存才写入用户层，
+    // 从而不覆盖我们自己配置文件里的既有值。
+    // hooks.setSource/onChange 由宿主调用；schema.js 提供零依赖的同形状 schema。
+    let settingsScope = null
+    let settingsSource = () => ({})
+    let settingsCardInstalled = false
+
+    function applySettingsPatch(next) {
+      if (!next || typeof next !== 'object') return
+      const patch = {}
+      for (const k of Object.keys(next)) if (next[k] !== undefined) patch[k] = next[k]
+      if (!Object.keys(patch).length) return
+      const before = JSON.stringify(cloudConfig)
+      cloudConfig = normalizeCloudConfig(Object.assign({}, cloudConfig, patch))
+      if (JSON.stringify(cloudConfig) !== before) saveConfig()
+    }
+
+    function installSettingsSection() {
+      const settings = ctx.get('settings')
+      if (!settings || typeof settings.installSection !== 'function') return false
+      try {
+        settingsScope = settings.installSection(ctx, 'cost-tracker', SyncSchema, {}, {
+          setSource(getter) { settingsSource = typeof getter === 'function' ? getter : (() => ({})) },
+          onChange() { settingsCardInstalled = true; applySettingsPatch(settingsSource()) },
+          validate(value) { return normalizeCloudConfig(Object.assign({}, cloudConfig, value || {})) },
+        })
+        applySettingsPatch(settingsSource())
+        return true
+      } catch (e) {
+        startupLog('settings section skipped: ' + String(e && e.message ? e.message : e))
+        return false
+      }
+    }
+
+    /** 把当前配置回写给 settings 命名空间（卡片已打开时保持同步） */
+    function publishSettings() {
+      if (!settingsScope || typeof settingsScope.update !== 'function') return
+      try { settingsScope.update({}) } catch (e) { /* 只读或未就绪：忽略 */ }
     }
 
     // 峰谷相位快照（供客户端时段条 / 弹窗 / 倒计时）
@@ -229,6 +305,7 @@ export default {
         subscription: price.subscription,
       })
       schedulePersist()
+      scheduleSync(4000)
     }
 
     async function* wrapStream(source, options) {
@@ -794,6 +871,155 @@ export default {
       }
     }
 
+    // ---------- cloud sync ----------
+    // 同步引擎：只上报、不回写；失败只影响云端视图，绝不影响本地记账。
+    const syncEngine = createSyncEngine({
+      getConfig: () => Object.assign({}, peakConfig, cloudConfig),
+      getSnapshot: () => ({
+        details: records,
+        rollups,
+        resetEpoch: store.epoch(),
+        maxSeq: store.maxSeq(),
+        storageDir: join(process.env.DSH_HOME || join(homedir(), '.dsh'), 'storages'),
+      }),
+      setConfigField: (patch) => {
+        const before = JSON.stringify(cloudConfig)
+        cloudConfig = normalizeCloudConfig(Object.assign({}, cloudConfig, patch))
+        if (JSON.stringify(cloudConfig) !== before) saveConfig()
+      },
+      now: () => Date.now(),
+      log: (m) => startupLog('[cost-tracker] ' + m),
+    })
+
+    let syncTimer = null
+    let syncDebounce = null
+    function scheduleSync(delayMs) {
+      if (!cloudConfig.cloudEnabled) return
+      const timer = ctx.get('timer')
+      if (syncDebounce) { try { syncDebounce() } catch (e) {} syncDebounce = null }
+      const run = () => {
+        syncDebounce = null
+        syncEngine.runOnce({}).catch(() => {})
+      }
+      syncDebounce = timer ? timer.timeout(run, delayMs || 2000) : setTimeout(run, delayMs || 2000)
+    }
+
+    function startSyncTimer() {
+      if (syncTimer) { try { syncTimer() } catch (e) {} syncTimer = null }
+      if (!cloudConfig.cloudEnabled) return
+      const interval = Math.max(15, Number(cloudConfig.syncIntervalSec) || 60) * 1000
+      const timer = ctx.get('timer')
+      const tick = () => { syncEngine.runOnce({}).catch(() => {}) }
+      syncTimer = timer ? timer.interval(tick, interval) : setInterval(tick, interval)
+    }
+
+    /** 云端只读聚合（供看板三态视图与「设备 × Agent」下钻） */
+    const cloudCache = new Map()
+
+    /**
+     * 三态视图的「其他机器」口径（云端 view 值 → 过滤方式）：
+     *
+     *   cloud        : 全网（不过滤）
+     *   cloud-others : **其他整机**——排除本机整台（本机所有 agent 都不算）。
+     *                  与「本机」视图相加 = 全网，本机恰好计一次。默认值。
+     *   cloud-rest   : 除「本机 + DSH」以外的部分——排除本机设备 **且** 排除本机的 dsh 来源。
+     *                  用于「本机+云端」把本机上的**其它 agent**（ZCode/Codex…）也并进来：
+     *                  相加后 = 本机可见数据 + 其他整机 + 本机其它 agent，全程不重不漏。
+     *
+     * 「本机」的识别同时看设备 ID 与设备名（用户改名后云端 id 与本机 machineId 可能不一致），
+     * 云端没有本机记录时回退为「不过滤」，宁可显示全网也不静默漏数据。
+     */
+    function cloudViewMode(v) {
+      return v === 'cloud' ? 'cloud' : v === 'cloud-rest' ? 'cloud-rest' : 'cloud-others'
+    }
+
+    const deviceNameCache = { at: 0, list: [] }
+    async function listCloudDevices() {
+      if (Date.now() - deviceNameCache.at < 30000 && deviceNameCache.list.length) return deviceNameCache.list
+      try {
+        const res = await fetch(cloudConfig.cloudUrl + '/api/admin/devices', { headers: { authorization: 'Bearer ' + cloudConfig.cloudToken } })
+        const body = await res.json()
+        if (body && body.ok && Array.isArray(body.devices)) {
+          deviceNameCache.at = Date.now()
+          deviceNameCache.list = body.devices.map((d) => ({ id: d.id, name: d.name, sources: d.sources || [] }));
+        }
+      } catch (e) { /* 拿不到清单时退回 excludeDevice */ }
+      return deviceNameCache.list
+    }
+
+    async function fetchCloud(query) {
+      if (!cloudConfig.cloudEnabled || !cloudConfig.cloudUrl || !cloudConfig.cloudToken) {
+        return { ok: false, error: '云端同步未配置（在「设置 → 插件 → 插件配置 → 花费统计」填写服务地址与令牌）', code: 'NOT_CONFIGURED' }
+      }
+      const key = JSON.stringify(query)
+      const hit = cloudCache.get(key)
+      if (hit && Date.now() - hit.at < 10000) return hit.value
+      const qs = new URLSearchParams()
+      qs.set('range', query.range || '7d')
+      if (query.days) qs.set('days', String(query.days))
+      if (query.groupBy) qs.set('groupBy', query.groupBy)
+      if (query.bucket) qs.set('bucket', query.bucket)
+      if (Array.isArray(query.sources) && query.sources.length) qs.set('sources', query.sources.join(','))
+      if (Array.isArray(query.devices) && query.devices.length) qs.set('devices', query.devices.join(','))
+      const st = (query.view || query.excludeSelf === true) ? syncEngine.status() : null
+      const mode = query.view ? cloudViewMode(query.view) : (query.excludeSelf === true ? 'cloud-others' : 'cloud')
+      let selfId = ''
+      let selfKnown = false
+      let unionParts = null
+      if (mode !== 'cloud' && !(query.devices && query.devices.length)) {
+        // 识别「本机」：设备 ID 命中，或设备名与插件里配置的一致（用户改名后 id 可能不同）
+        const all = await listCloudDevices()
+        const myId = (st && st.deviceId) || ''
+        const myName = ((st && st.deviceName) || '').trim()
+        const isSelf = (d) => (myId && d.id === myId) || (myName && (d.name || '').trim() === myName)
+        const self = all.filter(isSelf)
+        selfId = (self[0] && self[0].id) || myId
+        selfKnown = self.length > 0
+        if (selfKnown) {
+          if (mode === 'cloud-others') {
+            qs.set('excludeDevice', selfId)
+          } else if (selfId) {
+            // cloud-rest：并集＝① 其他整机（排除本机设备） ② 本机上的其它 agent（本机设备 + 排除本来源）
+            unionParts = [
+              { excludeDevice: selfId },
+              { devices: selfId, excludeSource: SYNC_SOURCE },
+            ]
+          }
+        }
+      }
+      if (unionParts && query.route === 'overview') {
+        // 只有 overview 支持并集（矩阵/趋势不做并集：口径复杂且易误读）
+        qs.set('union', JSON.stringify(unionParts))
+      } else if (mode === 'cloud-rest' && !selfKnown && selfId) {
+        qs.set('excludeDevice', selfId) // 拿不到本机记录时退化为「排除本机整台」
+      }
+      const url = cloudConfig.cloudUrl + '/api/admin/' + query.route + '?' + qs.toString()
+      const ac = new AbortController()
+      const t = setTimeout(() => ac.abort(), 12000)
+      try {
+        const res = await fetch(url, { headers: { authorization: 'Bearer ' + cloudConfig.cloudToken }, signal: ac.signal })
+        const body = await res.json().catch(() => null)
+        if (!body || body.ok !== true) {
+          const out = { ok: false, error: (body && body.error) || ('HTTP ' + res.status), code: (body && body.code) || 'CLOUD_ERROR' }
+          return out
+        }
+        const value = Object.assign({}, body, {
+          source: 'cloud',
+          asOf: Date.now(),
+          cloudMode: mode,
+          selfResolved: selfKnown,
+          selfDeviceId: selfId,
+          unionParts: unionParts,
+        })
+        cloudCache.set(key, { at: Date.now(), value })
+        return value
+      } catch (e) {
+        return { ok: false, error: String(e && e.message ? e.message : e), code: 'NETWORK' }
+      } finally {
+        clearTimeout(t)
+      }
+    }
+
     // ---------- HTTP routes (client → host) ----------
     const ROUTES = {
       summary: (args) => buildSummary(args),
@@ -806,6 +1032,23 @@ export default {
       usage: () => buildUsageHeat(),
       peak: () => peakSnapshot(),
       'peak-config': (args) => setPeakConfig(args),
+      sync: () => syncEngine.status(),
+      'sync-now': async (args) => {
+        const result = await syncEngine.runOnce({ manual: true, full: !!(args && args.full) })
+        return Object.assign({ ok: result.ok !== false || !result.error, result }, syncEngine.status())
+      },
+      'sync-test': async (args) => syncEngine.testConnection(args && args.config ? normalizeCloudConfig(Object.assign({}, cloudConfig, args.config)) : null),
+      'sync-config': (args) => {
+        const next = normalizeCloudConfig(Object.assign({}, cloudConfig, args || {}))
+        const enabledChanged = next.cloudEnabled !== cloudConfig.cloudEnabled
+        const intervalChanged = next.syncIntervalSec !== cloudConfig.syncIntervalSec
+        cloudConfig = next
+        saveConfig()
+        if (enabledChanged || intervalChanged) startSyncTimer()
+        if (args && args.cloudEnabled === true) scheduleSync(500)
+        return Object.assign({ ok: true }, syncEngine.status())
+      },
+      cloud: (args) => fetchCloud(Object.assign({ route: 'overview', range: '7d' }, args || {})),
     }
 
     async function handleRoute(req, res) {
@@ -837,23 +1080,8 @@ export default {
     ctx.effect(() => ctx.webServer.register({ kind: 'prefix', path: '/api/cost-tracker', handler: handleRoute }), 'cost-tracker: api routes')
 
     // ---------- model tools ----------
-    ctx.tools.register({
-      name: 'cost_stats',
-      description: '查询本进程内记录的模型调用花费与用量统计（人民币 CNY 计价）。按量计费模型与订阅制套餐（等效费用，仅供参考）分开统计；数据持久化于磁盘，进程重启后自动恢复。',
-      parameters: {
-        type: 'object',
-        properties: { days: { type: 'integer', description: '统计最近 N 天；0 表示全部。默认 7。' } },
-        additionalProperties: true,
-      },
-      output: {
-        schema: { type: 'object', additionalProperties: true },
-        render: (args, v) => [{ type: 'text', text: '花费统计（' + (v.days === 0 ? '全部' : '近 ' + v.days + ' 天') + '）\n按量消费：¥' + v.realTotal + '（高峰 ¥' + v.peakCost + ' · 闲时 ¥' + v.offCost + (v.flatCost > 0 ? ' · 平峰 ¥' + v.flatCost : '') + '）· 请求 ' + v.realCalls + ' 次 · Tokens ' + v.realTokens + '\n订阅套餐：请求 ' + v.subCalls + ' 次 · Tokens ' + v.subTokens + ' · 等效 ¥' + v.subEquivalent + '（订阅已覆盖，仅供参考）' }],
-      },
-      execute: async (args) => {
-        const d = buildDashboard(args && typeof args.days === 'number' ? { days: args.days } : { days: 7 })
-        return { ok: true, days: d.days, realTotal: d.realCost, realCalls: d.realCalls, realTokens: d.realTokens, peakCost: d.peakCost, offCost: d.offCost, flatCost: d.flatCost, subEquivalent: d.subEquivalent, subCalls: d.subCalls, subTokens: d.subTokens }
-      },
-    })
+    // 注意：cost_stats 的定义在下方（支持 scope=local|cloud|both）；
+    // 此处不再重复注册，避免同名工具冲突。
 
     ctx.tools.register({
       name: 'cost_prices',
@@ -953,10 +1181,136 @@ export default {
       execute: async () => peakSnapshot(),
     })
 
+    ctx.tools.register({
+      name: 'cost_stats',
+      description: '查询模型调用花费与用量统计（人民币 CNY 计价）。默认只看本机（scope=local）；传 scope=cloud 或 both 可纳入云端多机汇总（需已配置云端同步）。按量计费与订阅制套餐（等效费用，仅供参考）分开统计。',
+      parameters: {
+        type: 'object',
+        properties: {
+          days: { type: 'integer', description: '统计最近 N 天；0 表示全部。默认 7。' },
+          scope: { type: 'string', enum: ['local', 'cloud', 'both'], description: 'local=仅本机（默认）；cloud=仅云端汇总（含其他设备）；both=两者并列' },
+        },
+        additionalProperties: true,
+      },
+      output: {
+        schema: { type: 'object', additionalProperties: true },
+        render: (args, v) => {
+          const lines = ['花费统计（' + (v.days === 0 ? '全部' : '近 ' + v.days + ' 天') + '）']
+          if (v.local) {
+            lines.push('【本机】按量消费：¥' + v.local.realTotal + '（高峰 ¥' + v.local.peakCost + ' · 闲时 ¥' + v.local.offCost
+              + (v.local.flatCost > 0 ? ' · 平峰 ¥' + v.local.flatCost : '') + '）· 请求 ' + v.local.realCalls + ' 次 · Tokens ' + v.local.realTokens)
+            lines.push('【本机】订阅套餐：请求 ' + v.local.subCalls + ' 次 · Tokens ' + v.local.subTokens + ' · 等效 ¥' + v.local.subEquivalent + '（订阅已覆盖，仅供参考）')
+          }
+          if (v.cloud && v.cloud.ok) {
+            lines.push('【云端汇总】按量消费：¥' + v.cloud.realCost + ' · 请求 ' + v.cloud.realCalls + ' 次 · Tokens ' + v.cloud.realTokens
+              + '（' + (v.cloud.devices || []).map((d) => d.name).join(' / ') + '）')
+            if (v.cloud.sources && v.cloud.sources.length) {
+              lines.push('【云端汇总】按 Agent：' + v.cloud.sources.map((s) => s.source + ' ¥' + s.cost).join(' · '))
+            }
+          } else if (v.cloud && !v.cloud.ok) {
+            lines.push('【云端汇总】不可用：' + (v.cloud.error || '未配置'))
+          }
+          return [{ type: 'text', text: lines.join('\n') }]
+        },
+      },
+      execute: async (args) => {
+        const a = args || {}
+        const days = typeof a.days === 'number' ? a.days : 7
+        const scope = a.scope === 'cloud' || a.scope === 'both' ? a.scope : 'local'
+        const out = { ok: true, days, scope }
+        if (scope === 'local' || scope === 'both') {
+          const d = buildDashboard({ days })
+          out.local = {
+            realTotal: d.realCost, realCalls: d.realCalls, realTokens: d.realTokens,
+            peakCost: d.peakCost, offCost: d.offCost, flatCost: d.flatCost,
+            subEquivalent: d.subEquivalent, subCalls: d.subCalls, subTokens: d.subTokens,
+          }
+          // 兼容旧字段（保持既有输出不变）
+          Object.assign(out, out.local)
+        }
+        if (scope === 'cloud' || scope === 'both') {
+          const c = await fetchCloud({ route: 'overview', range: days === 0 ? 'all' : '7d', days })
+          out.cloud = c.ok === false
+            ? { ok: false, error: c.error || '云端不可用' }
+            : {
+              ok: true,
+              realCost: c.summary.realCost, realCalls: c.summary.realCalls, realTokens: c.summary.realTokens,
+              subEquivalent: c.summary.subEquivalent, subCalls: c.summary.subCalls,
+              peakCost: c.summary.peakCost, offCost: c.summary.offCost, flatCost: c.summary.flatCost,
+              devices: c.devices, sources: c.sources, asOf: c.asOf,
+            }
+        }
+        return out
+      },
+    })
+
+    ctx.tools.register({
+      name: 'cost_sync',
+      description: '云端同步（多机汇总）：查看状态、立即同步、测试连接、修改配置。默认仅上报本机用量到自建云端服务，不涉及任何回写。',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['status', 'now', 'test', 'config'], description: 'status=查看状态（默认）；now=立即同步；test=测试连接；config=修改配置' },
+          full: { type: 'boolean', description: 'action=now 时是否全量补传（重置水位后重发）' },
+          config: { type: 'object', description: 'action=config 时的配置片段，如 { cloudEnabled: true, cloudUrl: "https://...", cloudToken: "..." }', additionalProperties: true },
+        },
+        additionalProperties: true,
+      },
+      output: {
+        schema: { type: 'object', additionalProperties: true },
+        render: (args, v) => {
+          if (v.action === 'test') {
+            return [{ type: 'text', text: v.ok ? ('云端连接正常：服务端 ' + v.serviceVersion + '（syncVer ' + SYNC_VERSION + '）' + (v.selfRegister ? ' · 允许自注册' : ' · 需后台建令牌')) : ('连接失败：' + v.error) }]
+          }
+          const st = v.status || v
+          const lines = [
+            '云端同步：' + (st.enabled ? '已启用' : '未启用') + (st.url ? '（' + st.url + '）' : ''),
+            '设备：' + (st.deviceName || '未命名') + ' · ' + (st.deviceId || '未生成'),
+            '令牌：' + (st.hasToken ? '已配置' : '未配置') + ' · 上次同步：' + (st.lastSyncAt ? new Date(st.lastSyncAt + 28800000).toISOString().replace('T', ' ').slice(0, 16).replace(/-/g, '/') + '（北京）' : '从未'),
+            '待上报：' + st.pending + ' 条 · 已上报水位 seq=' + st.watermark + ' · 日汇总已同步 ' + st.rollupsSent + ' 项',
+          ]
+          if (st.lastError) lines.push('最近错误：' + st.lastError + (st.backoffMs ? '（退避 ' + Math.round(st.backoffMs / 1000) + 's）' : ''))
+          if (st.needAuth) lines.push('⚠ 令牌无效：请在「设置 → 插件 → 插件配置 → 花费统计」更新共享引导令牌')
+          if (v.action === 'now' && v.result) {
+            lines.push('本次同步：新增 ' + (v.result.accepted || 0) + ' 条 · 去重 ' + (v.result.duplicates || 0) + ' 条 · 日汇总 ' + (v.result.rollups || 0) + ' 项' + (v.result.error ? ' · 失败：' + v.result.error : ''))
+          }
+          return [{ type: 'text', text: lines.join('\n') }]
+        },
+      },
+      execute: async (args) => {
+        const a = args || {}
+        const action = a.action || 'status'
+        if (action === 'test') {
+          const r = await syncEngine.testConnection()
+          return Object.assign({ ok: r.ok === true, action, syncVer: SYNC_VERSION }, r)
+        }
+        if (action === 'now') {
+          const result = await syncEngine.runOnce({ manual: true, full: a.full === true })
+          return { ok: result.ok !== false || !result.error, action, result, status: syncEngine.status() }
+        }
+        if (action === 'config') {
+          cloudConfig = normalizeCloudConfig(Object.assign({}, cloudConfig, a.config || {}))
+          saveConfig()
+          startSyncTimer()
+          if (a.config && a.config.cloudEnabled) scheduleSync(800)
+          return { ok: true, action, status: syncEngine.status() }
+        }
+        return { ok: true, action: 'status', status: syncEngine.status() }
+      },
+    })
+
     // ---------- lifecycle ----------
     loadRecords()
     loadConfig()
-    ctx.effect(() => () => { try { writeRecords() } catch (e) {} }, 'cost-tracker: final flush')
-    startupLog('cost tracker ready (static)')
+    const settingsOk = installSettingsSection()
+    startSyncTimer()
+    if (cloudConfig.cloudEnabled) scheduleSync(5000)
+    ctx.effect(() => () => {
+      try { writeRecords() } catch (e) {}
+      if (syncTimer) { try { syncTimer() } catch (e) {} }
+      if (syncDebounce) { try { syncDebounce() } catch (e) {} }
+    }, 'cost-tracker: final flush')
+    startupLog('cost tracker ready (static) · source=' + SYNC_SOURCE + ' syncVer=' + SYNC_VERSION
+      + ' settings=' + (settingsOk ? 'yes' : 'no') + ' cloud=' + (cloudConfig.cloudEnabled ? 'on' : 'off'))
   },
 }

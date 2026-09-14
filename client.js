@@ -81,6 +81,8 @@ window.__ModuleLoader__.load({
 .cost-badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; border: 1px solid var(--dsw-alias-border-l2, #d1d5db); color: var(--dsw-alias-label-secondary, #5b6472); }
 .cost-btn { padding: 4px 12px; font-size: 12px; border-radius: 6px; border: 1px solid var(--dsw-alias-border-l2, #d1d5db); background: var(--dsw-alias-bg-layer-1, #fff); color: var(--dsw-alias-label-primary, #171a1f); cursor: pointer; }
 .cost-btn:hover { background: var(--dsw-alias-bg-layer-2, #f3f4f6); }
+.cost-btn-primary { background: var(--dsw-alias-state-business-primary, #4176e6); border-color: var(--dsw-alias-state-business-primary, #4176e6); color: #fff; }
+.cost-btn-primary:hover { background: var(--dsw-alias-state-business-primary, #4176e6); color: #fff; opacity: .9; }
 .cost-btn:disabled { opacity: 0.6; cursor: default; }
 .cost-select { padding: 4px 8px; font-size: 12px; border-radius: 6px; border: 1px solid var(--dsw-alias-border-l2, #d1d5db); background: var(--dsw-alias-bg-layer-1, #fff); color: var(--dsw-alias-label-primary, #171a1f); }
 .cost-input { padding: 4px 8px; font-size: 12px; border-radius: 6px; border: 1px solid var(--dsw-alias-border-l2, #d1d5db); background: var(--dsw-alias-bg-layer-1, #fff); color: var(--dsw-alias-label-primary, #171a1f); width: 220px; }
@@ -175,6 +177,24 @@ window.__ModuleLoader__.load({
 .cost-pa-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 2px; }
 @keyframes cost-pa-in { from { opacity: 0; transform: translateY(10px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
 @keyframes cost-pa-in-center { from { opacity: 0; transform: translate(-50%, calc(-50% + 10px)); } to { opacity: 1; transform: translate(-50%,-50%); } }
+/* ---------- 云端同步与三态视图 ---------- */
+.cost-cloudnote { margin-top: 6px; font-size: 12px; color: var(--dsw-alias-state-warn-primary, #d97706); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cost-matrix { margin-top: 8px; border: 1px solid var(--dsw-alias-border-l1, #e5e7eb); border-radius: 8px; overflow: hidden; font-size: 12px; }
+.cost-matrix-row { display: flex; align-items: center; gap: 8px; padding: 5px 10px; border-top: 1px solid var(--dsw-alias-border-l2, #f1f3f6); }
+.cost-matrix-row:first-child { border-top: none; }
+.cost-matrix-head { background: var(--dsw-alias-bg-layer-2, #f7f8fa); color: var(--dsw-alias-label-secondary, #5b6472); font-weight: 600; }
+.cost-matrix-key { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cost-matrix-num { flex: 0 0 88px; text-align: right; font-variant-numeric: tabular-nums; }
+.cost-matrix-note { flex: 0 0 110px; text-align: right; color: var(--dsw-alias-label-tertiary, #9ca3af); }
+.cost-matrix-total { font-weight: 650; }
+.cost-sync-ro { display: grid; grid-template-columns: 132px 1fr; gap: 5px 10px; font-size: 12px; margin-top: 8px; }
+.cost-sync-ro .k { color: var(--dsw-alias-label-secondary, #5b6472); }
+.cost-sync-ro .v { word-break: break-all; }
+.cost-sync-card { border: 1px solid var(--dsw-alias-border-l1, #e5e7eb); border-radius: 10px; padding: 12px 14px; margin-top: 8px; }
+.cost-sync-fields { display: grid; grid-template-columns: 132px 1fr; gap: 8px 10px; align-items: center; font-size: 12px; margin-top: 10px; }
+.cost-sync-fields .k { color: var(--dsw-alias-label-secondary, #5b6472); }
+.cost-sync-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.cost-sync-state { margin-top: 8px; font-size: 12px; color: var(--dsw-alias-label-secondary, #5b6472); }
 `;
 			const tag = document.createElement("style");
 			tag.setAttribute("data-plugin-css", "cost-tracker-plugin");
@@ -442,21 +462,51 @@ window.__ModuleLoader__.load({
 				e("div", { className: "cost-card-sub" }, sub));
 		}
 
-		function filterRow(days, setDays, onExport, onRefresh, msg, busy, peakWindows) {
+		// ---------- 三态视图：本机 / 本机+云端 / 仅云端 ----------
+		// 数据源归一与相加逻辑在 view.js（纯函数，node 可独立测试）；
+		// 这里只负责取数、切视图与渲染，渲染逻辑对三种视图完全不分叉。
+		function requireLocal(id, fallback) {
+			try { return require(id) } catch (e) { return fallback || {} }
+		}
+		const VIEW = requireLocal("./view", {
+			BOARD_VIEWS: [{ id: "local", label: "本机" }],
+			BOARD_DIMS: [{ id: "total", label: "合计" }],
+			normalizeCloudDash: () => null,
+			mergeDash: (a) => a,
+		});
+		const BOARD_VIEWS = VIEW.BOARD_VIEWS;
+		const BOARD_DIMS = VIEW.BOARD_DIMS;
+		const normalizeCloudDash = VIEW.normalizeCloudDash;
+		const mergeDash = VIEW.mergeDash;
+
+		function filterRow(days, setDays, onExport, onRefresh, msg, busy, peakWindows, viewCtl) {
+			const views = viewCtl && viewCtl.available ? BOARD_VIEWS : [BOARD_VIEWS[0]];
 			return e("div", { className: "cost-row" },
 				e("select", { className: "cost-select", value: String(days), onChange: ev => setDays(parseInt(ev.target.value, 10)) },
 					e("option", { value: "7" }, "近 7 天"),
 					e("option", { value: "14" }, "近 14 天"),
 					e("option", { value: "30" }, "近 30 天"),
 					e("option", { value: "0" }, "全部")),
+				e("span", { className: "cost-tabs", title: "数据来源：本机=只统计这台电脑；本机+云端=加上其他电脑（不重复计数）；仅云端=以云端记录为准" },
+					views.map(v => e("button", {
+						key: v.id,
+						className: "cost-tab" + (viewCtl && viewCtl.view === v.id ? " cost-tab-on" : ""),
+						onClick: () => viewCtl && viewCtl.setView(v.id),
+					}, v.label))),
+				viewCtl && viewCtl.available && viewCtl.view !== "local"
+					? e("select", { className: "cost-select", value: viewCtl.dimension, onChange: ev => viewCtl.setDimension(ev.target.value), title: "维度：查看合计，或按机器 / Agent / 模型 / 项目拆分" },
+						BOARD_DIMS.map(d => e("option", { key: d.id, value: d.id }, d.label)))
+					: null,
 				e("button", { className: "cost-btn", onClick: onExport, disabled: busy }, "导出 CSV"),
 				e("button", { className: "cost-btn", onClick: onRefresh, disabled: busy }, busy ? "刷新中…" : "刷新"),
 				msg ? e("span", { className: "cost-hint" }, msg) : null,
 				e("span", { className: "cost-spacer" }),
-				e("span", { className: "cost-hint" }, "峰谷时段（北京时间）：" + peakWindows + " · 闲时半价"));
+				viewCtl && viewCtl.view !== "local" && viewCtl.asOf
+					? e("span", { className: "cost-hint" }, "云端数据时间 " + timeLabel(viewCtl.asOf))
+					: e("span", { className: "cost-hint" }, "峰谷时段（北京时间）：" + peakWindows + " · 闲时半价"));
 		}
 
-		function statCards(dash, balance) {
+		function statCards(dash, balance, viewCtl) {
 			const today = dash.today || { real: 0, calls: 0, tokens: 0, sub: 0, subCalls: 0, subTokens: 0 };
 			const month = dash.month || { real: 0, calls: 0, tokens: 0, sub: 0, subCalls: 0, subTokens: 0 };
 			const all = dash.all || { real: 0, calls: 0, tokens: 0, sub: 0, subCalls: 0, subTokens: 0 };
@@ -470,8 +520,18 @@ window.__ModuleLoader__.load({
 			} else if (balance && balance.error) {
 				balSub = balance.error;
 			}
+			// 视图来源标注：云端数据必须显式说明包含哪些机器，避免与本机数字混淆
+			const isUnion = !!(viewCtl && viewCtl.union);
+			const scopeNote = viewCtl && viewCtl.view === "cloud"
+				? "仅云端 · " + (viewCtl.devices || []).length + " 台设备"
+				: viewCtl && viewCtl.view === "local+cloud"
+					? (isUnion
+						? "本机 + 云端并集（" + ((viewCtl.unionParts || []).length || 2) + " 部分相加，不重复计数）"
+						: "本机 + 云端 " + Math.max(0, (viewCtl.devices || []).length - 1) + " 台其他设备")
+					: "本机";
+			const tag = (t) => scopeNote + (viewCtl && viewCtl.pending > 0 && viewCtl.view !== "local" ? " · 待同步 " + viewCtl.pending + " 条" : "");
 			return e("div", { className: "cost-cards" },
-				statCard("今日费用（CNY）", "¥" + fmtMoney(today.real), moneySub(today)),
+				statCard("今日费用（CNY）[" + tag() + "]", "¥" + fmtMoney(today.real), moneySub(today)),
 				statCard("本月费用（CNY）", "¥" + fmtMoney(month.real), moneySub(month)),
 				statCard("总花费（CNY）", "¥" + fmtMoney(all.real), "调用 " + fmtInt(all.calls) + " 次 · Tokens " + fmtCompact(all.tokens) + (all.sub > 0 ? " · 订阅 ¥" + fmtMoney(all.sub) : "")),
 				statCard("API 请求次数", fmtInt(all.calls + all.subCalls),
@@ -1077,7 +1137,141 @@ window.__ModuleLoader__.load({
 					e("div", { className: "cost-hint", style: { marginTop: "6px" } },
 						"峰时段（北京时间）：" + (snap ? snap.peakWindows : "周一至周五 9:00-12:00 · 14:00-18:00（周末全天闲时）") + "。生效时间：" + (snap ? snap.effectiveAt : "2026-08-01T00:00:00Z") + "。当前：" + (cfgSnap && cfgSnap.phase ? (cfgSnap.phase.weekend ? "周末全谷价" : cfgSnap.phase.inPeak ? "高峰时段" : "平价时段") : "…"))),
 				noticeOn ? e("div", { style: { marginTop: "8px" } }, e(PeakStrip, { snap: cfgSnap, style: d.peakStyle || "compact", wide: true, now, ringSize: 150 }))
-					: e("p", { className: "cost-hint", style: { marginTop: "8px" } }, "提示已隐藏：需启用峰谷计价并开启「峰时高价时段显著提示」。"));
+					: e("p", { className: "cost-hint", style: { marginTop: "8px" } }, "提示已隐藏：需启用峰谷计价并开启「峰时高价时段显著提示」。"),
+				e(SyncReadonlyCard, { sync }));
+		}
+
+		// ============================================================
+		// 云端同步（只读回显）—— 花费统计设置页
+		// 编辑入口在「设置 → 插件 → 插件配置 → 花费统计」卡片，这里只回显当前状态，
+		// 避免两处都能改造成口径不一致。
+		// ============================================================
+		function SyncReadonlyCard(props) {
+			const [st, setSt] = useState(props && props.sync ? props.sync : null);
+			useEffect(() => {
+				let alive = true;
+				function load() { apiCall("sync", {}).then(v => { if (alive && v) setSt(v); }).catch(() => {}); }
+				load();
+				const id = setInterval(load, 60000);
+				return () => { alive = false; clearInterval(id); };
+			}, []);
+			if (!st) return null;
+			const line = (k, v) => [e("span", { key: "k" + k, className: "k" }, k), e("span", { key: "v" + k, className: "v" }, v)];
+			return e("div", { className: "cost-sync-card" },
+				e("div", { className: "cost-row" },
+					e("span", { className: "cost-panel-title" }, "云端同步"),
+					e("span", { className: "cost-spacer" }),
+					e("span", { className: "cost-hint" }, st.enabled ? "已启用" : "未启用")),
+				e("div", { className: "cost-sync-ro" },
+					line("设备名", st.deviceName || "（未命名）"),
+					line("设备 ID", st.deviceId || "（未生成）"),
+					line("服务地址", st.url || "（未配置）"),
+					line("令牌", st.hasToken ? "已配置" : "未配置"),
+					line("上次同步", st.lastSyncAt ? timeLabel(st.lastSyncAt) : "从未"),
+					line("待上报", st.pending + " 条 · 水位 seq=" + st.watermark),
+					line("会话脱敏", st.maskSessionId ? "已开启（不可逆哈希）" : "关闭"),
+					line("上报项目", st.includePurpose ? "含 purpose" : "不含 purpose")),
+				st.lastError ? e("div", { className: "cost-err", style: { marginTop: "6px" } }, "最近错误：" + st.lastError) : null,
+				e("div", { className: "cost-hint", style: { marginTop: "8px" } },
+					"编辑入口：设置 → 插件 → 插件配置 → 花费统计" + (st.dataDir ? "（身份文件：" + st.identityFile + "）" : "")));
+		}
+
+		// ============================================================
+		// 插件配置卡（设置 → 插件 → 插件配置）
+		// 卡片自绘内部结构、表单走本插件自己的 host API（/api/cost-tracker/sync-*），
+		// 不硬依赖 settings UI 包的内部实现，避免版本耦合。
+		// ============================================================
+		function PluginConfigCard() {
+			const [st, setSt] = useState(null);
+			const [draft, setDraft] = useState({});
+			const [msg, setMsg] = useState("");
+			const [busy, setBusy] = useState(false);
+			const [testing, setTesting] = useState("");
+			function load() {
+				apiCall("sync", {}).then(v => {
+					if (!v) return;
+					setSt(v);
+					setDraft({
+						deviceName: v.deviceName || "",
+						cloudEnabled: !!v.enabled,
+						cloudUrl: v.url || "",
+						cloudToken: "",
+						syncIntervalSec: v.intervalSec || 60,
+						maskSessionId: !!v.maskSessionId,
+						includePurpose: v.includePurpose !== false,
+						cloudView: v.view || "local",
+					});
+				}).catch(() => {});
+			}
+			useEffect(() => { load(); }, []);
+			const set = (k, v) => setDraft(prev => Object.assign({}, prev, { [k]: v }));
+			const field = (label, node, hint) => [
+				e("span", { key: "k" + label, className: "k" }, label),
+				e("span", { key: "v" + label }, node, hint ? e("span", { className: "cost-hint", style: { marginLeft: "8px" } }, hint) : null),
+			];
+			function save() {
+				setBusy(true); setMsg("");
+				const patch = Object.assign({}, draft);
+				if (!patch.cloudToken) delete patch.cloudToken; // 留空 = 不改令牌
+				if (!patch.cloudUrl) patch.cloudEnabled = false;
+				apiCall("sync-config", patch).then(v => {
+					setBusy(false);
+					setMsg(v && v.ok ? "已保存" : "保存失败：" + ((v && v.error) || "未知错误"));
+					load();
+				}).catch(err => { setBusy(false); setMsg("保存失败：" + String(err && err.message ? err.message : err)); });
+			}
+			function test() {
+				setBusy(true); setTesting("测试中…");
+				apiCall("sync-test", { config: Object.assign({}, draft, { cloudToken: draft.cloudToken || undefined }) }).then(v => {
+					setBusy(false);
+					setTesting(v && v.ok ? ("连接正常 · 服务端 " + (v.serviceVersion || "?") + (v.selfRegister ? " · 允许自注册" : "")) : ("连接失败：" + ((v && v.error) || "未知错误")));
+				}).catch(err => { setBusy(false); setTesting("连接失败：" + String(err && err.message ? err.message : err)); });
+			}
+			function syncNow(full) {
+				setBusy(true); setMsg("同步中…");
+				apiCall("sync-now", full ? { full: true } : {}).then(v => {
+					setBusy(false);
+					const r = (v && v.result) || {};
+					setMsg(r.error ? ("同步失败：" + r.error) : ("已同步：新增 " + (r.accepted || 0) + " · 去重 " + (r.duplicates || 0) + " · 日汇总 " + (r.rollups || 0)));
+					load();
+				}).catch(err => { setBusy(false); setMsg("同步失败：" + String(err && err.message ? err.message : err)); });
+			}
+			if (!st) return e("div", { className: "cost-hint" }, "加载云端同步状态…");
+			return e("div", {},
+				e("div", { className: "cost-hint" }, "把本机用量汇总到自建云端服务；多台电脑共用同一个地址与令牌即可在「花费统计」看板切换查看全网数据。"),
+				e("div", { className: "cost-sync-fields" },
+					field("设备名", e("input", {
+						className: "cost-input", style: { width: "200px" }, value: draft.deviceName || "", placeholder: "如：办公台式机",
+						onChange: ev => set("deviceName", ev.target.value),
+					}), "看板上显示的名字"),
+					field("启用同步", e("input", { type: "checkbox", checked: !!draft.cloudEnabled, onChange: ev => set("cloudEnabled", ev.target.checked) })),
+					field("服务地址", e("input", {
+						className: "cost-input", style: { width: "320px" }, value: draft.cloudUrl || "", placeholder: "https://cost.example.com",
+						onChange: ev => set("cloudUrl", ev.target.value),
+					}), "仅 http/https"),
+					field("共享令牌", e("input", {
+						className: "cost-input", type: "password", style: { width: "320px" }, value: draft.cloudToken || "",
+						placeholder: st.hasToken ? "已配置（留空则不修改）" : "dshc_...",
+						onChange: ev => set("cloudToken", ev.target.value),
+					}), "在云端看板「设置」页生成"),
+					field("同步间隔", e("select", { className: "cost-select", value: String(draft.syncIntervalSec || 60), onChange: ev => set("syncIntervalSec", parseInt(ev.target.value, 10)) },
+						[15, 30, 60, 120, 300, 600, 1800, 3600].map(s => e("option", { key: "iv" + s, value: String(s) }, s < 60 ? s + " 秒" : (s / 60) + " 分钟")))),
+					field("会话脱敏", e("input", { type: "checkbox", checked: !!draft.maskSessionId, onChange: ev => set("maskSessionId", ev.target.checked) }), "上报前把 sessionId 换成不可逆哈希"),
+					field("上报 purpose", e("input", { type: "checkbox", checked: draft.includePurpose !== false, onChange: ev => set("includePurpose", ev.target.checked) }), "项目/用途归属"),
+					field("默认视图", e("select", { className: "cost-select", value: draft.cloudView || "local", onChange: ev => set("cloudView", ev.target.value) },
+						BOARD_VIEWS.map(v => e("option", { key: v.id, value: v.id }, v.label))))),
+				e("div", { className: "cost-sync-actions" },
+					e("button", { className: "cost-btn cost-btn-primary", onClick: save, disabled: busy }, "保存"),
+					e("button", { className: "cost-btn", onClick: test, disabled: busy }, "测试连接"),
+					e("button", { className: "cost-btn", onClick: () => syncNow(false), disabled: busy }, "立即同步"),
+					e("button", { className: "cost-btn", onClick: () => syncNow(true), disabled: busy }, "全量补传")),
+				msg ? e("div", { className: "cost-sync-state" }, msg) : null,
+				testing ? e("div", { className: "cost-sync-state" }, testing) : null,
+				e("div", { className: "cost-sync-state" },
+					"设备 ID " + (st.deviceId || "（未生成）") + " · 水位 seq=" + st.watermark + " · 待上报 " + st.pending + " 条 · 上次同步 " + (st.lastSyncAt ? timeLabel(st.lastSyncAt) : "从未")),
+				st.lastError ? e("div", { className: "cost-err" }, "最近错误：" + st.lastError) : null,
+				st.needAuth ? e("div", { className: "cost-err" }, "令牌无效：请在云端看板重新生成共享引导令牌后填入上方「共享令牌」。") : null,
+				st.url ? e("div", { className: "cost-hint", style: { marginTop: "6px" } }, "云端看板：" + st.url) : null);
 		}
 
 		function Dashboard() {
@@ -1100,12 +1294,64 @@ window.__ModuleLoader__.load({
 			const [manualKey, setManualKey] = useState("");
 			const [usage, setUsage] = useState(null);
 			const [usageErr, setUsageErr] = useState("");
+			// ---- 云端三态视图 ----
+			const [sync, setSync] = useState(null);
+			const [cloudDash, setCloudDash] = useState(null);
+			const [cloudErr, setCloudErr] = useState("");
+			const [cloudMatrix, setCloudMatrix] = useState(null);
+			const [view, setViewState] = useState(() => {
+				try { return localStorage.getItem("dsh-cost-tracker-view") || "local" } catch (e) { return "local" }
+			});
+			const [dimension, setDimensionState] = useState(() => {
+				try { return localStorage.getItem("dsh-cost-tracker-dim") || "total" } catch (e) { return "total" }
+			});
+			function setView(v) {
+				setViewState(v);
+				try { localStorage.setItem("dsh-cost-tracker-view", v) } catch (e) {}
+				apiCall("sync-config", { cloudView: v }).catch(() => {});
+			}
+			function setDimension(d) {
+				setDimensionState(d);
+				try { localStorage.setItem("dsh-cost-tracker-dim", d) } catch (e) {}
+			}
+			const viewInitRef = useRef(false);
 
 			function loadDash(d) {
 				apiCall("dashboard", { days: d }).then(v => {
 					if (v && v.ok) { setDash(v); setDashErr(""); }
 					else setDashErr(v && v.error ? String(v.error) : "数据加载失败");
 				}).catch(err => setDashErr(String(err && err.message ? err.message : err)));
+			}
+			function loadSync() {
+				apiCall("sync", {}).then(v => {
+					if (!v) return;
+					setSync(v);
+					// 首次进入：以配置里的视图为准（三态开关的权威值在配置，便于多机一致）
+					if (!viewInitRef.current && (v.view === "local" || v.view === "local+cloud" || v.view === "cloud")) {
+						viewInitRef.current = true;
+						if (v.view !== view) setViewState(v.view);
+					}
+				}).catch(() => {});
+			}
+			/**
+			 * 云端只读聚合。
+			 *  · view=cloud        → 全网
+			 *  · view=local+cloud  → 「本机 DSH + 其他整机 + 本机其它 agent」
+			 *                        （宿主侧用 cloud-rest 口径：排除本机 DSH 来源，保留本机其它 agent）
+			 *  · view=local        → 不请求云端
+			 */
+			function loadCloud(d, mode) {
+				if (!mode || mode === "local") { setCloudErr(""); return; }
+				const cloudView = mode === "local+cloud" ? "cloud-rest" : "cloud";
+				apiCall("cloud", { route: "overview", days: d, view: cloudView }).then(v => {
+					if (v && v.ok !== false) { setCloudDash(v); setCloudErr(""); }
+					else { setCloudDash(null); setCloudErr((v && v.error) || "云端不可用"); }
+				}).catch(err => { setCloudDash(null); setCloudErr(String(err && err.message ? err.message : err)); });
+			}
+			function loadCloudMatrix(d) {
+				apiCall("cloud", { route: "matrix", days: d, view: view === "local+cloud" ? "cloud-rest" : "cloud" }).then(v => {
+					if (v && v.ok !== false) setCloudMatrix(v); else setCloudMatrix(null);
+				}).catch(() => setCloudMatrix(null));
 			}
 			function loadKimi(force) {
 				apiCall("kimi-usage", { force: !!force }).then(v => setKimi(v)).catch(() => {});
@@ -1138,30 +1384,121 @@ window.__ModuleLoader__.load({
 			}
 
 			useEffect(() => { loadDash(days); }, [days]);
-			useEffect(() => { loadKimi(false); loadBalance(""); loadUsage(); }, []);
+			useEffect(() => { loadKimi(false); loadBalance(""); loadUsage(); loadSync(); }, []);
+			// 视图切换：local+cloud 需要额外拉「排除本机」的云端聚合与矩阵
+			useEffect(() => { loadCloud(days, view); loadCloudMatrix(days); }, [view, days]);
 			useEffect(() => {
 				const id = setInterval(() => setNow(Date.now()), 30000);
 				return () => clearInterval(id);
 			}, []);
 
+			// 数据源合并：仅本机时 viewDash === dash（完全不改现有口径）
+			const cloudNorm = normalizeCloudDash(cloudDash, days);
+			const viewDash = view === "local"
+				? dash
+				: view === "cloud"
+					? cloudNorm
+					: (cloudNorm ? mergeDash(dash, cloudNorm) : dash);
+			const cloudAvailable = !!(sync && sync.enabled && sync.hasToken);
+			const viewCtl = {
+				view, setView, dimension, setDimension,
+				available: cloudAvailable,
+				asOf: cloudDash ? cloudDash.asOf : 0,
+				devices: (cloudDash && cloudDash.devices) || [],
+				sources: (cloudDash && cloudDash.sources) || [],
+				union: !!(cloudDash && cloudDash.union),
+				unionParts: (cloudDash && cloudDash.parts) || [],
+				cloudMode: (cloudDash && cloudDash.cloudMode) || "",
+				pending: sync ? sync.pending : 0,
+			};
+
 			return e("div", { className: "cost-wrap" },
 				e("div", { className: "cost-h1" }, pluginIcon(18), "花费统计"),
-				filterRow(days, setDays, onExport, onRefresh, msg, busy, dash ? dash.peakWindows : "周一至周五 9:00-12:00 · 14:00-18:00（周末全天闲时）"),
+				filterRow(days, setDays, onExport, onRefresh, msg, busy, dash ? dash.peakWindows : "周一至周五 9:00-12:00 · 14:00-18:00（周末全天闲时）", viewCtl),
+				!cloudAvailable
+					? e("div", { className: "cost-hint", style: { marginTop: "4px" } },
+						"仅显示本机数据。在多台电脑/多个 Agent 之间汇总：到「设置 → 插件 → 插件配置 → 花费统计」填写云端服务地址与令牌。")
+					: null,
+				sync && sync.enabled && sync.pending > 0 && view !== "local"
+					? e("div", { className: "cost-cloudnote" },
+						"本机还有 " + sync.pending + " 条尚未同步，云端数字会偏小 —— ",
+						e("button", { className: "cost-btn", onClick: () => { apiCall("sync-now", {}).then(() => { loadSync(); loadCloud(days, view); loadCloudMatrix(days); }); } }, "立即同步"))
+					: null,
+				cloudErr && view !== "local"
+					? e("div", { className: "cost-err", style: { marginTop: "6px" } }, "云端数据不可用（已显示本机数据）：" + cloudErr)
+					: null,
+				sync && sync.needAuth
+					? e("div", { className: "cost-err", style: { marginTop: "6px" } }, "云端令牌无效：请在「设置 → 插件 → 插件配置 → 花费统计」更新令牌。")
+					: null,
 				dashErr ? e("div", { className: "cost-err", style: { marginTop: "8px" } }, dashErr) : null,
-				!dash && !dashErr ? e("div", { className: "cost-hint", style: { marginTop: "12px" } }, "加载中…") : null,
-				dash ? statCards(dash, balance) : null,
-				dash ? mainPanel(dash, tab, setTab, scheme, setScheme) : null,
+				(!viewDash && !dashErr) ? e("div", { className: "cost-hint", style: { marginTop: "12px" } }, "加载中…") : null,
+				viewDash ? statCards(viewDash, balance, viewCtl) : null,
+				view !== "local" && dimension !== "total" && viewDash ? dimensionPanel(viewDash, dimension, cloudMatrix, loadingCloud => loadingCloud) : null,
+				viewDash ? mainPanel(viewDash, tab, setTab, scheme, setScheme) : null,
 				e("div", { className: "cost-panel" },
 					e("div", { className: "cost-row" }, e("span", { className: "cost-panel-title" }, "Token 用量统计")),
 					e("div", { style: { marginTop: "8px" } },
 						usage ? e(UsageHeatmap, { data: usage })
 							: usageErr ? e("div", { className: "cost-err" }, "加载失败：" + usageErr)
 							: e("div", { className: "cost-hint" }, "加载中…"))),
-				subPanel(kimi, dash, now, () => loadKimi(true)),
+				subPanel(kimi, viewDash, now, () => loadKimi(true)),
 				balancePanel(balance, manualKey, setManualKey, k => loadBalance(k)),
-				dash ? modelSections(dash) : null,
-				dash ? recentPanel(dash) : null,
-				e(PeakPanel, {}));
+				viewDash ? modelSections(viewDash) : null,
+				viewDash ? recentPanel(viewDash) : null,
+				e(PeakPanel, { sync }));
+		}
+
+		/** 分维度面板：合计之外的「按机器 / 按 Agent / 按模型 / 按项目」拆分 */
+		function dimensionPanel(dash, dimension, matrix, onReload) {
+			let rows = [];
+			if (dimension === "model") {
+				rows = dash.byModel.map(m => ({ key: m.model, cost: m.cost, calls: m.calls, tokens: m.tokens, tag: m.subscription ? "订阅" : (m.estimated ? "估算" : "") }));
+			} else if (dimension === "agent") {
+				rows = (dash.sources || []).map(s => ({ key: s.source, cost: s.cost, calls: s.calls, tokens: s.tokens, tag: (s.devices || []).length + " 台设备" }));
+			} else if (dimension === "device") {
+				rows = (dash.devices || []).map(d => ({ key: d.name || d.device, cost: d.cost, calls: d.calls, tokens: d.tokens, tag: (d.sources || []).join(" · ") }));
+			} else if (dimension === "project") {
+				// 记录里的 purpose 维度（云端 recent 不覆盖全部，这里用 byModel 之外的近似提示）
+				rows = [];
+			}
+			const head = dimension === "device" ? "按机器" : dimension === "agent" ? "按 Agent" : dimension === "model" ? "按模型" : "按项目";
+			return e("div", { className: "cost-panel" },
+				e("div", { className: "cost-row" },
+					e("span", { className: "cost-panel-title" }, head + " 明细"),
+					e("span", { className: "cost-spacer" }),
+					e("span", { className: "cost-hint" }, "数据来源：" + (matrix ? "云端" : "本地+云端"))),
+				rows.length === 0
+					? e("div", { className: "cost-hint", style: { marginTop: "6px" } }, "暂无该维度的数据（项目维度需要在云端「记录」页按 purpose 筛选查看）")
+					: e("div", { className: "cost-matrix" },
+						e("div", { className: "cost-matrix-row cost-matrix-head" },
+							e("span", { className: "cost-matrix-key" }, head),
+							e("span", { className: "cost-matrix-num" }, "花费"),
+							e("span", { className: "cost-matrix-num" }, "调用"),
+							e("span", { className: "cost-matrix-num" }, "Tokens"),
+							e("span", { className: "cost-matrix-note" }, "备注")),
+						rows.sort((a, b) => b.cost - a.cost).slice(0, 50).map((r, i) =>
+							e("div", { key: "dim" + i, className: "cost-matrix-row" },
+								e("span", { className: "cost-matrix-key", title: r.key }, r.key),
+								e("span", { className: "cost-matrix-num" }, "¥" + fmtMoney(r.cost)),
+								e("span", { className: "cost-matrix-num" }, fmtInt(r.calls)),
+								e("span", { className: "cost-matrix-num" }, fmtCompact(r.tokens)),
+								e("span", { className: "cost-matrix-note" }, r.tag || "")))),
+				matrix && matrix.rows && e("div", { style: { marginTop: "10px" } },
+					e("div", { className: "cost-hint" }, "设备 × Agent 矩阵（行=设备，列=Agent，点击云端「设备 × Agent」页可下钻到记录）"),
+					e("div", { className: "cost-matrix" },
+						e("div", { className: "cost-matrix-row cost-matrix-head" },
+							e("span", { className: "cost-matrix-key" }, "设备"),
+							(matrix.cols || []).map(c => e("span", { key: "c" + c, className: "cost-matrix-num" }, c)),
+							e("span", { className: "cost-matrix-num" }, "合计")),
+						(matrix.rows || []).map((r, i) =>
+							e("div", { key: "m" + i, className: "cost-matrix-row" },
+								e("span", { className: "cost-matrix-key", title: r.device }, r.name || r.device),
+								(matrix.cols || []).map(c => e("span", { key: "m" + i + c, className: "cost-matrix-num" }, "¥" + fmtMoney((r.cells[c] || {}).cost || 0))),
+								e("span", { className: "cost-matrix-num cost-matrix-total" }, "¥" + fmtMoney(r.cost)))),
+						e("div", { className: "cost-matrix-row cost-matrix-total" },
+							e("span", { className: "cost-matrix-key" }, "合计"),
+							(matrix.cols || []).map(c => e("span", { key: "t" + c, className: "cost-matrix-num" }, "¥" + fmtMoney((matrix.rows || []).reduce((s, r) => s + (((r.cells || {})[c] || {}).cost || 0), 0)))),
+							e("span", { className: "cost-matrix-num" }, "¥" + fmtMoney((matrix.totals || {}).cost || 0))))));
 		}
 
 		function StatusLine(props) {
@@ -1237,6 +1574,19 @@ window.__ModuleLoader__.load({
 				{ name: "settings.section", id: "cost-dashboard", order: 30, label: "花费统计" },
 				() => e(Dashboard, {}),
 			));
+			// 插件配置卡片（设置 → 插件 → 插件配置）：以 settings 命名空间为键。
+			// 插槽由 @deepseek-ai/dsh-client-ui-settings-plugins 在运行时声明；
+			// 该版本未提供时静默跳过（功能由花费统计页的只读回显 + 工具承接）。
+			const pluginItemKey = "settings.plugin.item";
+			const hasPluginItem = typeof slots.entries === "function" && slots.entries(pluginItemKey).length > 0;
+			if (hasPluginItem) {
+				slots.inject(pluginItemKey, () => slots.register(
+					{ name: pluginItemKey, key: "cost-tracker" },
+					() => e(PluginConfigCard, {}),
+				));
+			} else if (typeof console !== "undefined" && console.info) {
+				console.info("[dsh-cost-tracker] 未检测到 settings.plugin.item 插槽：插件配置卡未注册（云端配置仍可在「设置 → 花费统计」查看，或等待宿主升级后重启）。");
+			}
 			slots.inject("conversation.composer.dock", () => slots.register(
 				{ name: "conversation.composer.dock", id: "cost", order: 1 },
 				(props) => e(StatusLine, props || {}),
