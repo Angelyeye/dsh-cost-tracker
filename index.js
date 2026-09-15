@@ -19,7 +19,7 @@ import { createSyncEngine, setPluginVersion, SOURCE as SYNC_SOURCE, SYNC_VERSION
 import { Schema } from './schema.js'
 
 /** 插件版本（写入上报信封，便于云端排查版本差异） */
-const PLUGIN_VERSION = '1.8.6'
+const PLUGIN_VERSION = '1.8.7'
 setPluginVersion(PLUGIN_VERSION)
 
 /** 「设置 → 插件 → 插件配置」里的卡片字段（与 settings 命名空间一致） */
@@ -773,13 +773,16 @@ export default {
     // 重新选版计费，无需重新采集。
     // 只重算明细：明细保留最近 DETAIL_DAYS 天，更早的记录早已折叠进日汇总，
     // 而日汇总覆盖的时间段远早于任何价格切换窗口，故不涉及。
+    // **默认扫描全部明细**（since=0）：早期版本默认「自最近一个价格时代起算」，
+    // 结果更早时代里被旧代码标错口径的记录（如现役名曾落入兜底而被标 estimated）
+    // 会被静默跳过——补账只做一半却提示「无需重算」。补账是幂等的，全扫代价可忽略。
     // 默认只试算（不落盘），传 apply: true 才写回。
     function recomputeCosts(args) {
       const a = args || {}
-      const fallback = PRICE_ERAS[PRICE_ERAS.length - 1].since
-      let since = fallback
+      // since：显式传入（ISO 或 epoch ms）则按它限定时段；缺省 0 = 全时段。
+      let since = 0
       if (typeof a.since === 'string' && Number.isFinite(Date.parse(a.since))) since = Date.parse(a.since)
-      else if (Number.isFinite(a.since) && a.since > 0) since = a.since
+      else if (Number.isFinite(a.since) && a.since >= 0) since = a.since
       const apply = a.apply === true
       const byModel = {}
       let scanned = 0, changed = 0, oldCost = 0, newCost = 0, estimatedFlips = 0
@@ -825,7 +828,8 @@ export default {
         ok: true,
         applied: apply && changed > 0,
         since,
-        era: eraAt(since).id,
+        // since=0 表示全时段：此时不存在「单一时代」，era 返回 null（旧版会误报为 legacy）
+        era: since === 0 ? null : eraAt(since).id,
         scanned,
         changed,
         estimatedFlips,
@@ -1157,21 +1161,23 @@ export default {
 
     ctx.tools.register({
       name: 'cost_recompute',
-      description: '按「计费时代」重算已入库记录的费用（一次性补账）。用于价格调整后宿主未及时重启、导致记录按旧价入库的情况；默认只试算不落盘，传 apply: true 才写回。',
+      description: '按「计费时代」重算已入库记录的费用（一次性补账）。用于价格调整或计价口径修正后宿主未及时重启、导致记录按旧口径入库的情况；默认只试算不落盘，传 apply: true 才写回。默认扫描**全部**明细（since=0），避免更早时代里标错口径的记录被漏掉。',
       parameters: {
         type: 'object',
         properties: {
           apply: { type: 'boolean', description: '是否把重算结果写回（默认 false，仅试算）' },
-          since: { type: 'string', description: '重算起始时刻（ISO 字符串或 epoch ms）；默认取最近一次价格时代的生效时刻' },
+          since: { type: 'string', description: '重算起始时刻（ISO 字符串或 epoch ms）；默认 0 = 全时段扫描（补账幂等，建议保持默认）' },
         },
         additionalProperties: true,
       },
       output: {
         schema: { type: 'object', additionalProperties: true },
         render: (args, v) => {
-          const when = new Date(v.since + 28800000).toISOString().replace('T', ' ').slice(0, 16).replace(/-/g, '/')
+          const scope = v.since === 0
+            ? '全时段'
+            : ('自 ' + new Date(v.since + 28800000).toISOString().replace('T', ' ').slice(0, 16).replace(/-/g, '/') + ' 北京起 · era=' + v.era)
           const lines = [
-            '费用重算（自 ' + when + ' 北京起 · era=' + v.era + '）',
+            '费用重算（' + scope + '）',
             '扫描 ' + v.scanned + ' 条，需修正 ' + v.changed + ' 条' + (v.estimatedFlips ? '（其中 ' + v.estimatedFlips + ' 条仅订正「估算」标记，金额不变）' : ''),
             '合计：¥' + v.oldCost + ' → ¥' + v.newCost + '（' + (v.delta >= 0 ? '+' : '') + v.delta + '）',
           ]

@@ -238,6 +238,15 @@ POST /api/cost-tracker/export       导出 CSV
 
 ## 更新记录
 
+### v1.8.7(2026-09-15)
+
+**修复：`cost_recompute` 默认只扫描「最近一个价格时代」，更早的陈旧记录被静默跳过**
+
+- v1.8.6 补账后本机仍有 **750 条 `deepseek-flash` 记录停留在「估算」标记**（时间落在 09-10 21:24 ～ 09-14 02:36）：旧默认 `since` 取**最近一个价格时代的生效时刻**（`v41pro` = 09-14 12:00），该时刻之前的记录一条都没进扫描，而提示却是「没有需要重算的记录」。
+- 默认改为**全时段扫描（`since = 0`）**；`since: 0` 现被正确识别为全时段（旧版因 `> 0` 判断会回落），全时段时 `era` 返回 `null` 不再误报单一时代。补账幂等，全扫代价可忽略。
+- 本机实测：`scanned=1642 / changed=772 / estimatedFlips=750 / delta=0.0000`，再跑一次 `changed=0`；**1643 条 `deepseek-flash` 的「估算」标记清零、金额未变**（仅 Kimi 订阅的 5 条仍为估算，属正常）。
+- 加固：`client-registration.test.js` 新增版本号一致性断言（`package.json` 版本必须等于 `index.js` 的 `PLUGIN_VERSION`，v1.8.6 发布时二者曾漂移）。
+
 ### v1.8.6(2026-09-15)
 
 **修复：计费规则与官方定价的两处口径偏差**（核查基准：官方[价格卡](https://api-docs.deepseek.com/zh-cn/quick_start/pricing) + [V4.1 Flash 发布通告](https://api-docs.deepseek.com/zh-cn/news/news260910)）

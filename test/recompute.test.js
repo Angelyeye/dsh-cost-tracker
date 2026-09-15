@@ -78,16 +78,17 @@ ok(registered.has('cost_prices') && registered.has('cost_peak'), '回归: 既有
 const before = readFileSync(storeFile, 'utf8')
 const dry = await tool.execute({})
 ok(dry.ok === true && dry.applied === false, '试算: 未落盘')
-ok(dry.era === 'v41pro', '试算: 默认按最近价格时代 v41pro 起算')
-ok(dry.since === Date.UTC(2026, 8, 14, 4, 0, 0), '试算: 起始时刻 = 2026-09-14 12:00 北京（V4-Pro 路由时刻）')
-ok(dry.scanned === 3, '试算: 只扫描路由时刻之后的 3 条记录（更早两条不计）')
+ok(dry.since === 0, '试算: 默认全时段扫描（since=0，不漏更早时代）')
+ok(dry.era === null, '试算: 全时段扫描时 era 为 null（不误报单一时代）')
+ok(dry.scanned === 5, '试算: 全时段扫描覆盖全部 5 条记录')
 ok(dry.changed === 3, '试算: 3 条需修正（路由后 V4-Pro + 视觉版 + 误标估算的 deepseek-flash）')
 ok(dry.estimatedFlips === 1, '试算: 1 条仅订正「估算」标记')
 ok(readFileSync(storeFile, 'utf8') === before, '试算: 磁盘内容未被改动')
-// 旧口径 1.068(pro峰) + 0.356(视觉峰) + 0.3732(误价闲) = 1.7972
-// 新口径 0.2488 + 0.2488 + 0.1244 → 三条全部归入 deepseek-flash 档 = 0.622
-approx(dry.oldCost, 1.7972, '试算: 原合计 ¥1.7972')
-approx(dry.newCost, 0.622, '试算: 新合计 ¥0.622')
+// 全时段试算：合计含未改动的两条（旧价 ¥1.068 与 ¥0.534），可改动的三条合计 ¥0.622
+const UNCHANGED = OLD_PRO_PEAK_BEFORE + OLD_PRO_OFF
+approx(dry.oldCost, 1.7972 + UNCHANGED, '试算: 原合计 ¥3.3992（含两条不需改动）')
+approx(dry.newCost, 0.622 + UNCHANGED, '试算: 新合计 ¥2.224（金额变化仅 ¥-1.1752）')
+approx(dry.delta, -1.1752, '试算: 差额 ¥-1.1752（全部来自视觉版与误标估算记录）')
 ok(dry.byModel.length >= 2, '试算: 按模型给出明细')
 
 // ---------- 2. 落盘 ----------

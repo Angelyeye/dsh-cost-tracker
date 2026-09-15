@@ -212,6 +212,19 @@ console.log('[6] 插件配置卡片注册方式')
     /installSection\([^,]+,\s*'cost-tracker'/.test(readFileSync(join(root, 'index.js'), 'utf8')))
 }
 
+// ---------- [7] 版本号单一事实源：package.json 与 index.js 的 PLUGIN_VERSION 必须一致 ----------
+// 两处手写版本号曾各自漂移（v1.8.6 发布时 package.json 已改、index.js 仍是 1.8.5），
+// 而 index.js 的常量会随上报信封发给云端，用于排查"某设备跑的是哪个版本"——
+// 漂移会让云端看到错误的版本号。此断言把它变成发布闸门。
+console.log('[7] 版本号一致性（package.json = index.js PLUGIN_VERSION）')
+{
+  const indexSource = readFileSync(join(root, 'index.js'), 'utf8')
+  const m = /const PLUGIN_VERSION = '([^']+)'/.exec(indexSource)
+  check('index.js 中存在 PLUGIN_VERSION 常量', !!m)
+  check(`PLUGIN_VERSION 等于 package.json 版本（${pkg.version}）`, !!m && m[1] === pkg.version,
+    m ? `index.js=${m[1]} / package.json=${pkg.version}` : '未找到常量')
+}
+
 console.log('')
 if (failures > 0) {
   console.log(`FAILED: ${failures} 项断言未通过`)
