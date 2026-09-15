@@ -505,11 +505,125 @@ window.__ModuleLoader__.load({
 		function requireLocal(id, fallback) {
 			try { return require(id) } catch (e) { return fallback || {} }
 		}
+		// ---- 三态视图纯逻辑：bundle 必须自带一份完整实现 ----
+		// 宿主的客户端模块加载器只会加载本插件的**客户端 bundle**（client.js）；view.js 是宿主侧
+		// ESM 模块，浏览器里 require("./view") 必然取不到。1.8.0~1.8.2 在这里退化成了只含「本机」
+		// 的空桩 —— 三态开关只剩一个按钮，而且 normalizeCloudDash / mergeDash 被空实现顶掉，
+		// 即便云端数据取回来也永远合并不进来（表现为「只有本机这个选项」）。
+		// 现在把 view.js 的纯逻辑完整内联为兜底值：取不到模块时行为与 view.js 完全一致；
+		// 两者的一致性由 test/client-render.test.js「有无 view 模块渲染结果必须完全相同」钉住。
+		function vZeroSlice() { return { real: 0, calls: 0, tokens: 0, sub: 0, subCalls: 0, subTokens: 0 }; }
+		function vR2(x) { return Math.round((Number(x) || 0) * 100) / 100; }
+		function vAddSlice(a, b) {
+			const x = a || vZeroSlice(), y = b || vZeroSlice();
+			return {
+				real: (x.real || 0) + (y.real || 0),
+				calls: (x.calls || 0) + (y.calls || 0),
+				tokens: (x.tokens || 0) + (y.tokens || 0),
+				sub: (x.sub || 0) + (y.sub || 0),
+				subCalls: (x.subCalls || 0) + (y.subCalls || 0),
+				subTokens: (x.subTokens || 0) + (y.subTokens || 0),
+			};
+		}
+		/** 把云端返回补齐成本地 buildDashboard 形状（缺字段一律 0，避免渲染时报错） */
+		function vNormalizeCloudDash(cloud, fallbackDays) {
+			if (!cloud || cloud.ok === false) return null;
+			const safe = (s) => Object.assign(vZeroSlice(), s || {});
+			return Object.assign({}, cloud, {
+				days: cloud.days || fallbackDays || 7,
+				today: safe(cloud.today),
+				month: safe(cloud.month),
+				all: safe(cloud.all),
+				byDay: cloud.byDay || [],
+				byModel: cloud.byModel || [],
+				byModelDay: (cloud.byModelDay || []).map((m) => Object.assign({}, m, {
+					days: (m.days || []).map((d) => Object.assign({ calls: 0, tokens: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 }, d)),
+				})),
+				recent: cloud.recent || [],
+				devices: cloud.devices || [],
+				sources: cloud.sources || [],
+			});
+		}
+		/** 合并两份 buildDashboard 形状的数据（本地 + 云端_排除本机 = 全网，本机恰好计一次） */
+		function vMergeDash(local, cloud) {
+			if (!local) return cloud;
+			if (!cloud) return local;
+			const byDayMap = new Map();
+			for (const d of (local.byDay || [])) byDayMap.set(d.date, { date: d.date, label: d.label, peak: d.peak || 0, off: d.off || 0, flat: d.flat || 0 });
+			for (const d of (cloud.byDay || [])) {
+				const cur = byDayMap.get(d.date) || { date: d.date, label: d.label, peak: 0, off: 0, flat: 0 };
+				cur.peak += d.peak || 0; cur.off += d.off || 0; cur.flat += d.flat || 0;
+				byDayMap.set(d.date, cur);
+			}
+			const byModelMap = new Map();
+			const addModel = (m) => {
+				const cur = byModelMap.get(m.model) || { model: m.model, subscription: !!m.subscription, estimated: !!m.estimated, calls: 0, tokens: 0, cost: 0 };
+				cur.calls += m.calls || 0; cur.tokens += m.tokens || 0; cur.cost += m.cost || 0;
+				cur.subscription = cur.subscription && !!m.subscription;
+				cur.estimated = cur.estimated || !!m.estimated;
+				byModelMap.set(m.model, cur);
+			};
+			for (const m of (local.byModel || [])) addModel(m);
+			for (const m of (cloud.byModel || [])) addModel(m);
+			// byModelDay：以日期为并集键合并，保证图表按天轴拼得上
+			const byModelDayMap = new Map();
+			const addModelDay = (m) => {
+				const cur = byModelDayMap.get(m.model) || { model: m.model, subscription: !!m.subscription, estimated: !!m.estimated, days: new Map() };
+				for (const d of (m.days || [])) {
+					const cell = cur.days.get(d.date) || { date: d.date, label: d.label, calls: 0, tokens: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+					cell.calls += d.calls || 0; cell.tokens += d.tokens || 0; cell.input += d.input || 0; cell.output += d.output || 0;
+					cell.cacheRead += d.cacheRead || 0; cell.cacheWrite += d.cacheWrite || 0; cell.cost += d.cost || 0;
+					cur.days.set(d.date, cell);
+				}
+				byModelDayMap.set(m.model, cur);
+			};
+			for (const m of (local.byModelDay || [])) addModelDay(m);
+			for (const m of (cloud.byModelDay || [])) addModelDay(m);
+			const dates = Array.from(byDayMap.keys()).sort();
+			const byModelDay = Array.from(byModelDayMap.values()).map((m) => Object.assign({}, m, {
+				days: dates.map((d) => m.days.get(d) || { date: d, label: byDayMap.get(d).label, calls: 0, tokens: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 }),
+			}));
+			return Object.assign({}, local, {
+				source: "merged",
+				realCost: vR2((local.realCost || 0) + (cloud.realCost || 0)),
+				realCalls: (local.realCalls || 0) + (cloud.realCalls || 0),
+				realTokens: (local.realTokens || 0) + (cloud.realTokens || 0),
+				subEquivalent: vR2((local.subEquivalent || 0) + (cloud.subEquivalent || 0)),
+				subCalls: (local.subCalls || 0) + (cloud.subCalls || 0),
+				subTokens: (local.subTokens || 0) + (cloud.subTokens || 0),
+				peakCost: vR2((local.peakCost || 0) + (cloud.peakCost || 0)),
+				offCost: vR2((local.offCost || 0) + (cloud.offCost || 0)),
+				flatCost: vR2((local.flatCost || 0) + (cloud.flatCost || 0)),
+				today: vAddSlice(local.today, cloud.today),
+				month: vAddSlice(local.month, cloud.month),
+				all: vAddSlice(local.all, cloud.all),
+				byDay: dates.map((d) => byDayMap.get(d)),
+				byModel: Array.from(byModelMap.values()).sort((a, b) => b.cost - a.cost),
+				byModelDay,
+				recent: (cloud.recent || []).concat(local.recent || []).slice(0, 20),
+				devices: cloud.devices || [],
+				sources: cloud.sources || [],
+				asOf: cloud.asOf || 0,
+			});
+		}
 		const VIEW = requireLocal("./view", {
-			BOARD_VIEWS: [{ id: "local", label: "本机" }],
-			BOARD_DIMS: [{ id: "total", label: "合计" }],
-			normalizeCloudDash: () => null,
-			mergeDash: (a) => a,
+			BOARD_VIEWS: [
+				{ id: "local", label: "本机" },
+				{ id: "local+cloud", label: "本机+云端" },
+				{ id: "cloud", label: "仅云端" },
+			],
+			BOARD_DIMS: [
+				{ id: "total", label: "合计" },
+				{ id: "device", label: "按机器" },
+				{ id: "agent", label: "按 Agent" },
+				{ id: "model", label: "按模型" },
+				{ id: "project", label: "按项目" },
+			],
+			zeroSlice: vZeroSlice,
+			addSlice: vAddSlice,
+			r2: vR2,
+			normalizeCloudDash: vNormalizeCloudDash,
+			mergeDash: vMergeDash,
 		});
 		const BOARD_VIEWS = VIEW.BOARD_VIEWS;
 		const BOARD_DIMS = VIEW.BOARD_DIMS;
