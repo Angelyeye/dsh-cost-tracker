@@ -238,6 +238,19 @@ POST /api/cost-tracker/export       导出 CSV
 
 ## 更新记录
 
+### v1.8.8(2026-09-15)
+
+**修复：「仅云端」视图只有次数、费用整列 ¥0.0000**
+
+- 云端按量金额字段是 `realCost`、订阅等效是 `subEquivalent`，本地卡片读的是 `real` / `sub`；客户端归一化只透传原字段（`summary` 甚至整个丢掉），于是金额全 0、`calls/tokens` 因同名而正常。**测试里的云端假数据误用了 `real/sub`，把缺陷掩盖了**，现已改为线上真实形状。
+- `view.js` 新增 `cloudSlices()` 逐项映射（兼容 `realCost/real`、`subCost/subEquivalent/sub` 三种写法），`summary` 行同步映射。
+
+**新增：云端 `GET /api/v1/plugin-view`（设备令牌可读），让「仅云端」也能画图**
+
+- 该接口返回与本地 `buildDashboard` **同字段名**的完整形状（`today/month/all` + `byDay/byModel/byModelDay/recent`），并支持 `union` 并集。插件探测 `/api/v1/health` 的 caps 后优先使用，旧云端自动回退 `overview`（金额可用、图表为空）。
+- 顺带修掉云端同源缺陷：`pluginView` 的今日/本月/总花费原取自全表无过滤统计，**绕过了 `excludeDevice`**（「本机+云端」会把本机算两次）；现按同一过滤条件取切片，`calls/tokens` 只含按量、订阅另计。
+- 需云端 **1.2.0+** 才有该接口；未部署时插件自动回退，金额修复不依赖云端升级。
+
 ### v1.8.7(2026-09-15)
 
 **修复：`cost_recompute` 默认只扫描「最近一个价格时代」，更早的陈旧记录被静默跳过**

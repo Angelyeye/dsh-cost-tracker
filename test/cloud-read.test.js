@@ -1,9 +1,10 @@
 // ============================================================
 // 云端只读路径契约护栏（零依赖，直接 node 运行）
 //
-// 背景：插件的云端聚合读取（「仅云端 / 本机+云端」）走 /api/v1/overview|matrix|devices，
-// 用**设备令牌**鉴权。而 /api/admin/* 只认管理员会话 cookie —— 采集端手里只有设备令牌，
-// 走那条必然 401，这正是 1.8.0~1.8.2 里那两种视图拿不到数据的根因。
+// 背景：插件的云端聚合读取（「仅云端 / 本机+云端」）走 /api/v1/overview|matrix|devices
+// （概览路由在云端支持时优先用 /api/v1/plugin-view，见下），用**设备令牌**鉴权。
+// 而 /api/admin/* 只认管理员会话 cookie —— 采集端手里只有设备令牌，走那条必然 401，
+// 这正是 1.8.0~1.8.2 里那两种视图拿不到数据的根因。
 //
 // fetchCloud / listCloudDevices 定义在 index.js 的 apply() 内部（依赖宿主 ctx），
 // 无法直接单测，所以这里对源码做契约断言：一旦有人把读取路径改回 /api/admin，
@@ -31,9 +32,14 @@ function check(name, condition, detail) {
 }
 
 console.log('[1] 云端只读接口路径')
-check('聚合读取使用设备令牌可读的 /api/v1/<route>',
-  /cloudConfig\.cloudUrl\s*\+\s*'\/api\/v1\/'\s*\+\s*query\.route/.test(index),
-  "应为 cloudConfig.cloudUrl + '/api/v1/' + query.route")
+check('聚合读取使用设备令牌可读的 /api/v1/<endpoint>',
+  /cloudConfig\.cloudUrl\s*\+\s*'\/api\/v1\/'\s*\+\s*(query\.route|endpoint)/.test(index),
+  "应为 cloudConfig.cloudUrl + '/api/v1/' + <endpoint>")
+check('概览在云端支持时优先用 /api/v1/plugin-view（图表/分模型数据来源）',
+  /endpoint\s*=\s*'plugin-view'/.test(index) && /devicePluginView/.test(index),
+  'plugin-view 一次返回卡片 + byDay/byModel/byModelDay/recent；旧云端回退 overview')
+check('带 union 的并集口径仍走 overview（卡片保持全网口径）',
+  /query\.route === 'overview' && !unionParts/.test(index))
 check('设备维度清单同样走 /api/v1/devices',
   /cloudConfig\.cloudUrl\s*\+\s*'\/api\/v1\/devices'/.test(index))
 check('不再用设备令牌去读管理接口 /api/admin',

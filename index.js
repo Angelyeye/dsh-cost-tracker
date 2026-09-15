@@ -19,7 +19,7 @@ import { createSyncEngine, setPluginVersion, SOURCE as SYNC_SOURCE, SYNC_VERSION
 import { Schema } from './schema.js'
 
 /** 插件版本（写入上报信封，便于云端排查版本差异） */
-const PLUGIN_VERSION = '1.8.7'
+const PLUGIN_VERSION = '1.8.8'
 setPluginVersion(PLUGIN_VERSION)
 
 /** 「设置 → 插件 → 插件配置」里的卡片字段（与 settings 命名空间一致） */
@@ -953,6 +953,23 @@ export default {
     }
 
     const deviceNameCache = { at: 0, list: [] }
+    /** 云端能力探测（/api/v1/health 的 caps，缓存 60s）：决定能否用「插件形状」只读接口 */
+    const cloudCapsCache = { at: 0, ok: false, pluginView: false }
+    async function cloudCaps() {
+      if (Date.now() - cloudCapsCache.at < 60000) return cloudCapsCache
+      cloudCapsCache.at = Date.now()
+      cloudCapsCache.ok = false
+      cloudCapsCache.pluginView = false
+      try {
+        const res = await fetch(cloudConfig.cloudUrl + '/api/v1/health', { headers: { authorization: 'Bearer ' + cloudConfig.cloudToken } })
+        const body = await res.json()
+        if (body && body.ok === true) {
+          cloudCapsCache.ok = true
+          cloudCapsCache.pluginView = !!(body.caps && body.caps.devicePluginView)
+        }
+      } catch (e) { /* 探测失败按「旧云端」处理，走 overview 回退 */ }
+      return cloudCapsCache
+    }
     async function listCloudDevices() {
       if (Date.now() - deviceNameCache.at < 30000 && deviceNameCache.list.length) return deviceNameCache.list
       try {
@@ -989,7 +1006,8 @@ export default {
       if (mode !== 'cloud' && !(query.devices && query.devices.length)) {
         // 识别「本机」：设备 ID 命中，或设备名与插件里配置的一致（用户改名后 id 可能不同）
         const all = await listCloudDevices()
-        const myId = (st && st.deviceId) || ''
+        let myId = (st && st.deviceId) || ''
+        if (!myId) { try { myId = loadIdentity().machineId } catch (e) { myId = '' } }
         const myName = ((st && st.deviceName) || '').trim()
         const isSelf = (d) => (myId && d.id === myId) || (myName && (d.name || '').trim() === myName)
         const self = all.filter(isSelf)
@@ -1016,7 +1034,20 @@ export default {
       // 只读聚合走 /api/v1/*（设备令牌可读）。/api/admin/* 只认管理员会话 cookie，
       // 采集端手里只有设备令牌，走那条必然 401 —— 这是 1.8.0~1.8.2 里「仅云端 /
       // 本机+云端」拿不到数据的根因。需要 dsh-cost-cloud ≥ 支持 /api/v1 只读接口的版本。
-      const url = cloudConfig.cloudUrl + '/api/v1/' + query.route + '?' + qs.toString()
+      //
+      // 端点选择：
+      //   · 概览路由在云端支持 /api/v1/plugin-view 时优先用它 —— 它一次返回**卡片 + 图表**
+      //     的全套字段（today/month/all/byDay/byModel/byModelDay/recent），「仅云端」视图
+      //     才能渲染消费柱状图、分模型明细与最近记录；旧云端没有该接口时回退 overview
+      //     （卡片可用，图表为空），保证不因云端版本差异而整体不可用。
+      //   · 带 union（「本机+云端」并集）时沿用 overview：其卡片是**全网**口径，与并集相加的
+      //     语义一致；plugin-view 的卡片落在并集范围内，换成它会让总额口径突变。
+      let endpoint = query.route
+      if (query.route === 'overview' && !unionParts) {
+        const caps = await cloudCaps()
+        if (caps.pluginView) endpoint = 'plugin-view'
+      }
+      const url = cloudConfig.cloudUrl + '/api/v1/' + endpoint + '?' + qs.toString()
       const ac = new AbortController()
       const t = setTimeout(() => ac.abort(), 12000)
       try {
@@ -1024,7 +1055,7 @@ export default {
         const body = await res.json().catch(() => null)
         if (!body || body.ok !== true) {
           const hint = res.status === 404
-            ? '云端版本过旧：缺少设备只读接口 /api/v1/' + query.route + '，请升级 dsh-cost-cloud 后重试'
+            ? '云端版本过旧：缺少设备只读接口 /api/v1/' + endpoint + '，请升级 dsh-cost-cloud 后重试'
             : null
           const out = { ok: false, error: hint || (body && body.error) || ('HTTP ' + res.status), code: (body && body.code) || (res.status === 404 ? 'CLOUD_TOO_OLD' : 'CLOUD_ERROR') }
           return out

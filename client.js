@@ -525,15 +525,65 @@ window.__ModuleLoader__.load({
 				subTokens: (x.subTokens || 0) + (y.subTokens || 0),
 			};
 		}
-		/** 把云端返回补齐成本地 buildDashboard 形状（缺字段一律 0，避免渲染时报错） */
+		/** 把云端返回补齐成本地 buildDashboard 形状（缺字段一律 0，避免渲染时报错）
+		 *
+		 *  ⚠️ 字段名必须**逐项映射**，不能只靠 Object.assign 透传：
+		 *   · 云端 overview/plugin-view 的按量金额叫 `realCost`、订阅等效叫 `subEquivalent`，
+		 *     而本地 buildDashboard 与所有卡片读的是 `real` / `sub`；
+		 *   · 归一化函数此前把整个对象重建，只搬运 today/month/all/byDay/byModel/…，
+		 *     于是 `summary.realCost`、`today.real` 一起丢掉 —— 卡片与底部汇总行双双显示
+		 *     ¥0.0000，而「调用次数 / Tokens」因为两边同名（calls/tokens）显示正常。
+		 *     这个组合（次数对、金额 0）就是「仅云端只有次数没有费用」的根因。
+		 */
+		function vCloudSlices(cloud) {
+			// 概览口径：realCost/subEquivalent；插件形状口径：real/sub。两种都接受。
+			const pick = (s) => {
+				if (!s) return null;
+				return Object.assign(vZeroSlice(), s, {
+					real: Number(s.real != null ? s.real : (s.realCost != null ? s.realCost : 0)) || 0,
+					sub: Number(s.sub != null ? s.sub : (s.subCost != null ? s.subCost : (s.subEquivalent != null ? s.subEquivalent : 0))) || 0,
+					calls: Number(s.calls) || 0,
+					tokens: Number(s.tokens) || 0,
+					subCalls: Number(s.subCalls) || 0,
+					subTokens: Number(s.subTokens) || 0,
+				});
+			};
+			const all = pick(cloud.all) || vZeroSlice();
+			const allRaw = cloud.all || {};
+			const summary = cloud.summary || {};
+			const summaryMapped = {
+				real: Number(summary.real != null ? summary.real : (summary.realCost != null ? summary.realCost : all.real)) || 0,
+				realCalls: Number(summary.realCalls != null ? summary.realCalls : (allRaw.calls != null ? allRaw.calls : all.calls)) || 0,
+				realTokens: Number(summary.realTokens != null ? summary.realTokens : (allRaw.tokens != null ? allRaw.tokens : all.tokens)) || 0,
+				sub: Number(summary.sub != null ? summary.sub : (summary.subEquivalent != null ? summary.subEquivalent : summary.subCost != null ? summary.subCost : all.sub)) || 0,
+				subCalls: Number(summary.subCalls != null ? summary.subCalls : all.subCalls) || 0,
+				subTokens: Number(summary.subTokens != null ? summary.subTokens : all.subTokens) || 0,
+				cost: Number(summary.cost != null ? summary.cost : all.real + all.sub) || 0,
+				calls: Number(summary.calls != null ? summary.calls : all.calls + all.subCalls) || 0,
+				tokens: Number(summary.tokens != null ? summary.tokens : all.tokens + all.subTokens) || 0,
+				peakCost: Number(summary.peakCost != null ? summary.peakCost : 0) || 0,
+				offCost: Number(summary.offCost != null ? summary.offCost : 0) || 0,
+				flatCost: Number(summary.flatCost != null ? summary.flatCost : 0) || 0,
+				driftAbs: Number(summary.driftAbs) || 0,
+				estimatedRows: Number(summary.estimatedRows) || 0,
+				input: Number(summary.input) || 0,
+				output: Number(summary.output) || 0,
+				cacheRead: Number(summary.cacheRead) || 0,
+				cacheWrite: Number(summary.cacheWrite) || 0,
+				reasoning: Number(summary.reasoning) || 0,
+			};
+			return { today: pick(cloud.today) || vZeroSlice(), month: pick(cloud.month) || vZeroSlice(), all, summary: summaryMapped };
+		}
 		function vNormalizeCloudDash(cloud, fallbackDays) {
 			if (!cloud || cloud.ok === false) return null;
-			const safe = (s) => Object.assign(vZeroSlice(), s || {});
+			const s = vCloudSlices(cloud);
+			// 最近记录：云端 recent 的字段名与本地一致（{ts,time,...}），本地 mock 也走同一契约
 			return Object.assign({}, cloud, {
 				days: cloud.days || fallbackDays || 7,
-				today: safe(cloud.today),
-				month: safe(cloud.month),
-				all: safe(cloud.all),
+				today: s.today,
+				month: s.month,
+				all: s.all,
+				summary: s.summary,
 				byDay: cloud.byDay || [],
 				byModel: cloud.byModel || [],
 				byModelDay: (cloud.byModelDay || []).map((m) => Object.assign({}, m, {

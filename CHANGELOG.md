@@ -2,6 +2,30 @@
 
 本文件用中文记录 dsh-cost-tracker 的版本变更。
 
+## v1.8.8(2026-09-15)
+
+**修复：「仅云端」视图只有请求次数、费用整列为 ¥0.0000（字段名未映射）**
+
+- **现场**：看板切到「仅云端」后，三张金额卡与底部汇总全为 `¥0.0000`，而「API 请求次数 / Tokens」正常（如 4,271 次、712.6M）。这个「次数对、金额 0」的组合直接指向字段名不匹配。
+- **根因**：云端 `/api/v1/overview` 的按量金额字段是 **`realCost`**、订阅等效是 **`subEquivalent`**，而本地 `buildDashboard` 与所有卡片读的是 **`real` / `sub`**。客户端的 `normalizeCloudDash`（与内联兜底 `vNormalizeCloudDash`）当时只把 `today/month/all` 原样透传，`summary` 更是整个丢掉 —— 于是金额全 0，`calls/tokens` 因两边同名而幸存。**测试里那份云端假数据误用了 `real/sub`，把缺陷掩盖了**（已改为与线上一致的 `realCost` 形状）。
+- **修法**：`view.js` 新增 `cloudSlices()` 做**逐项字段映射**（同时接受 `realCost/real`、`subCost/subEquivalent/sub` 三种写法，向后兼容旧云端），客户端内联兜底同步实现；`summary` 行按 `realCost → real`、`subEquivalent → sub` 映射，缺字段时回退到 `all` 的对应值。归一化后同时保证 `real + sub` 与 `calls + subCalls` 口径与本地一致。
+
+**新增：云端「插件形状」只读接口，仅云端的图表不再为空**
+
+- 客户端要画消费柱状图、分模型明细与最近记录，需要 `byDay / byModel / byModelDay / recent`，而 `/api/v1/overview` 只给概览卡片 —— 「仅云端」的图表此前注定为空。
+- 云端新增 **`GET /api/v1/plugin-view`**（设备令牌可读，`caps.devicePluginView=true` 声明），字段名与本地 `buildDashboard` **逐项一致**，从根上消除这层适配；同时支持 `union` 并集（「本机+云端」）。
+- 插件探测 `/api/v1/health` 的 caps 后**优先走 plugin-view**，旧云端自动回退 `overview`（卡片可用、图表为空，不再整体不可用）；带 `union` 时仍走 overview（其卡片保持全网口径，与并集相加语义一致）。
+- 顺带修掉云端既有的**同源缺陷**：`pluginView()` 的 today/month/all 原取自 `totalsUnfiltered`（无条件下全表），会**绕过 `excludeDevice`** —— 「本机+云端」相加时本机被计入两次。现改为按同一过滤条件取切片，且 `calls/tokens` 只含按量、订阅另计（`subCalls/subTokens`），与本地口径对齐。
+
+**测试**
+
+- 插件 `test/client-render.test.js` 的云端假数据改为**线上真实形状**，新增 `[5] 仅云端金额映射`用例：断言今日 ¥0.50、总花费 ¥2.00、不再出现 `¥0.0000`、汇总行按 `realCost` 口径，且内联兜底与 `view.js` 结果逐字一致。
+- 新增 `test/cloud-view-e2e.test.js`：真实启动 `dsh-cost-cloud` 实例 → 设备令牌读 `plugin-view` → 过 `view.js` 归一化 → 断言卡片字段（含向后兼容旧概览口径）。
+- 新增 `test/cloud-read.test.js` 契约断言：概览优先 plugin-view、并集仍走 overview、不得回退到 `/api/admin`。
+- 云端新增 `test/plugin-view.test.js`（6 项）：caps 声明、字段形状、三切片受过滤约束、union 不重复计数、鉴权与开关、`range=all` 日期轴覆盖数据起点。
+
+**兼容**：无数据格式变更。云端需部署 **1.2.0** 及以上才有 `plugin-view`（未部署时插件自动回退，金额修复本身不依赖云端升级）。
+
 ## v1.8.7(2026-09-15)
 
 **修复：`cost_recompute` 的默认范围只覆盖「最近一个价格时代」，更早的陈旧记录被静默跳过**

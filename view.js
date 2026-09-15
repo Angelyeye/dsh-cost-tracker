@@ -43,15 +43,68 @@ export function addSlice(a, b) {
 	};
 }
 
-/** 把云端返回补齐成本地 buildDashboard 形状（缺字段一律 0，避免渲染时报错） */
+/**
+ * 云端切片的字段名映射：概览口径用 `realCost` / `subEquivalent`，
+ * 插件形状口径（/api/v1/plugin-view）用 `real` / `sub`，这里统一成本地口径。
+ * 缺字段一律 0，避免渲染时报错。
+ */
+export function cloudSlices(cloud) {
+	const pick = (s) => {
+		if (!s) return null;
+		return Object.assign(zeroSlice(), s, {
+			real: Number(s.real != null ? s.real : (s.realCost != null ? s.realCost : 0)) || 0,
+			sub: Number(s.sub != null ? s.sub : (s.subCost != null ? s.subCost : (s.subEquivalent != null ? s.subEquivalent : 0))) || 0,
+			calls: Number(s.calls) || 0,
+			tokens: Number(s.tokens) || 0,
+			subCalls: Number(s.subCalls) || 0,
+			subTokens: Number(s.subTokens) || 0,
+		});
+	};
+	const all = pick(cloud.all) || zeroSlice();
+	const allRaw = cloud.all || {};
+	const summary = cloud.summary || {};
+	return {
+		today: pick(cloud.today) || zeroSlice(),
+		month: pick(cloud.month) || zeroSlice(),
+		all,
+		summary: {
+			real: Number(summary.real != null ? summary.real : (summary.realCost != null ? summary.realCost : all.real)) || 0,
+			realCalls: Number(summary.realCalls != null ? summary.realCalls : (allRaw.calls != null ? allRaw.calls : all.calls)) || 0,
+			realTokens: Number(summary.realTokens != null ? summary.realTokens : (allRaw.tokens != null ? allRaw.tokens : all.tokens)) || 0,
+			sub: Number(summary.sub != null ? summary.sub : (summary.subEquivalent != null ? summary.subEquivalent : summary.subCost != null ? summary.subCost : all.sub)) || 0,
+			subCalls: Number(summary.subCalls != null ? summary.subCalls : all.subCalls) || 0,
+			subTokens: Number(summary.subTokens != null ? summary.subTokens : all.subTokens) || 0,
+			cost: Number(summary.cost != null ? summary.cost : all.real + all.sub) || 0,
+			calls: Number(summary.calls != null ? summary.calls : all.calls + all.subCalls) || 0,
+			tokens: Number(summary.tokens != null ? summary.tokens : all.tokens + all.subTokens) || 0,
+			peakCost: Number(summary.peakCost) || 0,
+			offCost: Number(summary.offCost) || 0,
+			flatCost: Number(summary.flatCost) || 0,
+			driftAbs: Number(summary.driftAbs) || 0,
+			estimatedRows: Number(summary.estimatedRows) || 0,
+			input: Number(summary.input) || 0,
+			output: Number(summary.output) || 0,
+			cacheRead: Number(summary.cacheRead) || 0,
+			cacheWrite: Number(summary.cacheWrite) || 0,
+			reasoning: Number(summary.reasoning) || 0,
+		},
+	};
+}
+
+/** 把云端返回补齐成本地 buildDashboard 形状（缺字段一律 0，避免渲染时报错）
+ *
+ *  ⚠️ 必须**逐项映射金额字段**：云端叫 `realCost` / `subEquivalent`，本地卡片读 `real` / `sub`。
+ *  此前只透传 today/month/all 的原字段，金额显示 ¥0.0000（次数因同名而正常）——
+ *  这就是「仅云端只有次数没有费用」的根因。 */
 export function normalizeCloudDash(cloud, fallbackDays) {
 	if (!cloud || cloud.ok === false) return null;
-	const safe = (s) => Object.assign(zeroSlice(), s || {});
+	const s = cloudSlices(cloud);
 	return Object.assign({}, cloud, {
 		days: cloud.days || fallbackDays || 7,
-		today: safe(cloud.today),
-		month: safe(cloud.month),
-		all: safe(cloud.all),
+		today: s.today,
+		month: s.month,
+		all: s.all,
+		summary: s.summary,
 		byDay: cloud.byDay || [],
 		byModel: cloud.byModel || [],
 		byModelDay: (cloud.byModelDay || []).map((m) => Object.assign({}, m, {
@@ -134,7 +187,7 @@ if (typeof window !== "undefined" && window.__ModuleLoader__ && typeof window.__
 	window.__ModuleLoader__.load({
 		id: "@angelyeye/dsh-cost-tracker/view",
 		factory: () => ({
-			BOARD_VIEWS, BOARD_DIMS, zeroSlice, addSlice, r2, normalizeCloudDash, mergeDash,
+			BOARD_VIEWS, BOARD_DIMS, zeroSlice, addSlice, r2, normalizeCloudDash, mergeDash, cloudSlices,
 		}),
 	});
 }

@@ -1,0 +1,85 @@
+// 端到端：云端 /api/v1/plugin-view → view.js normalizeCloudDash → 本地卡片字段
+// 目的：把「仅云端显示 ¥0.0000」这条链路的每一环都钉住（字段名映射 + 互斥口径）。
+//
+// ⚠️ 跨仓库依赖：本用例需要**兄弟目录** dsh-cost-cloud（真实启动其服务）。
+// CI（GitHub Actions）只检出插件仓库本身，因此这里**检测不到就跳过**并明确说明，
+// 不能让发布流水线因为缺一个可选仓库而失败。
+import assert from 'node:assert/strict'
+
+import { normalizeCloudDash } from '../view.js'
+
+let cloud = null
+let helpers = null
+try {
+  cloud = await import('../../dsh-cost-cloud/src/server.js')
+  helpers = await import('../../dsh-cost-cloud/test/helpers.js')
+} catch (e) {
+  cloud = null
+}
+
+if (!cloud) {
+  const { test } = await import('node:test')
+  test('跨仓库端到端（需要兄弟目录 dsh-cost-cloud）', { skip: '未找到 ../dsh-cost-cloud：本用例只在同时检出两个仓库时运行' }, () => {})
+} else {
+  const { test } = await import('node:test')
+  const { listen } = cloud
+  const { testConfig, tmpDir, addDevice, rec, ingestDirect } = helpers
+  const { rmSync } = await import('node:fs')
+  const T0 = Date.UTC(2026, 8, 12, 5, 0, 0)
+
+  test('云端 plugin-view → normalizeCloudDash：卡片金额字段不再是 0', async () => {
+    const dir = tmpDir()
+    const config = testConfig(dir, {
+      DSH_SYNC_TOKEN: 'shared-bootstrap-token-0123456789', ALLOW_DEVICE_SELF_REGISTER: '1',
+      HOST: '127.0.0.1', PORT: '0',
+    })
+    const { server, app, url } = await listen(config, { log: () => {} })
+    try {
+      const tokenB = addDevice(app, 'machine-B', '笔记本')
+      ingestDirect(app, {
+        token: tokenB, deviceId: 'machine-B', source: 'dsh', records: [
+          rec({ ts: T0, cost: 1.5, sessionId: 'b1' }),
+          rec({ ts: T0 + 1000, cost: 0.4, sessionId: 'b2', subscription: true, model: 'kimi-coding', provider: 'moonshot-ai' }),
+        ],
+      })
+      const res = await fetch(url + '/api/v1/plugin-view?range=all', { headers: { authorization: 'Bearer ' + tokenB } })
+      const raw = await res.json()
+      assert.equal(raw.ok, true)
+
+      // 归一化后：本地卡片读的 real / sub / calls / subCalls 必须齐备且互斥
+      const dash = normalizeCloudDash(raw, 7)
+      assert.ok(Math.abs(dash.all.real - 1.5) < 1e-9, 'all.real=' + dash.all.real)
+      assert.ok(Math.abs(dash.all.sub - 0.4) < 1e-9, 'all.sub=' + dash.all.sub)
+      assert.equal(dash.all.calls, 1, '按量调用 1 次')
+      assert.equal(dash.all.subCalls, 1, '订阅调用 1 次')
+      assert.equal(dash.today.real, 0, '今天无调用（样本是 9-12）')
+      assert.ok(dash.summary.real > 0, '底部汇总行金额非 0：' + dash.summary.real)
+      assert.equal(dash.summary.realCalls, 1, '汇总按量次数')
+      // 图表数据源必须在
+      assert.ok(dash.byDay.length > 0 && dash.byModel.length === 2 && dash.byModelDay.length === 2,
+        'byDay/byModel/byModelDay 齐备（仅云端才能画图）')
+      assert.equal(dash.recent.length, 2, '最近记录 2 条')
+    } finally {
+      await new Promise((r) => server.close(r))
+      try { rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }) } catch (e) {}
+    }
+  })
+
+  test('旧云端（概览口径 realCost）经归一化后金额同样非 0（向后兼容）', () => {
+    const legacy = {
+      ok: true, range: '7d', days: 7,
+      realCost: 2.0, realCalls: 100, realTokens: 5000000, subEquivalent: 0.3, subCalls: 5, subTokens: 90000,
+      today: { realCost: 0.5, calls: 10, tokens: 100000, subCost: 0, subCalls: 0, subTokens: 0 },
+      month: { realCost: 1.0, calls: 50, tokens: 2000000, subCost: 0, subCalls: 0, subTokens: 0 },
+      all: { realCost: 2.0, calls: 100, tokens: 5000000, subCost: 0.3, subCalls: 5, subTokens: 90000 },
+      summary: { realCost: 2.0, realCalls: 100, realTokens: 5000000, subEquivalent: 0.3, subCalls: 5, subTokens: 90000, cost: 2.3, calls: 105, tokens: 5090000 },
+      byDay: [], byModel: [], byModelDay: [], recent: [], devices: [], sources: [],
+    }
+    const dash = normalizeCloudDash(legacy, 7)
+    assert.ok(Math.abs(dash.today.real - 0.5) < 1e-9, 'today.real 由 realCost 映射而来：' + dash.today.real)
+    assert.ok(Math.abs(dash.all.real - 2.0) < 1e-9, 'all.real=' + dash.all.real)
+    assert.ok(Math.abs(dash.all.sub - 0.3) < 1e-9, 'all.sub 由 subCost 映射而来：' + dash.all.sub)
+    assert.ok(Math.abs(dash.summary.real - 2.0) < 1e-9, 'summary.real=' + dash.summary.real)
+    assert.equal(dash.summary.realCalls, 100)
+  })
+}

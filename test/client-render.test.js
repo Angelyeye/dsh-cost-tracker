@@ -62,13 +62,18 @@ const DASH = {
   byModelDay: [{ model: 'deepseek-v4.1-flash', days: [{ date: '2026-09-15', label: '09/15', calls: 391, tokens: 31382777, input: 100, output: 50, cacheRead: 900, cacheWrite: 0, cost: 5.81 }] }],
   recent: [], devices: [], sources: [],
 }
+// 云端响应按**线上真实形态**构造：概览口径的金额字段是 realCost/subEquivalent，
+// 不是本地 buildDashboard 的 real/sub。早先的假数据误用了 real/sub，
+// 于是「字段名没映射」这个真实缺陷在测试里被掩盖（线上表现为：仅云端视图次数正常、
+// 费用全为 ¥0.0000）。此处的形状必须与 dsh-cost-cloud 的 overview 保持一致。
 const CLOUD = {
   ok: true, range: '7d', days: 7, asOf: Date.now(),
-  realCost: 2.0, realCalls: 100, realTokens: 5000000, subEquivalent: 0, subCalls: 0, subTokens: 0,
+  realCost: 2.0, realCalls: 100, realTokens: 5000000, subEquivalent: 0.3, subCalls: 5, subTokens: 90000,
   peakCost: 1.0, offCost: 0.8, flatCost: 0.2,
-  today: { real: 0.5, calls: 10, tokens: 100000, sub: 0, subCalls: 0, subTokens: 0 },
-  month: { real: 1.0, calls: 50, tokens: 2000000, sub: 0, subCalls: 0, subTokens: 0 },
-  all: { real: 2.0, calls: 100, tokens: 5000000, sub: 0, subCalls: 0, subTokens: 0 },
+  today: { realCost: 0.5, cost: 0.5, calls: 10, tokens: 100000, subCost: 0, subCalls: 0, subTokens: 0 },
+  month: { realCost: 1.0, cost: 1.0, calls: 50, tokens: 2000000, subCost: 0, subCalls: 0, subTokens: 0 },
+  all: { realCost: 2.0, cost: 2.3, calls: 100, tokens: 5000000, subCost: 0.3, subCalls: 5, subTokens: 90000 },
+  summary: { realCost: 2.0, realCalls: 100, realTokens: 5000000, subEquivalent: 0.3, subCalls: 5, subTokens: 90000, cost: 2.3, calls: 105, tokens: 5090000, peakCost: 1.0, offCost: 0.8, flatCost: 0.2 },
   byDay: [{ date: '2026-09-15', label: '09/15', peak: 1.0, off: 0.8, flat: 0.2 }],
   byModel: [{ model: 'deepseek-v4.1-flash', calls: 100, tokens: 5000000, cost: 2.0 }],
   byModelDay: [{ model: 'deepseek-v4.1-flash', days: [{ date: '2026-09-15', label: '09/15', calls: 100, tokens: 5000000, input: 10, output: 5, cacheRead: 90, cacheWrite: 0, cost: 2.0 }] }],
@@ -272,6 +277,28 @@ check('两条路径渲染结果逐字一致（内联实现未与 view.js 漂移�
 check('「本机+云端」视图确实把云端数字并了进来（合并逻辑未退化成直通）',
   withFallback.text.includes('7.81') || withFallback.text.includes('7.8'),
   JSON.stringify(withFallback.text.replace(/\s+/g, ' ').slice(0, 200)))
+
+// ---------- [5] 「仅云端」视图：金额必须来自云端口径（回归：曾整列显示 ¥0.0000） ----------
+// 线上故障现场：云端返回的是 realCost/subEquivalent，本地卡片读 real/sub，
+// 归一化只透传原字段 → 次数（同名 calls）正常、**三个金额卡与底部汇总全为 ¥0.0000**。
+// 这里用真实云端口径渲染「仅云端」，逐项断言金额与汇总都非 0。
+console.log('[5] 「仅云端」视图金额映射（云端 realCost → 本地 real）')
+hookSlots.clear()
+const cloudOnly = await renderAsync(makeModule({ view: REAL_VIEW, syncView: 'cloud' }).section, {})
+const cloudText = cloudOnly.text.replace(/\s+/g, ' ')
+check('仅云端渲染无异常', cloudOnly.errors.length === 0, describeErrors(cloudOnly.errors))
+check('今日费用取到云端金额（¥0.50）', cloudText.includes('¥0.50'), JSON.stringify(cloudText.slice(0, 260)))
+check('总花费取到云端金额（¥2.00）', cloudText.includes('¥2.00'), JSON.stringify(cloudText.slice(0, 260)))
+check('顶部不再出现 ¥0.0000 的金额卡', !cloudText.includes('¥0.0000'), JSON.stringify(cloudText.slice(0, 260)))
+check('底部汇总行按 realCost 口径显示（¥2.00 · 请求 100 次）',
+  /¥2\.00/.test(cloudText) && /100\s*次/.test(cloudText) && !/¥0\.00\s*·\s*请求\s*0\s*次/.test(cloudText),
+  JSON.stringify(cloudText.slice(-320)))
+// 内联实现（取不到 view 模块）必须给出同样结果
+hookSlots.clear()
+const cloudOnlyFallback = await renderAsync(makeModule({ view: null, syncView: 'cloud' }).section, {})
+check('内联实现与 view.js 的云端金额口径一致',
+  cloudOnlyFallback.text.replace(/\s+/g, ' ') === cloudText,
+  `fallback=${JSON.stringify(cloudOnlyFallback.text.replace(/\s+/g, ' ').slice(0, 160))}`)
 
 console.log('')
 if (failures > 0) {
