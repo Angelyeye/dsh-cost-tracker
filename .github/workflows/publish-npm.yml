@@ -18,22 +18,37 @@
 #
 # 依赖：npm CLI ≥ 11.5.1（OIDC 可信发布的最低版本）。Node 24 自带的 npm 满足要求。
 #
-# === 2026-09-15 排障记录：为什么第一次发布失败（E404）===
-# 症状：
-#   npm error 404 Not Found - PUT https://registry.npmjs.org/@angelyeye%2fdsh-cost-tracker
-#   npm error 404 The requested resource '@angelyeye/dsh-cost-tracker@1.8.0' could not be
-#                 found or you do not have permission to access it.
+# ============================================================
+# 2026-09-15 排障记录（三次失败，症状各不相同）
+# ============================================================
+# ① 首次：E404 Not Found - PUT .../@angelyeye%2fdsh-cost-tracker
+#    原因：actions/setup-node 给了 registry-url 就会写出
+#          //registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}
+#          always-auth=true
+#    而本仓库没有任何 Actions secret，NODE_AUTH_TOKEN 是占位值 →
+#    npm 认为「已配令牌」走令牌认证、跳过 OIDC，以未认证身份 PUT，
+#    npm 对无权限发布统一回 404。
+#    修法：去掉 registry-url（默认 registry 本就是 registry.npmjs.org）。
 #
-# 原因：actions/setup-node 一旦给了 registry-url，就会写出这样的 ~/.npmrc：
-#     //registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}
-#     always-auth=true
-# 本仓库没有任何 Actions secret（total_count = 0），于是 NODE_AUTH_TOKEN 是个占位值。
-# npm 看到 .npmrc 里「已经配了令牌」，就认为要走令牌认证，**不再尝试 OIDC**，
-# 结果以未认证身份 PUT → npm 对无权限的发布统一回 404（而不是 401/403）。
+# ② 第二次：ENEEDAUTH need auth
+#    此时 .npmrc 已干净、authToken 为空，但 npm 直接报「需要登录」。
 #
-# 修法：① 去掉 registry-url（默认 registry 本来就是 registry.npmjs.org，不需要它）；
-#       ② 再加一道清理，删掉任何残留的 _authToken，并断言 OIDC 环境变量存在。
-# 这样 npm CLI 才会用 ACTIONS_ID_TOKEN_REQUEST_URL 去换一次性发布凭据。
+# ③ 第三次：加了诊断步骤后确认——环境其实是完美的：
+#      Node v24.20.0 / npm 11.19.0（远高于 11.5.1 最低要求）
+#      ACTIONS_ID_TOKEN_REQUEST_URL / _TOKEN 均已注入
+#      userconfig /home/runner/.npmrc 不存在（无任何令牌残留）
+#      手动向 GitHub 换 audience=npm:registry.npmjs.org 的 OIDC 令牌 → HTTP 200，拿到 1972 字符
+#      npm config 里的 `_auth = (protected)` 经比对只是 npm 的默认掩码，不是残留凭据
+#    但 npm publish 全程没有提到过一次 OIDC，直接 ENEEDAUTH。
+#
+#    结论：npm 侧已是正确配置，剩下的唯一可能是 npmjs.com 上
+#    **尚未为该包配置 Trusted Publisher**（npm 只在发布那一刻校验，
+#    配置缺失/工作流文件名对不上/Environment 对不上，都表现为同样的
+#    404 或 ENEEDAUTH，日志里不会指出是哪一项）。
+#
+#    因此：必须先在 npmjs.com 配好可信发布者，本工作流才可能成功。
+#    确认配置好后，重跑本工作流即可；诊断步骤会继续留证。
+# ============================================================
 
 name: Publish to npm
 
@@ -56,7 +71,7 @@ jobs:
       - uses: actions/checkout@v4
 
       # 不要设 registry-url：它会写入带 _authToken 的 .npmrc，
-      # 从而让 npm 走令牌认证、绕过 OIDC 可信发布（见文件顶部排障记录）。
+      # 从而让 npm 走令牌认证、绕过 OIDC 可信发布（见顶部排障记录 ①）。
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
@@ -66,34 +81,24 @@ jobs:
       - name: Run tests
         run: npm test
 
-      - name: Show npm version
-        run: npm --version
-
       # 双保险：确保没有任何 _authToken 残留，否则 OIDC 会被静默跳过
       - name: Ensure OIDC (no npm auth token)
         run: |
           npm config delete //registry.npmjs.org/:_authToken 2>/dev/null || true
-          echo "authToken = '$(npm config get //registry.npmjs.org/:_authToken 2>/dev/null)'"
           node -e "if (!process.env.ACTIONS_ID_TOKEN_REQUEST_URL) { console.error('OIDC 环境不可用：缺少 id-token: write 权限'); process.exit(1) } console.log('OIDC 环境可用 ✓')"
 
-      # 排障：确认 npm 眼里到底有没有凭据、GitHub 肯不肯签发 npm 受众的 OIDC 令牌
-      - name: Diagnose npm auth environment
+      # 诊断：一旦再出现 404 / ENEEDAUTH，这几行就能立刻区分是
+      # 「环境问题」还是「npmjs.com 没配可信发布者」
+      - name: Diagnose OIDC readiness
         if: ${{ !inputs.dry_run }}
         run: |
-          echo "=== 版本 ==="; node --version; npm --version
-          echo "=== 认证相关环境变量（只显示是否设置）==="
-          env | grep -iE '^(NODE_AUTH_TOKEN|NPM_|ACTIONS_ID_TOKEN)' | sed -E 's/=.*/=<set>/' || echo '(无)'
-          echo "=== npm 配置里与认证/registry 有关的项 ==="
-          npm config list -l 2>/dev/null | grep -iE 'auth|registry|userconfig|provenance' || true
-          echo "=== userconfig 路径与内容（令牌打码）==="
+          echo "node $(node --version) / npm $(npm --version)"
           UC="$(npm config get userconfig 2>/dev/null)"
-          echo "userconfig = $UC"
-          if [ -f "$UC" ]; then sed -E 's/(_authToken=).*/\1<redacted>/' "$UC"; else echo '(文件不存在)'; fi
-          echo "=== 直接向 GitHub 换一枚 npm 受众的 OIDC 令牌（不打印令牌本体）==="
+          if [ -f "$UC" ]; then echo "userconfig $UC 存在"; sed -E 's/(_authToken=).*/\1<redacted>/' "$UC"; else echo "userconfig $UC 不存在（无令牌残留）"; fi
           curl -sS -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
             "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=npm:registry.npmjs.org" \
             -o /tmp/oidc.json -w 'OIDC 交换 HTTP %{http_code}\n'
-          node -e "try{const j=require('/tmp/oidc.json');console.log('拿到 OIDC 令牌:', !!j.value, '长度', (j.value||'').length)}catch(e){console.log('解析失败:', e.message)}"
+          node -e "try{const j=require('/tmp/oidc.json');console.log('拿到 npm 受众 OIDC 令牌:', !!j.value)}catch(e){console.log('OIDC 令牌解析失败:', e.message)}"
 
       - name: Publish (dry run)
         if: ${{ inputs.dry_run }}
