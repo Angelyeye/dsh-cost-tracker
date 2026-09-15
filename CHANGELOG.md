@@ -2,6 +2,37 @@
 
 本文件用中文记录 dsh-cost-tracker 的版本变更。
 
+## v1.8.6(2026-09-15)
+
+**修复：计费规则与 DeepSeek 官方定价的两处口径偏差（金额口径 + 标记口径）**
+
+核查基准：官方价格卡 <https://api-docs.deepseek.com/zh-cn/quick_start/pricing> 与发布通告 <https://api-docs.deepseek.com/zh-cn/news/news260910>。核查方法：用独立脚本按官方牌价重算全部已入库记录，与插件记账逐条比对（1985 条记录金额差额 `0.000000`，说明**数值本来就是对的一分不差**；以下两处修复的是口径与标记）。
+
+- **V4-Pro 路由生效时刻提前了 4 天（金额口径，会低估花费）**
+  - 旧实现把 `deepseek-v4-pro → V4.1 Flash` 的路由与 Flash 调价合并成同一时刻（北京时间 2026-09-10 12:00），但官方通告的措辞是：「北京时间 **2026 年 9 月 14 日 12:00** 之后……用户访问 `deepseek-v4-pro` 的请求将全部路由到 V4.1 Flash，并按 V4.1 Flash 单价计费」（价格卡脚注 (2) 同口径）。
+  - 影响：2026-09-10 12:00 ～ 09-14 12:00 之间的 V4-Pro 调用会被**低估约 4.5 倍**（9/27/0.30 → 2/8/0.04）。本机记录该窗口内无 V4-Pro 调用，故无历史金额损失，但属潜伏缺陷。
+  - 修法：新增 `V41_PRO_ROUTE_AT`（`2026-09-14T04:00:00Z`）与时代 `v41pro`，把路由从 `v41` 拆出来；`v41` 时代保留 V4-Pro 自有牌价（9/27/0.30），避免这 4 天落入 provider 兜底而被误标「估算」。
+
+- **官方现役模型名 `deepseek-flash` 不在精确单价表内（标记口径，已在真实数据中触发）**
+  - 官方脚注 (1)：「模型名请使用 `deepseek-flash`」。旧实现的规范名是 `deepseek-v4.1-flash`（官方文档中并不可调用的写法），于是宿主实际上报的 `deepseek-flash` 落入 provider 兜底分支——**金额恰好相同，但被标记为「估算」**。本机 1402 条 `deepseek-flash` 记录 100% 命中该问题，云端 `cost_basis` 也随之为 `estimated`，污染「估算占比 / 口径漂移」统计。
+  - 修法：`V41_FLASH_MODEL` 改为 `deepseek-flash`（官方现役名），并新增 `MODEL_ALIASES` 别名归一表，使 `deepseek-v4.1-flash` / `deepseek-v4-1-flash` / `deepseek-v41-flash` / `deepseek_flash` 等等价写法解析到同一规范名（单价表本身不重复列项）。路由目标与入账名统一为 `deepseek-flash`。
+
+**修复：`cost_recompute` 不再漏判「仅标记变化」的记录**
+- 变更判定此前只看费用 / 模型名 / 档位，于是「模型名从兜底升为精确档、金额分毫不变」的记录不会被订正。现纳入 `estimated` / `subscription` 标记比对，返回值新增 `estimatedFlips` 计数，工具输出会明确写出「其中 N 条仅订正『估算』标记，金额不变」，避免补账看起来「改了 0 条」。
+
+**变更**
+- `export const V41_FLASH_MODEL = 'deepseek-flash'`（原 `'deepseek-v4.1-flash'`）；新增导出 `V41_PRO_ROUTE_AT` / `MODEL_ALIASES`。
+- `PRICE_ERAS` 由 2 版增至 3 版：`legacy` / `v41`（09-10 12:00 起，含 V4-Pro 自有牌价）/ `v41pro`（09-14 12:00 起，含 V4-Pro 路由）；`v41` 时代新增 `proRouteSince` 说明字段。
+- `cost_prices` 的 `eras` / 渲染文本同步展示 V4-Pro 路由时刻与官方现役名口径。
+
+**测试**
+- `test/pricing.test.js`：新增 V4-Pro 路由时刻边界用例（`12:00:00.000` 前一毫秒仍按自有牌价、整点起路由）、`deepseek-flash` 精确命中与别名归一用例。
+- `test/recompute.test.js`：补账样本改为覆盖「路由前窗口金额不变」「路由后改写为 `deepseek-flash`」「误标估算记录被订正」三类，新增 `estimatedFlips` 断言。
+
+**计费影响**
+- **已入库记录金额零变化**（数值本即正确）；仅 `estimated` 标记、V4-Pro 在 9/10–9/14 窗口的口径、以及历史 `deepseek-v4.1-flash` 记录（本机 22 条）与 `deepseek-flash` 的桶名归并发生变化。
+- 涉及历史桶名/标记的机器建议执行一次 `cost_recompute`（默认试算，`apply: true` 落盘），幂等可重复执行。
+
 ## v1.8.5(2026-09-15)
 
 **修复**

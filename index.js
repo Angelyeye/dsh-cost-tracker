@@ -10,7 +10,7 @@ import { readFileSync, writeFileSync, mkdirSync, renameSync, existsSync, realpat
 import { join, dirname } from 'node:path'
 import { homedir } from 'node:os'
 import { createStore, collectTotals, DETAIL_DAYS, MAX_AXIS_DAYS } from './store.js'
-import { PRICE_ERAS, V41_EFFECTIVE_AT, exactModelsAt, eraAt, SUBSCRIPTION_RATES, PROVIDER_RATES, GENERIC_RATES, PEAK_WINDOWS, PEAK_HOUR_WINDOWS, isPeak, peakPhaseAt, priceFor, computeCost, normalizeTokens } from './pricing.js'
+import { PRICE_ERAS, V41_EFFECTIVE_AT, V41_PRO_ROUTE_AT, exactModelsAt, eraAt, SUBSCRIPTION_RATES, PROVIDER_RATES, GENERIC_RATES, PEAK_WINDOWS, PEAK_HOUR_WINDOWS, isPeak, peakPhaseAt, priceFor, computeCost, normalizeTokens } from './pricing.js'
 import {
   normalizePeakConfig, defaultPeakConfig, peakEffective,
   normalizeCloudConfig, defaultCloudConfig, normalizePluginConfig,
@@ -19,7 +19,7 @@ import { createSyncEngine, setPluginVersion, SOURCE as SYNC_SOURCE, SYNC_VERSION
 import { Schema } from './schema.js'
 
 /** 插件版本（写入上报信封，便于云端排查版本差异） */
-const PLUGIN_VERSION = '1.8.5'
+const PLUGIN_VERSION = '1.8.6'
 setPluginVersion(PLUGIN_VERSION)
 
 /** 「设置 → 插件 → 插件配置」里的卡片字段（与 settings 命名空间一致） */
@@ -105,8 +105,9 @@ export default {
     // ---------- price tables (CNY per 1M tokens) ----------
     // 单价表 / 峰谷 / 费用计算集中在 pricing.js（纯模块，可独立测试）；
     // 单价按「计费时代」分版（PRICE_ERAS）：按记录时间戳选版，故历史记录口径不变。
-    // V4.1 Flash 价（北京时间 2026-09-10 12:00 起）生效后，V4-Pro 与旧 V4-Flash 系
-    // 的请求按官方规则路由到 V4.1 Flash 计费，记录亦以 V4.1 Flash 模型名入账。
+    // V4.1 Flash 价（北京时间 2026-09-10 12:00 起）生效后，旧 V4-Flash 系的请求路由到
+    // V4.1 Flash 计费；V4-Pro 自北京时间 2026-09-14 12:00 起才路由（官方通告口径）。
+    // 记录一律以官方现役模型名 `deepseek-flash` 入账。
     // 视觉模型 deepseek-v4-flash-vision-exp 的图片 token 由接口 usage 计入 inputTokens
 
     // ---------- state ----------
@@ -286,7 +287,7 @@ export default {
       const model = toStr(options && options.model)
       if (!provider && !model) return
       const np = normProvider(provider)
-      // 按「调用发生的时刻」选单价版本（跨 2026-09-10 12:00 自动切换，无需重启）。
+      // 按「调用发生的时刻」选单价版本（跨 2026-09-10 12:00 / 2026-09-14 12:00 自动切换，无需重启）。
       const price = priceFor(np, model, ts)
       // 峰谷计费开关：随配置峰谷启用 + 生效时间门控；未启用时按非峰谷档（平价）计费。
       const peak = peakEffective(peakConfig, ts) ? isPeak(ts) : false
@@ -294,8 +295,8 @@ export default {
       // prompt_tokens 中（每张≤384 tokens），由 normalizeTokens 归入 input
       const tokens = normalizeTokens(usage)
       store.add({
-        // 被路由的请求以「实际计费模型名」入账（如 V4-Pro → deepseek-v4.1-flash），
-        // 使按模型聚合看到的就是真实计费口径。
+        // 被路由的请求以「实际计费模型规范名」入账（如 V4-Pro → deepseek-flash、
+        // 旧名 deepseek-v4-flash → deepseek-flash），使按模型聚合看到的就是真实计费口径。
         ts, provider, model: price.model || model,
         sessionId: toStr(options && options.sessionId),
         purpose: toStr(options && options.purpose),
@@ -536,6 +537,7 @@ export default {
         // 全部价格时代（含生效时刻与路由规则），供工具/接口展示
         eras: PRICE_ERAS.map((e) => ({ id: e.id, label: e.label, since: e.since, models: e.models, routes: e.routes || {} })),
         v41EffectiveAt: V41_EFFECTIVE_AT,
+        v41ProRouteAt: V41_PRO_ROUTE_AT,
         subscription: SUBSCRIPTION_RATES,
         providers: PROVIDER_RATES,
         generic: GENERIC_RATES,
@@ -780,7 +782,7 @@ export default {
       else if (Number.isFinite(a.since) && a.since > 0) since = a.since
       const apply = a.apply === true
       const byModel = {}
-      let scanned = 0, changed = 0, oldCost = 0, newCost = 0
+      let scanned = 0, changed = 0, oldCost = 0, newCost = 0, estimatedFlips = 0
       for (const r of records) {
         if (!(r.ts >= since)) continue
         scanned += 1
@@ -790,27 +792,34 @@ export default {
         const cost = computeCost(price.rates, price.tiered, peak, r.tokens)
         const model = price.model || r.model
         const period = price.tiered ? (peak ? 'peak' : 'off-peak') : 'flat'
+        const estimated = price.estimated === true
+        const subscription = price.subscription === true
         oldCost += r.cost
         newCost += cost
-        if (!(Math.abs(cost - r.cost) > 1e-9 || model !== r.model || period !== r.period)) continue
+        // 变更判定含 estimated/subscription：模型名从兜底口径升为精确档时，
+        // 金额可能分毫不变，但「估算」标记必须一并订正（否则看板长期误报估算占比）。
+        const flip = (r.estimated === true) !== estimated || (r.subscription === true) !== subscription
+        if (!(Math.abs(cost - r.cost) > 1e-9 || model !== r.model || period !== r.period || flip)) continue
         changed += 1
+        if (flip) estimatedFlips += 1
         const key = r.provider + '|' + r.model + '|' + model
-        const m = byModel[key] || (byModel[key] = { provider: r.provider, from: r.model, to: model, calls: 0, oldCost: 0, newCost: 0 })
+        const m = byModel[key] || (byModel[key] = { provider: r.provider, from: r.model, to: model, calls: 0, oldCost: 0, newCost: 0, flips: 0 })
         m.calls += 1
         m.oldCost += r.cost
         m.newCost += cost
+        if (flip) m.flips += 1
         if (apply) {
           r.cost = cost
           r.model = model
           r.period = period
-          r.estimated = price.estimated
-          r.subscription = price.subscription
+          r.estimated = estimated
+          r.subscription = subscription
         }
       }
       if (apply && changed > 0) persistNow()
       const rows = Object.keys(byModel).map(k => {
         const m = byModel[k]
-        return { provider: m.provider, from: m.from, to: m.to, calls: m.calls, oldCost: r4(m.oldCost), newCost: r4(m.newCost), delta: r4(m.newCost - m.oldCost) }
+        return { provider: m.provider, from: m.from, to: m.to, calls: m.calls, oldCost: r4(m.oldCost), newCost: r4(m.newCost), delta: r4(m.newCost - m.oldCost), estimatedFlips: m.flips }
       }).sort((x, y) => Math.abs(y.delta) - Math.abs(x.delta))
       return {
         ok: true,
@@ -819,11 +828,16 @@ export default {
         era: eraAt(since).id,
         scanned,
         changed,
+        estimatedFlips,
         oldCost: r4(oldCost),
         newCost: r4(newCost),
         delta: r4(newCost - oldCost),
         byModel: rows,
-        note: changed === 0 ? '没有需要重算的记录' : (apply ? '已重算并落盘' : '试算结果，未落盘（传 apply: true 生效）'),
+        note: changed === 0
+          ? '没有需要重算的记录'
+          : (apply
+            ? '已重算并落盘' + (estimatedFlips ? '（其中 ' + estimatedFlips + ' 条仅订正「估算」标记，金额不变）' : '')
+            : '试算结果，未落盘（传 apply: true 生效）'),
       }
     }
 
@@ -1115,6 +1129,8 @@ export default {
             }
           }
           lines.push('', '当前生效：' + v.eraLabel + '（era=' + v.era + '）')
+          lines.push('模型名口径：官方现役名为 deepseek-flash（被路由的请求一律以此名入账）；deepseek-v4.1-flash 等写法归一化后命中同一档。')
+          lines.push('V4-Pro 路由生效：' + when(v.v41ProRouteAt) + '（此前 deepseek-v4-pro 仍按 V4-Pro 自有牌价计费）。')
           lines.push('视觉模型 deepseek-v4-flash-vision-exp：图片按官方规则换算 token（每张上限 384），以接口用量计费（已含在 inputTokens 内）。')
           lines.push('kimi-coding（订阅等效，估算）：输入 6.5 / 缓存命中（含缓存写入）1.1 / 输出 27.0')
           lines.push('缓存写入(cache write)按缓存命中价计费，与官方规则一致。其他 provider 兜底为估算平价（openai 10/30/5，anthropic 15/75/1.5，gemini 2.5/10/0.625，未知 2/8/0.5）；ollama/local 为 0。')
@@ -1156,11 +1172,11 @@ export default {
           const when = new Date(v.since + 28800000).toISOString().replace('T', ' ').slice(0, 16).replace(/-/g, '/')
           const lines = [
             '费用重算（自 ' + when + ' 北京起 · era=' + v.era + '）',
-            '扫描 ' + v.scanned + ' 条，需修正 ' + v.changed + ' 条',
+            '扫描 ' + v.scanned + ' 条，需修正 ' + v.changed + ' 条' + (v.estimatedFlips ? '（其中 ' + v.estimatedFlips + ' 条仅订正「估算」标记，金额不变）' : ''),
             '合计：¥' + v.oldCost + ' → ¥' + v.newCost + '（' + (v.delta >= 0 ? '+' : '') + v.delta + '）',
           ]
           for (const m of (v.byModel || []).slice(0, 8)) {
-            lines.push('  ' + m.from + (m.to !== m.from ? ' → ' + m.to : '') + '：' + m.calls + ' 次 · ¥' + m.oldCost + ' → ¥' + m.newCost)
+            lines.push('  ' + m.from + (m.to !== m.from ? ' → ' + m.to : '') + '：' + m.calls + ' 次 · ¥' + m.oldCost + ' → ¥' + m.newCost + (m.estimatedFlips ? ' · 标记订正 ' + m.estimatedFlips + ' 条' : ''))
           }
           lines.push(v.note)
           return [{ type: 'text', text: lines.join('\n') }]

@@ -7,10 +7,16 @@
 //     空闲时段 = 高峰 × 0.5。周末（周六/周日）全天计入空闲时段（该窗口两版价通用）。
 //   - **单价随时间调整**：故单价表按生效时刻分版（见 PRICE_ERAS），按记录时间戳选版。
 //       · legacy  ：V4-Flash 3.0/9.0/0.10、V4-Pro 9.0/27.0/0.30
-//       · v41     ：V4.1 Flash 2.0/8.0/0.04（北京时间 2026-09-10 12:00 起生效），
-//                   V4-Pro 与旧 V4-Flash 系（含 vision-exp）的请求全部路由到
-//                   V4.1 Flash 并按 V4.1 Flash 单价计费（V4.1 Pro 上线前）。
+//       · v41     ：V4.1 Flash 2.0/8.0/0.04（北京时间 2026-09-10 12:00 起生效）。
+//                   官方现役模型名为 `deepseek-flash`；旧名 `deepseek-v4-flash` 与
+//                   `deepseek-v4-flash-vision-exp` 已下线但仍可调用，请求由 V4.1 Flash
+//                   提供服务并按 Flash 价计费，故一并路由到 `deepseek-flash`。
+//       · v41pro  ：同一档单价，**V4-Pro 路由在此才开始**：官方通告为「北京时间 2026-09-14
+//                   12:00 之后，deepseek-v4-pro 的请求全部路由到 V4.1 Flash 并按 V4.1 Flash
+//                   单价计费」（价格卡脚注 (2) 同口径）。9/10 12:00 ～ 9/14 12:00 之间的
+//                   V4-Pro 请求按 V4-Pro 自有牌价 9.0/27.0/0.30 计费，不可提前折算。
 //   - deepseek-v4-flash-vision-exp 与 deepseek-v4-flash 在 legacy 时代单价一致。
+//   - 模型名归一化后 `deepseek-v4.1-flash` 等同为 `deepseek-flash` 的等价写法，命中同一档。
 //
 // 视觉模型 Token 规则：
 //   https://api-docs.deepseek.com/zh-cn/guides/vision#token-usage
@@ -30,14 +36,27 @@
  * 均为「高峰时段」价；空闲时段 = 高峰 × 0.5（两版价格的空闲档都恰好是半价）。
  *
  * routes：某个时代内把指定模型名的请求**改按另一档单价计费**，记录也以被路由
- *         到的模型名入账，便于按模型聚合时看到真实计费口径。
+ *         到的**计费模型规范名**（当前为官方现役名 `deepseek-flash`）入账，
+ *         便于按模型聚合时看到真实计费口径。
  */
 
 /** V4.1 Flash 价格的生效时刻：北京时间 2026-09-10 12:00（UTC+8）= 2026-09-10T04:00:00Z */
 export const V41_EFFECTIVE_AT = Date.UTC(2026, 8, 10, 4, 0, 0)
 
-/** V4.1 Flash 的规范模型名（被路由的请求一律以此名入账） */
-export const V41_FLASH_MODEL = 'deepseek-v4.1-flash'
+/**
+ * V4-Pro 请求被路由到 V4.1 Flash 的生效时刻：北京时间 2026-09-14 12:00。
+ * 官方表述：「北京时间 2026 年 9 月 14 日 12:00 之后，至未来 V4.1 Pro 上线之前，
+ * 用户访问 deepseek-v4-pro 的请求将全部路由到 V4.1 Flash，并按 V4.1 Flash 单价计费」。
+ * 注意它与 V41_EFFECTIVE_AT（9-10 12:00）不是同一时刻，提前折算会低估 V4-Pro 花费。
+ */
+export const V41_PRO_ROUTE_AT = Date.UTC(2026, 8, 14, 4, 0, 0)
+
+/**
+ * V4.1 Flash 档的规范（官方现役）模型名。
+ * 官方文档：「模型名请使用 `deepseek-flash`」——被路由的请求一律以此名入账，
+ * 使按模型聚合的口径与官方账单一致。`deepseek-v4.1-flash` 归一化后等价命中本档。
+ */
+export const V41_FLASH_MODEL = 'deepseek-flash'
 
 export const PRICE_ERAS = [
   {
@@ -53,14 +72,31 @@ export const PRICE_ERAS = [
   },
   {
     id: 'v41',
-    label: 'V4.1 Flash 价（V4-Pro 与旧 V4-Flash 系均路由至此）',
+    label: 'V4.1 Flash 价（2026-09-10 12:00 起；V4-Pro 此时仍按自有牌价）',
     since: V41_EFFECTIVE_AT,
     models: {
       // 高峰价：输入（缓存命中）0.04 / 输入（缓存未命中）2 / 输出 8；空闲减半
       [V41_FLASH_MODEL]: { input: 2.0, output: 8.0, cacheRead: 0.04, cacheWrite: 0.04 },
+      // V4-Pro 尚在「自有牌价」窗口（9-14 12:00 前不路由），故本时代仍需保留其单价，
+      // 否则会落入 provider 兜底而被误标记为「估算」。
+      'deepseek-v4-pro': { input: 9.0, output: 27.0, cacheRead: 0.30, cacheWrite: 0.30 },
     },
-    // V4.1 Pro 上线前，V4-Pro 的请求全部路由到 V4.1 Flash 并按 V4.1 Flash 单价计费；
-    // 旧 V4-Flash 系（含视觉版）已被 V4.1 Flash 取代，一并按新价计费。
+    // 旧 V4-Flash 系（含视觉版）已下线，请求由 V4.1 Flash 提供并按 Flash 价计费。
+    // V4-Pro 此时尚未路由（官方路由时刻为 9-14 12:00，见下一个时代）。
+    routes: {
+      'deepseek-v4-flash': V41_FLASH_MODEL,
+      'deepseek-v4-flash-vision-exp': V41_FLASH_MODEL,
+    },
+    proRouteSince: V41_PRO_ROUTE_AT,
+  },
+  {
+    id: 'v41pro',
+    label: 'V4.1 Flash 价 + V4-Pro 路由（2026-09-14 12:00 起）',
+    since: V41_PRO_ROUTE_AT,
+    models: {
+      [V41_FLASH_MODEL]: { input: 2.0, output: 8.0, cacheRead: 0.04, cacheWrite: 0.04 },
+    },
+    // V4.1 Pro 上线前，V4-Pro 的请求全部路由到 V4.1 Flash 并按 V4.1 Flash 单价计费。
     routes: {
       'deepseek-v4-pro': V41_FLASH_MODEL,
       'deepseek-v4-flash': V41_FLASH_MODEL,
@@ -69,12 +105,25 @@ export const PRICE_ERAS = [
   },
 ]
 
-/** 旧价精确单价表（legacy 时代）。保留导出，兼容既有调用与历史口径。 */
+/** 旧价精确单价表（**仅 legacy 时代**）。保留导出，兼容既有调用与历史口径；
+ *  当前时代的精确表请用 `exactModelsAt(ts)`（会随时代切换）。 */
 export const EXACT_MODELS = PRICE_ERAS[0].models
 
 /** 归一化模型名：小写并剔除分隔符，使 v4.1 / v4-1 / v41 等写法命中同一档价。 */
 export function normalizeModelName(m) {
   return String(m == null ? '' : m).toLowerCase().replace(/[^a-z0-9]/g, '')
+}
+
+/**
+ * 规范名别名表（归一化后 → 官方现役规范名）。
+ * 官方文档口径：「模型名请使用 `deepseek-flash`」，`deepseek-v4.1-flash` 是同一档价的
+ * 等价写法（历史记录与旧文档中出现）。此处**不**把它们加进单价表，以免在单价表展示里
+ * 重复列出；只在解析阶段归一到规范名，保证 `estimated=false` 且按模型聚合同一个桶。
+ */
+export const MODEL_ALIASES = {
+  deepseekv41flash: V41_FLASH_MODEL,   // deepseek-v4.1-flash / deepseek-v41-flash / deepseek_v4.1_flash …
+  deepseekv41: V41_FLASH_MODEL,        // deepseek-v41
+  deepseekflashv41: V41_FLASH_MODEL,   // deepseek-flash-v4.1
 }
 
 const ERA_INDEX = new Map()
@@ -90,13 +139,14 @@ function eraIndex(era) {
 }
 
 /**
- * 某模型在指定时代下命中的**计费模型规范名**：先查本时代单价表，
- * 再查路由表（路由目标须在本时代单价表内）；均未命中返回 null。
+ * 某模型在指定时代下命中的**计费模型规范名**：先按别名表归一，再查本时代单价表，
+ * 最后查路由表（路由目标须在本时代单价表内）；均未命中返回 null。
  */
 export function resolveModelInEra(era, model) {
   if (!era) return null
-  const n = normalizeModelName(model)
+  let n = normalizeModelName(model)
   if (!n) return null
+  if (MODEL_ALIASES[n]) n = normalizeModelName(MODEL_ALIASES[n])
   const idx = eraIndex(era)
   if (idx.models.has(n)) return idx.models.get(n)
   const target = idx.routes.get(n)

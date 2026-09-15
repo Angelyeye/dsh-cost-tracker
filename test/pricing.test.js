@@ -10,7 +10,7 @@
 // 价格切换后测试结果随运行时刻漂移。
 // ============================================================
 import {
-  EXACT_MODELS, PRICE_ERAS, V41_EFFECTIVE_AT, V41_FLASH_MODEL,
+  EXACT_MODELS, PRICE_ERAS, V41_EFFECTIVE_AT, V41_PRO_ROUTE_AT, V41_FLASH_MODEL,
   PROVIDER_RATES, SUBSCRIPTION_RATES, GENERIC_RATES,
   PEAK_WINDOWS, VISION_MODEL, VISION_IMAGE_MAX_TOKENS,
   isPeak, peakPhaseAt, priceFor, computeCost, normalizeTokens,
@@ -34,8 +34,11 @@ function bj(y, mo, d, h, mi) { return Date.UTC(y, mo - 1, d, h - 8, mi) }
 // 价格时代取样点：旧价（2026-08-21 周五 10:00 高峰） / 新价（2026-09-11 周五 10:00 高峰）
 const LEGACY_TS = bj(2026, 8, 21, 10, 0)
 const V41_TS = bj(2026, 9, 11, 10, 0)
-// 切换瞬间：2026-09-10 12:00（北京）
+// V4-Pro 路由生效后的取样点（2026-09-15 周二 10:00 高峰）
+const V41_PRO_TS = bj(2026, 9, 15, 10, 0)
+// 切换瞬间：2026-09-10 12:00（北京，Flash 调价）/ 2026-09-14 12:00（北京，V4-Pro 路由）
 const SWITCH_TS = V41_EFFECTIVE_AT
+const PRO_SWITCH_TS = V41_PRO_ROUTE_AT
 
 // ---------- 1. 视觉模型精确单价 ----------
 {
@@ -186,7 +189,10 @@ const SWITCH_TS = V41_EFFECTIVE_AT
 {
   // 切换时刻：北京时间 2026-09-10 12:00 = 2026-09-10T04:00:00Z
   ok(V41_EFFECTIVE_AT === Date.UTC(2026, 9 - 1, 10, 4, 0, 0), '时代: V41 生效时刻 = 2026-09-10 12:00 北京')
-  ok(PRICE_ERAS.length === 2, '时代: 共两版价格（legacy / v41）')
+  // V4-Pro 路由时刻：北京时间 2026-09-14 12:00（官方通告口径，晚于 Flash 调价 4 天）
+  ok(V41_PRO_ROUTE_AT === Date.UTC(2026, 9 - 1, 14, 4, 0, 0), '时代: V4-Pro 路由时刻 = 2026-09-14 12:00 北京')
+  ok(V41_PRO_ROUTE_AT > V41_EFFECTIVE_AT, '时代: V4-Pro 路由晚于 Flash 调价（不可合并为同一时代）')
+  ok(PRICE_ERAS.length === 3, '时代: 共三版价格（legacy / v41 / v41pro）')
 
   // eraAt：切换前一夜仍是 legacy，切换瞬间起为 v41
   ok(eraAt(SWITCH_TS - 1).id === 'legacy', '时代: 11:59:59.999 仍为旧价')
@@ -194,6 +200,14 @@ const SWITCH_TS = V41_EFFECTIVE_AT
   ok(eraAt(V41_TS).id === 'v41', '时代: 切换后为新价')
   ok(exactModelsAt(SWITCH_TS - 1) === EXACT_MODELS, '时代: 切换前精确表 = 旧表')
   ok(exactModelsAt(SWITCH_TS)[V41_FLASH_MODEL].input === 2.0, '时代: 切换后精确表 = V4.1 Flash 表')
+
+  // 官方现役模型名：deepseek-flash（价格卡脚注 (1)「模型名请使用 deepseek-flash」）
+  ok(V41_FLASH_MODEL === 'deepseek-flash', '时代: 规范模型名 = 官方现役名 deepseek-flash')
+  const cur = priceFor('deepseek', 'deepseek-flash', V41_TS)
+  ok(cur.estimated === false, '现役名: deepseek-flash 命中精确档（非兜底估算）')
+  ok(cur.model === 'deepseek-flash', '现役名: 以 deepseek-flash 入账')
+  const alias = priceFor('deepseek', 'deepseek-v4.1-flash', V41_TS)
+  ok(alias.estimated === false && alias.model === V41_FLASH_MODEL, '现役名: deepseek-v4.1-flash 归一化后命中同一档')
 
   // V4.1 Flash 官方价（高峰）：命中 0.04 / 未命中 2 / 输出 8
   const f = priceFor('deepseek', V41_FLASH_MODEL, V41_TS)
@@ -209,22 +223,34 @@ const SWITCH_TS = V41_EFFECTIVE_AT
   approx(computeCost(off.rates, true, false, tt), computeCost(off.rates, true, true, tt) / 2, 'V4.1: 空闲时段半价')
 }
 
-// ---------- 6e. 模型路由（V4-Pro → V4.1 Flash 计费） ----------
+// ---------- 6e. 模型路由（V4-Pro → V4.1 Flash；生效时刻 2026-09-14 12:00） ----------
 {
   // 旧时代：V4-Pro 独立计价，不路由
   const proOld = priceFor('deepseek', 'deepseek-v4-pro', LEGACY_TS)
   ok(proOld.model === 'deepseek-v4-pro' && proOld.era === 'legacy', '路由: 旧时代 V4-Pro 不路由')
   approx(proOld.rates.input, 9.0, '路由: 旧时代 V4-Pro 按自身价 9.0')
 
-  // 新时代：V4-Pro 请求路由到 V4.1 Flash，并按 V4.1 Flash 单价计费
-  const pro = priceFor('deepseek', 'deepseek-v4-pro', V41_TS)
-  ok(pro.model === V41_FLASH_MODEL, '路由: 新价期 V4-Pro 按 V4.1 Flash 入账')
-  ok(pro.era === 'v41', '路由: 新价期 era = v41')
+  // 9-10 12:00 ～ 9-14 12:00：Flash 已调价，但 V4-Pro 尚未路由，仍按自有牌价 9/27/0.30
+  const proBefore = priceFor('deepseek', 'deepseek-v4-pro', V41_TS)
+  ok(proBefore.model === 'deepseek-v4-pro', '路由: 9-14 12:00 前 V4-Pro 不路由（仍按自有名入账）')
+  ok(proBefore.estimated === false && proBefore.era === 'v41', '路由: 未路由期仍在精确档（era=v41）')
+  approx(proBefore.rates.input, 9.0, '路由: 未路由期 V4-Pro 输入价 9.0（不可提前按 Flash 折算）')
+  approx(proBefore.rates.output, 27.0, '路由: 未路由期 V4-Pro 输出价 27.0')
+  approx(proBefore.rates.cacheRead, 0.30, '路由: 未路由期 V4-Pro 命中价 0.30')
+
+  // 边界：路由时刻前一毫秒仍按自有牌价，整点起路由到 Flash 档
+  ok(priceFor('deepseek', 'deepseek-v4-pro', PRO_SWITCH_TS - 1).model === 'deepseek-v4-pro', '路由: 11:59:59.999 仍未路由')
+  ok(priceFor('deepseek', 'deepseek-v4-pro', PRO_SWITCH_TS).model === V41_FLASH_MODEL, '路由: 12:00:00.000 起路由到 ' + V41_FLASH_MODEL)
+
+  // 路由生效后：V4-Pro 请求路由到 V4.1 Flash，并按 V4.1 Flash 单价计费
+  const pro = priceFor('deepseek', 'deepseek-v4-pro', V41_PRO_TS)
+  ok(pro.model === V41_FLASH_MODEL, '路由: 路由后 V4-Pro 按 V4.1 Flash 入账')
+  ok(pro.era === 'v41pro', '路由: 路由后 era = v41pro')
   approx(pro.rates.input, 2.0, '路由: V4-Pro → V4.1 Flash 输入价 2.0')
   approx(pro.rates.output, 8.0, '路由: V4-Pro → V4.1 Flash 输出价 8.0')
   approx(pro.rates.cacheRead, 0.04, '路由: V4-Pro → V4.1 Flash 命中价 0.04')
 
-  // 旧 V4-Flash 系（含视觉版）在新时代同样被 V4.1 Flash 取代
+  // 旧 V4-Flash 系（含视觉版）自 9-10 12:00 起即被 V4.1 Flash 取代（官方脚注 (1)）
   for (const m of ['deepseek-v4-flash', VISION_MODEL]) {
     const p = priceFor('deepseek', m, V41_TS)
     ok(p.model === V41_FLASH_MODEL, '路由: ' + m + ' → V4.1 Flash 入账')
@@ -238,9 +264,11 @@ const SWITCH_TS = V41_EFFECTIVE_AT
   // 计费效果：路由后同一调用费用下降约 30%
   const tk = { input: 100000, output: 6000, cacheRead: 20000, cacheWrite: 0 }
   const before = computeCost(proOld.rates, true, true, tk)
+  const mid = computeCost(proBefore.rates, true, true, tk)
   const after = computeCost(pro.rates, true, true, tk)
   // 旧 V4-Pro 价：100000×9 + 6000×27 + 20000×0.30 = 1,068,000 /1e6
   approx(before, 1.068, '路由: V4-Pro 旧价 10万+6千+2万 高峰 = ¥1.068')
+  approx(mid, 1.068, '路由: 9-14 12:00 前同量仍为 ¥1.068（金额零漂移）')
   // 路由后按 V4.1 Flash：100000×2 + 6000×8 + 20000×0.04 = 248,800 /1e6
   approx(after, 0.2488, '路由: 同量按 V4.1 Flash 新价 = ¥0.2488')
   ok(after < before, '路由: 新价低于旧 V4-Pro 价（约 -76.7%）')
@@ -258,9 +286,12 @@ const SWITCH_TS = V41_EFFECTIVE_AT
   ok(normalizeModelName('DeepSeek-V4.1-Flash') === normalizeModelName('deepseek-v4-1-flash'), '归一化: v4.1 ≡ v4-1')
   ok(normalizeModelName('deepseek_v41_flash') === normalizeModelName('deepseek-v4.1-flash'), '归一化: v41 ≡ v4.1')
   const era = eraAt(V41_TS)
-  for (const alias of ['deepseek-v4.1-flash', 'deepseek-v4-1-flash', 'deepseek-v41-flash', 'DeepSeek-V4.1-Flash', 'deepseek_v4.1_flash']) {
-    ok(resolveModelInEra(era, alias) === V41_FLASH_MODEL, '归一化: 别名命中 V4.1 Flash → ' + alias)
+  ok(resolveModelInEra(era, 'deepseek-flash') === 'deepseek-flash', '归一化: 官方现役名原样命中')
+  ok(resolveModelInEra(era, 'DeepSeek-Flash') === 'deepseek-flash', '归一化: 大小写无关（DeepSeek-Flash）')
+  for (const alias of ['deepseek-flash', 'deepseek-v4.1-flash', 'deepseek-v4-1-flash', 'deepseek-v41-flash', 'DeepSeek-V4.1-Flash', 'deepseek_v4.1_flash']) {
+    ok(resolveModelInEra(era, alias) === V41_FLASH_MODEL, '归一化: 别名命中 V4.1 Flash 档 → ' + alias)
     const p = priceFor('deepseek', alias, V41_TS)
+    ok(p.estimated === false, '归一化: 别名走精确档（非估算）→ ' + alias)
     approx(p.rates.input, 2.0, '归一化: 别名输入价 2.0 → ' + alias)
   }
   ok(resolveModelInEra(era, '') === null, '归一化: 空名不命中')
