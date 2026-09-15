@@ -65,6 +65,40 @@ if (!cloud) {
     }
   })
 
+  test('「本机+云端」走的 overview?union 路径不得重复计数（宿主实际调用形态）', async () => {
+    const dir = tmpDir()
+    const config = testConfig(dir, {
+      DSH_SYNC_TOKEN: 'shared-bootstrap-token-0123456789', ALLOW_DEVICE_SELF_REGISTER: '1',
+      HOST: '127.0.0.1', PORT: '0',
+    })
+    const { server, app, url } = await listen(config, { log: () => {} })
+    try {
+      const tokenA = addDevice(app, 'machine-A', '本机')
+      const tokenB = addDevice(app, 'machine-B', '另一台')
+      ingestDirect(app, { token: tokenA, deviceId: 'machine-A', source: 'dsh', records: [rec({ ts: T0, cost: 1.5, sessionId: 'a1' })] })
+      ingestDirect(app, { token: tokenB, deviceId: 'machine-B', source: 'dsh', records: [rec({ ts: T0 + 1000, cost: 0.5, sessionId: 'b1' })] })
+
+      // 宿主 cloud-rest 口径的并集：① 其他整机 ② 本机上的非 dsh 来源（此处为空）
+      const union = JSON.stringify([
+        { excludeDevice: 'machine-A' },
+        { devices: 'machine-A', excludeSource: 'dsh' },
+      ])
+      const res = await fetch(url + '/api/v1/overview?range=all&union=' + encodeURIComponent(union), {
+        headers: { authorization: 'Bearer ' + tokenA },
+      })
+      const body = await res.json()
+      assert.equal(body.ok, true)
+      // 只有 machine-B 那 0.5 —— 旧实现（切片取自全表）会给出 2.0/2 次，相加后本机被计两次
+      assert.ok(Math.abs(body.all.real - 0.5) < 1e-9, 'union all.real 应为 0.5，实际 ' + body.all.real)
+      assert.equal(body.all.calls, 1, 'union 不得重复计数，实际 ' + body.all.calls + ' 次')
+      assert.ok(Math.abs(body.summary.realCost - 0.5) < 1e-9, 'union summary.realCost=' + body.summary.realCost)
+      assert.ok(Math.abs(body.summary.realCalls - 1) < 1e-9, 'union summary.realCalls=' + body.summary.realCalls)
+    } finally {
+      await new Promise((r) => server.close(r))
+      try { rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }) } catch (e) {}
+    }
+  })
+
   test('旧云端（概览口径 realCost）经归一化后金额同样非 0（向后兼容）', () => {
     const legacy = {
       ok: true, range: '7d', days: 7,
