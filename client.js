@@ -260,6 +260,31 @@ window.__ModuleLoader__.load({
 			return v.toFixed(2);
 		}
 		function fmtTickInt(v) { return v >= 1000 ? fmtCompact(v) : String(Math.round(v)); }
+		/** 绝对时间标签：MM-DD HH:mm（本地时区） */
+		function fmtClock(ts) {
+			const d = new Date(Number(ts) || 0);
+			const p = (n) => String(n).padStart(2, "0");
+			return p(d.getMonth() + 1) + "-" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
+		}
+		/**
+		 * 人类可读的时间标签（「上次同步 / 云端数据时间」都用它）。
+		 * 一天内给相对时间（刚刚 / N 分钟前 / N 小时前），更早给 MM-DD HH:mm。
+		 * 注意：v1.8.0/v1.8.1 里这个函数被引用却从未定义 —— 只有在首次同步成功
+		 * （lastSyncAt > 0）之后才会执行到，于是「一保存配置、同步一成功，客户端渲染
+		 * 就抛 ReferenceError、两个面板同时消失」。补上定义即修复。
+		 */
+		function timeLabel(ts) {
+			const t = Number(ts) || 0;
+			if (t <= 0) return "从未";
+			const diff = Date.now() - t;
+			if (diff < 0) return fmtClock(t);
+			const min = Math.floor(diff / 60000);
+			if (min < 1) return "刚刚";
+			if (min < 60) return min + " 分钟前";
+			const hr = Math.floor(min / 60);
+			if (hr < 24) return hr + " 小时前";
+			return fmtClock(t);
+		}
 		function periodText(p) { return p === "peak" ? "高峰" : p === "off-peak" ? "闲时" : "平峰"; }
 		function shortModel(m) { const i = m.lastIndexOf("/"); return i >= 0 ? m.slice(i + 1) : m; }
 		// 订阅套餐友好名称：kimi-coding / kimi → Kimi Coding Plan，其余保留 provider 名

@@ -53,7 +53,21 @@ const sandbox = {
     addEventListener: () => {}, removeEventListener: () => {},
   },
   localStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
-  fetch: () => Promise.resolve({ ok: true, json: () => Promise.resolve({}) }),
+  // 用「已配置且已同步成功」的真实形态响应：v1.8.0/v1.8.1 的 timeLabel 只有在这种
+  // 状态下（lastSyncAt > 0）才会被执行到，用空对象会漏掉这条崩溃路径。
+  fetch: (url) => {
+    const name = String(url).split('/').pop()
+    const payload = name === 'sync'
+      ? {
+        ok: true, enabled: true, url: 'https://cost.example.com', hasToken: true,
+        deviceId: 'a55a81f9725fa272', deviceName: '测试机', watermark: 1224, maxSeq: 1225,
+        pending: 1, lastSyncAt: Date.now() - 120000, lastOkAt: Date.now() - 120000,
+        lastError: '', needAuth: false, backoffMs: 0, failures: 0, intervalSec: 60,
+        view: 'local', maskSessionId: false, includePurpose: true, syncSinceDays: 180,
+      }
+      : {}
+    return Promise.resolve({ ok: true, json: () => Promise.resolve(payload) })
+  },
   console, setTimeout, clearTimeout, setInterval, clearInterval,
 }
 sandbox.globalThis = sandbox
@@ -188,6 +202,8 @@ if (typeof cardRender !== 'function') {
     check('点击 header 后展开出 body', second.nodes.some((n) => String(n.props.className || '').includes('cost-pcard-body')), describeErrors(second.errors))
     check('展开后渲染期无异常', second.errors.length === 0, describeErrors(second.errors))
     check('展开后出现「服务地址」字段', second.text.includes('服务地址'), JSON.stringify(second.text.trim().slice(0, 100)))
+    check('已同步状态下渲染「上次同步」时间标签（timeLabel 必须已定义）', second.text.includes('上次同步') && /上次同步\s*(刚刚|\d+\s*(分钟|小时)前|\d{2}-\d{2} \d{2}:\d{2})/.test(second.text.replace(/\s+/g, ' ')),
+      JSON.stringify(second.text.replace(/\s+/g, ' ').slice(0, 200)))
   }
 }
 

@@ -19,7 +19,7 @@ import { createSyncEngine, setPluginVersion, SOURCE as SYNC_SOURCE, SYNC_VERSION
 import { Schema } from './schema.js'
 
 /** 插件版本（写入上报信封，便于云端排查版本差异） */
-const PLUGIN_VERSION = '1.8.1'
+const PLUGIN_VERSION = '1.8.2'
 setPluginVersion(PLUGIN_VERSION)
 
 /** 「设置 → 插件 → 插件配置」里的卡片字段（与 settings 命名空间一致） */
@@ -938,7 +938,8 @@ export default {
     async function listCloudDevices() {
       if (Date.now() - deviceNameCache.at < 30000 && deviceNameCache.list.length) return deviceNameCache.list
       try {
-        const res = await fetch(cloudConfig.cloudUrl + '/api/admin/devices', { headers: { authorization: 'Bearer ' + cloudConfig.cloudToken } })
+        // 同上：设备维度清单也走设备令牌可读的 /api/v1/*
+        const res = await fetch(cloudConfig.cloudUrl + '/api/v1/devices', { headers: { authorization: 'Bearer ' + cloudConfig.cloudToken } })
         const body = await res.json()
         if (body && body.ok && Array.isArray(body.devices)) {
           deviceNameCache.at = Date.now()
@@ -994,14 +995,20 @@ export default {
       } else if (mode === 'cloud-rest' && !selfKnown && selfId) {
         qs.set('excludeDevice', selfId) // 拿不到本机记录时退化为「排除本机整台」
       }
-      const url = cloudConfig.cloudUrl + '/api/admin/' + query.route + '?' + qs.toString()
+      // 只读聚合走 /api/v1/*（设备令牌可读）。/api/admin/* 只认管理员会话 cookie，
+      // 采集端手里只有设备令牌，走那条必然 401 —— 这是 1.8.0~1.8.2 里「仅云端 /
+      // 本机+云端」拿不到数据的根因。需要 dsh-cost-cloud ≥ 支持 /api/v1 只读接口的版本。
+      const url = cloudConfig.cloudUrl + '/api/v1/' + query.route + '?' + qs.toString()
       const ac = new AbortController()
       const t = setTimeout(() => ac.abort(), 12000)
       try {
         const res = await fetch(url, { headers: { authorization: 'Bearer ' + cloudConfig.cloudToken }, signal: ac.signal })
         const body = await res.json().catch(() => null)
         if (!body || body.ok !== true) {
-          const out = { ok: false, error: (body && body.error) || ('HTTP ' + res.status), code: (body && body.code) || 'CLOUD_ERROR' }
+          const hint = res.status === 404
+            ? '云端版本过旧：缺少设备只读接口 /api/v1/' + query.route + '，请升级 dsh-cost-cloud 后重试'
+            : null
+          const out = { ok: false, error: hint || (body && body.error) || ('HTTP ' + res.status), code: (body && body.code) || (res.status === 404 ? 'CLOUD_TOO_OLD' : 'CLOUD_ERROR') }
           return out
         }
         const value = Object.assign({}, body, {
