@@ -24,6 +24,14 @@ export const SYNC_VERSION = 1
 const US = '\u001f'
 const DAY_MS = 86400000
 const MAX_BATCH_BYTES = 900 * 1024
+/**
+ * 历史回填算法版本（记录在状态文件 `backfillVer` 里）。
+ * 低于本值的部署，下一轮同步会做一次「水位归零 + 由旧到新全量补发」。
+ *   1 = v1.8.4：已废弃 —— 多轮循环用服务端返回的水位（整体 MAX(client_seq)）
+ *       推进游标，会一步跨过本批之后尚未补发的记录，回填只发一批就短路。
+ *   2 = v1.8.5 起：游标只推进到**本批实际送达**的 maxClientSeq，多轮可覆盖全部。
+ */
+const BACKFILL_VER = 2
 
 // ------------------------------------------------------------
 // 共享设备身份（与其它 agent 的适配器共用同一份文件）
@@ -197,6 +205,7 @@ export function defaultSyncState() {
     backoffMs: 0,
     pendingFailures: 0,
     legacySent: false,
+    backfillVer: 0,
     rollups: {},
     records: 0,
   }
@@ -447,12 +456,14 @@ export function createSyncEngine(deps) {
     running = true
     try {
       const st = readSyncState(safeSnapshot().storageDir || process.cwd())
-      if (full) { st.watermark = 0; st.legacySent = false }
+      if (full) { st.watermark = 0; st.legacySent = false; st.backfillVer = 0 }
       // 一次性历史回填：≤1.8.3 的取批方向是"最新优先"，首批传完水位就跳到了最新
       // seq，更旧的记录被 `seq <= watermark` 永久跳过（云端因此缺一段历史）。
       // 这里在升级后的第一轮同步把水位归零、由旧到新把全部历史补齐一次；
       // 服务端按内容哈希幂等，重复的记录只会被计为 duplicates。
-      const backfill = !st.legacySent
+      // 用 backfillVer 而不是布尔量：v1.8.4 的回填算法本身有缺陷（见常量注释），
+      // 必须让已经跑过 v1 回填的部署再补跑一次 v2。
+      const backfill = Number(st.backfillVer) !== BACKFILL_VER
       if (backfill) st.watermark = 0
       st.deviceId = await ensureDevice(cfg, st)
       if (!identityOf().nameLocked && cfg.deviceName) {
@@ -501,10 +512,12 @@ export function createSyncEngine(deps) {
         result.duplicates += dup
         result.updated = (result.updated || 0) + updated
         result.invalid = (result.invalid || 0) + invalid
-        // 水位只在服务端确实处理了本批记录时推进；否则本批下次会重发（幂等，安全）
+        // 游标只推进到**本批实际送达**的最大 seq。
+        // 服务端回的是它库里该设备明细的 MAX(client_seq)（可能含更早已上传的、
+        // 序号更高的记录），直接采信会一步跨过本批之后尚未补发的记录，
+        // 让下面的多轮循环当场 break —— 那正是历史缺口补不回来的原因。
         if (accepted + dup + updated > 0) {
-          const wm = Number(r.body.watermark && r.body.watermark.maxClientSeq) || 0
-          if (wm > st.watermark) st.watermark = wm
+          if (pending.maxClientSeq > st.watermark) st.watermark = pending.maxClientSeq
         } else if (invalid > 0) {
           throw Object.assign(new Error('云端拒绝了本批全部 ' + invalid + ' 条记录'), { fatal: true })
         }
@@ -514,8 +527,9 @@ export function createSyncEngine(deps) {
       }
       result.sentRecords = sentRecords
       // 明细已由旧到新走完一轮（或达到轮次上限，水位同样可精确续传）→ 历史已对齐。
-      // 只在真正跑完明细阶段后置位：中途失败时保持 false，下次仍会从头补，绝不漏发。
+      // 只在真正跑完明细阶段后落版本号：中途失败时保持旧值，下次仍会从头补，绝不漏发。
       st.legacySent = true
+      st.backfillVer = BACKFILL_VER
 
       // ---- 2. 日汇总快照（后发，声明 absorbed） ----
       if (cfg.syncRollups) {

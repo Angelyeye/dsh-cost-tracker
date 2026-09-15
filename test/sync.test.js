@@ -400,8 +400,8 @@ function watermarkServer(seen) {
   for (let i = 0; i < N; i += 1) recs.push(makeRec(T + i * 1000))
   const snap = makeFixture(home, recs) // seq 1..1200
   const stPath = join(snap.storageDir, 'cost-tracker-sync.json')
-  // 复现故障现场：水位被推到 1100（1..1100 其实从未上送），legacySent 仍是 false
-  writeSyncState(snap.storageDir, Object.assign(readSyncState(snap.storageDir), { watermark: 1100, legacySent: false }))
+  // 复现故障现场：水位被推到 1100（1..1100 其实从未上送），回填从未做过
+  writeSyncState(snap.storageDir, Object.assign(readSyncState(snap.storageDir), { watermark: 1100, legacySent: false, backfillVer: 0 }))
 
   const seen = []
   const eng = engineWith(snap, { cloudEnabled: true, cloudUrl: 'http://cloud', cloudToken: 'tok', deviceId: 'dev-1', syncBatchSize: 50 }, watermarkServer(seen))
@@ -414,6 +414,7 @@ function watermarkServer(seen) {
   const st = readSyncState(snap.storageDir)
   eq(st.watermark, N, '水位推进到最新序号')
   eq(st.legacySent, true, '回填完成后置位 legacySent')
+  eq(st.backfillVer, 2, '回填完成后落版本号（v1.8.4 的回填会被判为过期重跑）')
   eq(eng.status().pending, 0, '回填后无待上报')
 
   // 回填标记置位后，水位不再被归零，只发增量
@@ -424,8 +425,8 @@ function watermarkServer(seen) {
   eq(seen.length, 50, '置位后只发水位之后的增量')
   eq(seen[0], 1151, '增量从水位之后开始')
 
-  // 中途失败：不得置位，下次仍要把没送到的补齐（幂等重发安全）
-  writeSyncState(snap.storageDir, Object.assign(readSyncState(snap.storageDir), { watermark: 1100, legacySent: false }))
+  // 中途失败：不得落版本号，下次仍要把没送到的补齐（幂等重发安全）
+  writeSyncState(snap.storageDir, Object.assign(readSyncState(snap.storageDir), { watermark: 1100, legacySent: false, backfillVer: 0 }))
   const seen2 = []
   let round = 0
   const flaky = async (url, opts) => {
@@ -437,13 +438,57 @@ function watermarkServer(seen) {
   }
   const r3 = await engineWith(snap, { cloudEnabled: true, cloudUrl: 'http://cloud', cloudToken: 'tok', deviceId: 'dev-1', syncBatchSize: 50 }, flaky).runOnce({ manual: true })
   eq(r3.ok, false, '中途失败时同步失败')
-  eq(readSyncState(snap.storageDir).legacySent, false, '失败时不得置位 legacySent（否则漏发的历史会被永久放过）')
+  eq(readSyncState(snap.storageDir).backfillVer, 0, '失败时不得落回填版本号（否则漏发的历史会被永久放过）')
+  eq(readSyncState(snap.storageDir).legacySent, false, '失败时不得置位 legacySent')
   const seen3 = []
   const r4 = await engineWith(snap, { cloudEnabled: true, cloudUrl: 'http://cloud', cloudToken: 'tok', deviceId: 'dev-1', syncBatchSize: 50 }, watermarkServer(seen3)).runOnce({ manual: true })
   ok(r4.ok === true, '下一次同步成功')
   eq(new Set(seen3).size, N, '失败后重跑仍能把 1200 条全部补齐')
-  eq(readSyncState(snap.storageDir).legacySent, true, '补齐后置位')
+  eq(readSyncState(snap.storageDir).backfillVer, 2, '补齐后落回填版本号')
   ok(existsSync(stPath), '状态文件已落盘')
+}
+
+// ---------- 8d. 服务端返回的水位是「整体最大值」，多轮回填不得被它短路 ----------
+{
+  const home = tmpHome()
+  const T = Date.now() - 3600000
+  const N = 1200
+  const recs = []
+  for (let i = 0; i < N; i += 1) recs.push(makeRec(T + i * 1000))
+  const snap = makeFixture(home, recs) // 本机 seq 1..1200
+  // 复现真实故障现场：旧版只上传了「最新的 500 条」，云端有 701..1200、缺 1..700；
+  // 而真实服务端 /ingest/records 回的水位是它库里的整体 MAX(client_seq)=1200
+  // （不是本批最大值）—— 采信它就会一步跨到 1200，多轮循环当场 break。
+  const stored = new Set()
+  for (let s = 701; s <= N; s += 1) stored.add(s)
+  const seen = []
+  const globalMaxCloud = async (url, opts) => {
+    const body = JSON.parse(opts.body)
+    if (url.endsWith('/ingest/records')) {
+      let acc = 0
+      let dup = 0
+      for (const rec of body.records) {
+        const sq = Number(rec.seq) || 0
+        seen.push(sq)
+        if (stored.has(sq)) dup += 1
+        else { stored.add(sq); acc += 1 }
+      }
+      const wm = Math.max(0, ...stored)
+      return { status: 200, json: async () => ({ ok: true, accepted: acc, duplicates: dup, updated: 0, rollupsUpserted: 0, watermark: { maxClientSeq: wm, lastAcceptedAt: Date.now() }, warnings: [] }) }
+    }
+    return { status: 200, json: async () => ({ ok: true, rollupsUpserted: 0, watermark: { maxClientSeq: Math.max(0, ...stored) } }) }
+  }
+  writeSyncState(snap.storageDir, Object.assign(readSyncState(snap.storageDir), { watermark: N, legacySent: false, backfillVer: 0 }))
+  const eng = engineWith(snap, { cloudEnabled: true, cloudUrl: 'http://cloud', cloudToken: 'tok', deviceId: 'dev-1', syncBatchSize: 50 }, globalMaxCloud)
+  const r = await eng.runOnce({ manual: true })
+  ok(r.ok === true, '缺口补齐：同步成功')
+  eq(Math.min(...seen), 1, '缺口补齐：从最旧的一条开始')
+  eq(new Set(seen).size, N, '缺口补齐：1..1200 全部送达（服务端整体水位不得让循环提前 break）')
+  const holes = []
+  for (let s = 1; s <= N; s += 1) if (!stored.has(s)) holes.push(s)
+  eq(holes.length, 0, '缺口补齐：云端不再有空洞（旧实现只补到第一批就停）')
+  eq(readSyncState(snap.storageDir).backfillVer, 2, '缺口补齐：回填版本号落盘')
+  eq(readSyncState(snap.storageDir).watermark, N, '缺口补齐：游标推进到最新')
 }
 
 // ---------- 9. 状态与连接测试 ----------
