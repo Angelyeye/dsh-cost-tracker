@@ -76,6 +76,25 @@ jobs:
           echo "authToken = '$(npm config get //registry.npmjs.org/:_authToken 2>/dev/null)'"
           node -e "if (!process.env.ACTIONS_ID_TOKEN_REQUEST_URL) { console.error('OIDC 环境不可用：缺少 id-token: write 权限'); process.exit(1) } console.log('OIDC 环境可用 ✓')"
 
+      # 排障：确认 npm 眼里到底有没有凭据、GitHub 肯不肯签发 npm 受众的 OIDC 令牌
+      - name: Diagnose npm auth environment
+        if: ${{ !inputs.dry_run }}
+        run: |
+          echo "=== 版本 ==="; node --version; npm --version
+          echo "=== 认证相关环境变量（只显示是否设置）==="
+          env | grep -iE '^(NODE_AUTH_TOKEN|NPM_|ACTIONS_ID_TOKEN)' | sed -E 's/=.*/=<set>/' || echo '(无)'
+          echo "=== npm 配置里与认证/registry 有关的项 ==="
+          npm config list -l 2>/dev/null | grep -iE 'auth|registry|userconfig|provenance' || true
+          echo "=== userconfig 路径与内容（令牌打码）==="
+          UC="$(npm config get userconfig 2>/dev/null)"
+          echo "userconfig = $UC"
+          if [ -f "$UC" ]; then sed -E 's/(_authToken=).*/\1<redacted>/' "$UC"; else echo '(文件不存在)'; fi
+          echo "=== 直接向 GitHub 换一枚 npm 受众的 OIDC 令牌（不打印令牌本体）==="
+          curl -sS -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=npm:registry.npmjs.org" \
+            -o /tmp/oidc.json -w 'OIDC 交换 HTTP %{http_code}\n'
+          node -e "try{const j=require('/tmp/oidc.json');console.log('拿到 OIDC 令牌:', !!j.value, '长度', (j.value||'').length)}catch(e){console.log('解析失败:', e.message)}"
+
       - name: Publish (dry run)
         if: ${{ inputs.dry_run }}
         run: npm publish --access public --dry-run
