@@ -312,7 +312,10 @@ export function createSyncEngine(deps) {
     const cutoff = cfg.syncSinceDays > 0 ? now() - cfg.syncSinceDays * DAY_MS : 0
     const out = []
     let bytes = 0
-    for (let k = details.length - 1; k >= 0; k -= 1) {
+    // 必须**由旧到新**收集：水位语义是"已成功上送的最大 seq"，
+    // 若从最新往回取批，首批只覆盖最新 limit 条，水位随即跳过更旧的记录，
+    // 它们就再也不会被选中（历史数据永久缺失）。
+    for (let k = 0; k < details.length; k += 1) {
       const r = details[k]
       if (!r || typeof r.ts !== 'number') continue
       const seq = Number.isFinite(r.seq) ? r.seq : 0
@@ -345,7 +348,7 @@ export function createSyncEngine(deps) {
       bytes += size
       if (out.length >= limit) break
     }
-    out.reverse() // 按时间升序上送，便于服务端推进水位
+    // details 本身按时间升序，顺序收集即为升序上送（便于服务端推进水位）
     return {
       records: out,
       maxClientSeq: out.length ? Math.max(...out.map((r) => Number(r.seq) || 0)) : 0,
@@ -445,6 +448,12 @@ export function createSyncEngine(deps) {
     try {
       const st = readSyncState(safeSnapshot().storageDir || process.cwd())
       if (full) { st.watermark = 0; st.legacySent = false }
+      // 一次性历史回填：≤1.8.3 的取批方向是"最新优先"，首批传完水位就跳到了最新
+      // seq，更旧的记录被 `seq <= watermark` 永久跳过（云端因此缺一段历史）。
+      // 这里在升级后的第一轮同步把水位归零、由旧到新把全部历史补齐一次；
+      // 服务端按内容哈希幂等，重复的记录只会被计为 duplicates。
+      const backfill = !st.legacySent
+      if (backfill) st.watermark = 0
       st.deviceId = await ensureDevice(cfg, st)
       if (!identityOf().nameLocked && cfg.deviceName) {
         identity.machineName = cfg.deviceName
@@ -504,6 +513,9 @@ export function createSyncEngine(deps) {
         pending = next
       }
       result.sentRecords = sentRecords
+      // 明细已由旧到新走完一轮（或达到轮次上限，水位同样可精确续传）→ 历史已对齐。
+      // 只在真正跑完明细阶段后置位：中途失败时保持 false，下次仍会从头补，绝不漏发。
+      st.legacySent = true
 
       // ---- 2. 日汇总快照（后发，声明 absorbed） ----
       if (cfg.syncRollups) {

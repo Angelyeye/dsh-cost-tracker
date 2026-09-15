@@ -362,6 +362,90 @@ function engineWith(snapshot, cfg, fetchFn) {
   }
 }
 
+// ---------- 8b. 取片方向：必须由旧到新，否则历史数据永久缺失 ----------
+{
+  const home = tmpHome()
+  const T = Date.now() - 60000
+  const snap = makeFixture(home, [1, 2, 3, 4, 5].map((i) => makeRec(T + i * 1000)))
+  const eng = engineWith(snap, { cloudEnabled: true, cloudUrl: 'http://x', cloudToken: 't', deviceId: 'dev-1' })
+  const CFG = normalizeCloudConfig({ cloudEnabled: true, cloudUrl: 'http://x', cloudToken: 't', deviceId: 'dev-1' })
+  const seqs = (p) => p.records.map((r) => r.seq).join(',')
+  // 旧实现从最新往回取批 → 首批会拿到 4,5；水位随即跳到 5，1..3 永远发不出去
+  let p = eng._buildRecordsPayload(CFG, { watermark: 0 }, 2)
+  eq(seqs(p), '1,2', '批上限截断时取**最旧**的两条（不是最新的）')
+  eq(p.maxClientSeq, 2, 'maxClientSeq = 本批最大序号（水位可连续推进）')
+  p = eng._buildRecordsPayload(CFG, { watermark: 2 }, 2)
+  eq(seqs(p), '3,4', '水位之后继续由旧到新推进')
+  p = eng._buildRecordsPayload(CFG, { watermark: 4 }, 2)
+  eq(seqs(p), '5', '最后一批只剩余量')
+}
+
+// ---------- 8c. 现场复现：老版本留下的"已跳过"历史必须能被自动补齐 ----------
+function watermarkServer(seen) {
+  return async (url, opts) => {
+    const body = JSON.parse(opts.body)
+    if (url.endsWith('/ingest/records')) {
+      for (const r of body.records) seen.push(Number(r.seq) || 0)
+      const wm = body.records.reduce((m, r) => Math.max(m, Number(r.seq) || 0), 0)
+      return { status: 200, json: async () => ({ ok: true, accepted: body.records.length, duplicates: 0, updated: 0, rollupsUpserted: 0, watermark: { maxClientSeq: wm, lastAcceptedAt: Date.now() }, warnings: [] }) }
+    }
+    return { status: 200, json: async () => ({ ok: true, rollupsUpserted: 0, watermark: { maxClientSeq: 0 } }) }
+  }
+}
+{
+  const home = tmpHome()
+  const T = Date.now() - 3600000
+  const N = 1200
+  const recs = []
+  for (let i = 0; i < N; i += 1) recs.push(makeRec(T + i * 1000))
+  const snap = makeFixture(home, recs) // seq 1..1200
+  const stPath = join(snap.storageDir, 'cost-tracker-sync.json')
+  // 复现故障现场：水位被推到 1100（1..1100 其实从未上送），legacySent 仍是 false
+  writeSyncState(snap.storageDir, Object.assign(readSyncState(snap.storageDir), { watermark: 1100, legacySent: false }))
+
+  const seen = []
+  const eng = engineWith(snap, { cloudEnabled: true, cloudUrl: 'http://cloud', cloudToken: 'tok', deviceId: 'dev-1', syncBatchSize: 50 }, watermarkServer(seen))
+  const r = await eng.runOnce({ manual: true })
+  ok(r.ok === true, '回填同步成功')
+  eq(seen.length, N, '历史被完整补齐（1200 条全部送达，而不是只发最新的一批）')
+  eq(seen[0], 1, '从最旧的一条开始补')
+  eq(new Set(seen).size, N, '覆盖 1..1200 且无重复')
+  eq(Math.min(...seen), 1, '没有任何更旧的记录被水位跳过')
+  const st = readSyncState(snap.storageDir)
+  eq(st.watermark, N, '水位推进到最新序号')
+  eq(st.legacySent, true, '回填完成后置位 legacySent')
+  eq(eng.status().pending, 0, '回填后无待上报')
+
+  // 回填标记置位后，水位不再被归零，只发增量
+  writeSyncState(snap.storageDir, Object.assign(readSyncState(snap.storageDir), { watermark: 1150 }))
+  seen.length = 0
+  const r2 = await eng.runOnce({ manual: true })
+  ok(r2.ok === true, '增量同步成功')
+  eq(seen.length, 50, '置位后只发水位之后的增量')
+  eq(seen[0], 1151, '增量从水位之后开始')
+
+  // 中途失败：不得置位，下次仍要把没送到的补齐（幂等重发安全）
+  writeSyncState(snap.storageDir, Object.assign(readSyncState(snap.storageDir), { watermark: 1100, legacySent: false }))
+  const seen2 = []
+  let round = 0
+  const flaky = async (url, opts) => {
+    if (url.endsWith('/ingest/records')) {
+      round += 1
+      if (round === 2) return { status: 500, json: async () => ({ ok: false, code: 'SERVER', error: 'boom' }) }
+    }
+    return watermarkServer(seen2)(url, opts)
+  }
+  const r3 = await engineWith(snap, { cloudEnabled: true, cloudUrl: 'http://cloud', cloudToken: 'tok', deviceId: 'dev-1', syncBatchSize: 50 }, flaky).runOnce({ manual: true })
+  eq(r3.ok, false, '中途失败时同步失败')
+  eq(readSyncState(snap.storageDir).legacySent, false, '失败时不得置位 legacySent（否则漏发的历史会被永久放过）')
+  const seen3 = []
+  const r4 = await engineWith(snap, { cloudEnabled: true, cloudUrl: 'http://cloud', cloudToken: 'tok', deviceId: 'dev-1', syncBatchSize: 50 }, watermarkServer(seen3)).runOnce({ manual: true })
+  ok(r4.ok === true, '下一次同步成功')
+  eq(new Set(seen3).size, N, '失败后重跑仍能把 1200 条全部补齐')
+  eq(readSyncState(snap.storageDir).legacySent, true, '补齐后置位')
+  ok(existsSync(stPath), '状态文件已落盘')
+}
+
 // ---------- 9. 状态与连接测试 ----------
 {
   const home = tmpHome()
