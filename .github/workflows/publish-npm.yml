@@ -17,6 +17,23 @@
 # 手动触发可以避免误推标签导致意外发布。
 #
 # 依赖：npm CLI ≥ 11.5.1（OIDC 可信发布的最低版本）。Node 24 自带的 npm 满足要求。
+#
+# === 2026-09-15 排障记录：为什么第一次发布失败（E404）===
+# 症状：
+#   npm error 404 Not Found - PUT https://registry.npmjs.org/@angelyeye%2fdsh-cost-tracker
+#   npm error 404 The requested resource '@angelyeye/dsh-cost-tracker@1.8.0' could not be
+#                 found or you do not have permission to access it.
+#
+# 原因：actions/setup-node 一旦给了 registry-url，就会写出这样的 ~/.npmrc：
+#     //registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}
+#     always-auth=true
+# 本仓库没有任何 Actions secret（total_count = 0），于是 NODE_AUTH_TOKEN 是个占位值。
+# npm 看到 .npmrc 里「已经配了令牌」，就认为要走令牌认证，**不再尝试 OIDC**，
+# 结果以未认证身份 PUT → npm 对无权限的发布统一回 404（而不是 401/403）。
+#
+# 修法：① 去掉 registry-url（默认 registry 本来就是 registry.npmjs.org，不需要它）；
+#       ② 再加一道清理，删掉任何残留的 _authToken，并断言 OIDC 环境变量存在。
+# 这样 npm CLI 才会用 ACTIONS_ID_TOKEN_REQUEST_URL 去换一次性发布凭据。
 
 name: Publish to npm
 
@@ -38,10 +55,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 不要设 registry-url：它会写入带 _authToken 的 .npmrc，
+      # 从而让 npm 走令牌认证、绕过 OIDC 可信发布（见文件顶部排障记录）。
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-          registry-url: 'https://registry.npmjs.org'
 
       # 发布前必须全绿 —— 包括 client-registration.test.js，
       # 它正是拦住「注册 id 与包名不一致」那类回归的那道闸。
@@ -50,6 +68,13 @@ jobs:
 
       - name: Show npm version
         run: npm --version
+
+      # 双保险：确保没有任何 _authToken 残留，否则 OIDC 会被静默跳过
+      - name: Ensure OIDC (no npm auth token)
+        run: |
+          npm config delete //registry.npmjs.org/:_authToken 2>/dev/null || true
+          echo "authToken = '$(npm config get //registry.npmjs.org/:_authToken 2>/dev/null)'"
+          node -e "if (!process.env.ACTIONS_ID_TOKEN_REQUEST_URL) { console.error('OIDC 环境不可用：缺少 id-token: write 权限'); process.exit(1) } console.log('OIDC 环境可用 ✓')"
 
       - name: Publish (dry run)
         if: ${{ inputs.dry_run }}
