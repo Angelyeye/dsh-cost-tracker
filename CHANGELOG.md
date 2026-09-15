@@ -2,6 +2,20 @@
 
 本文件用中文记录 dsh-cost-tracker 的版本变更。
 
+## v1.8.1(2026-09-15)
+
+**修复(均为 v1.8.0 的原生缺陷,建议所有 1.8.0 用户升级)**
+- **「花费统计」页白屏**:`Dashboard` 把 `sync` 作为 prop 传给 `PeakPanel`,而 `PeakPanel` 内部误用了裸 `sync`(未从 props 解构),渲染期抛 `ReferenceError: sync is not defined`,整块面板被卸载成空白 —— 1.8.0 的主页面等于完全不可用。
+- **插件配置卡片永不显示**:客户端用 `slots.entries("settings.plugin.item").length > 0` 当「宿主是否声明了该插槽」的探测。`entries` 数的是**已经注册进该插槽的条目**,而条目恰恰由各插件在插槽声明之后才注册,所以该判断在插件 apply 阶段恒为假,卡片永远注册不上(也就没有地方填写云端地址)。改为**无条件** `slots.inject`,与宿主官方卡片及 `dsh-context` 的写法一致。
+- **宿主侧命名空间注册时序**:`ctx.get('settings')` 只探一次,服务晚一步就绪时命名空间永不注册。改为 `ctx.inject(['settings'], …)` 等它就绪再注册(服务始终缺席时保持 inert,不阻断启动);`installSettingsSection` 增加幂等守卫,避免二次注册触发宿主 `already registered`。
+
+**改进**
+- **插件配置卡片改用宿主同款外壳**:`li.cost-pcard` > 可点击 header(标题 / 副标题 / 旋转箭头) + 折叠 body,逐条照搬宿主 `PluginCard.module.css` 的设计 token(边框、圆角、hover、展开态配色、focus-visible、过渡时长),默认收起、点击展开,与「插件市场 / 上下文 / 终端」等卡片视觉一致。样式用 `.cost-pcard` 前缀,避免与「花费统计」页既有的 `.cost-card`(概览数字卡)冲突。
+
+**测试**
+- 新增 `test/client-render.test.js`:用零依赖的极小 React 替身在 Node 里真实执行 `client.js`(函数组件被真正调用、`useState` 可持久化以模拟交互、`useEffect` 会执行并等微任务落地),覆盖:apply 完整、两个插槽都注册、花费统计页渲染无异常、配置卡片默认折叠 / 点击展开 / 展开后表单字段渲染。该护栏在 1.8.0 的原始代码上会红(正是上面两个缺陷)。
+- `test/client-registration.test.js` 新增「插件配置卡片注册方式」3 项断言(必须无条件 inject、条目键必须等于命名空间、必须与宿主 `installSection` 的 ns 一致)。
+
 ## v1.8.0(2026-09-15)
 
 **新功能：云端同步（多机汇总）**

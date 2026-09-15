@@ -195,6 +195,18 @@ window.__ModuleLoader__.load({
 .cost-sync-fields .k { color: var(--dsw-alias-label-secondary, #5b6472); }
 .cost-sync-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
 .cost-sync-state { margin-top: 8px; font-size: 12px; color: var(--dsw-alias-label-secondary, #5b6472); }
+/* 插件配置卡片外壳：照搬宿主 PluginCard 的设计 token 与结构，保证与「插件市场」等卡片同款 */
+.cost-pcard { border: .5px solid var(--dsw-alias-border-l4, #e5e7eb); background: var(--dsw-alias-bg-layer-3, transparent); border-radius: 16px; list-style: none; margin: 0; transition: border-color .16s, background .16s; }
+.cost-pcard:hover { border-color: var(--dsw-alias-label-dimmed, #9aa3af); }
+.cost-pcard.is-open { background: var(--dsw-alias-bg-layer-2, transparent); border-color: var(--dsw-alias-label-dimmed, #9aa3af); }
+.cost-pcard-head { appearance: none; width: 100%; font: inherit; color: inherit; text-align: left; cursor: pointer; background: none; border: 0; border-radius: 12px; display: flex; align-items: center; gap: 12px; padding: 14px 16px; }
+.cost-pcard-head:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary, #2563eb); outline-offset: -2px; }
+.cost-pcard-headtext { display: flex; flex-direction: column; flex: 1; gap: 4px; min-width: 0; }
+.cost-pcard-name { color: var(--dsw-alias-label-primary, #171a1f); font-size: 15px; font-weight: 600; line-height: 1.4; }
+.cost-pcard-desc { color: var(--dsw-alias-label-tertiary, #8b93a1); font-size: 13px; line-height: 1.5; }
+.cost-pcard-chevron { color: var(--dsw-alias-label-tertiary, #8b93a1); flex: none; transition: transform .16s; }
+.cost-pcard-chevron.is-open { transform: rotate(180deg); }
+.cost-pcard-body { border-top: .5px solid var(--dsw-alias-border-l2, #e5e7eb); margin: 0 16px; padding: 12px 0 10px; }
 `;
 			const tag = document.createElement("style");
 			tag.setAttribute("data-plugin-css", "cost-tracker-plugin");
@@ -1138,7 +1150,7 @@ window.__ModuleLoader__.load({
 						"峰时段（北京时间）：" + (snap ? snap.peakWindows : "周一至周五 9:00-12:00 · 14:00-18:00（周末全天闲时）") + "。生效时间：" + (snap ? snap.effectiveAt : "2026-08-01T00:00:00Z") + "。当前：" + (cfgSnap && cfgSnap.phase ? (cfgSnap.phase.weekend ? "周末全谷价" : cfgSnap.phase.inPeak ? "高峰时段" : "平价时段") : "…"))),
 				noticeOn ? e("div", { style: { marginTop: "8px" } }, e(PeakStrip, { snap: cfgSnap, style: d.peakStyle || "compact", wide: true, now, ringSize: 150 }))
 					: e("p", { className: "cost-hint", style: { marginTop: "8px" } }, "提示已隐藏：需启用峰谷计价并开启「峰时高价时段显著提示」。"),
-				e(SyncReadonlyCard, { sync }));
+				e(SyncReadonlyCard, { sync: props.sync }));
 		}
 
 		// ============================================================
@@ -1187,6 +1199,8 @@ window.__ModuleLoader__.load({
 			const [msg, setMsg] = useState("");
 			const [busy, setBusy] = useState(false);
 			const [testing, setTesting] = useState("");
+			// 折叠态：与宿主「插件配置」里其它卡片一致——默认收起，点标题展开
+			const [open, setOpen] = useState(false);
 			function load() {
 				apiCall("sync", {}).then(v => {
 					if (!v) return;
@@ -1236,9 +1250,17 @@ window.__ModuleLoader__.load({
 					load();
 				}).catch(err => { setBusy(false); setMsg("同步失败：" + String(err && err.message ? err.message : err)); });
 			}
-			if (!st) return e("div", { className: "cost-hint" }, "加载云端同步状态…");
-			return e("div", {},
-				e("div", { className: "cost-hint" }, "把本机用量汇总到自建云端服务；多台电脑共用同一个地址与令牌即可在「花费统计」看板切换查看全网数据。"),
+			// 卡片外壳对齐宿主 PluginCard：li.cost-pcard > button.cost-pcard-head（标题+副标题+箭头）> body
+			const head = e("button", { type: "button", className: "cost-pcard-head", "aria-expanded": open, onClick: () => setOpen(v => !v) },
+				e("span", { className: "cost-pcard-headtext" },
+					e("span", { className: "cost-pcard-name" }, "花费统计" + (st && st.enabled ? " · 云端同步已开启" : "")),
+					e("span", { className: "cost-pcard-desc" }, "把本机用量汇总到自建云端服务；多台电脑共用同一个地址与令牌，即可在「花费统计」看板切换查看全网数据。")),
+				e("svg", { className: "cost-pcard-chevron" + (open ? " is-open" : ""), width: 14, height: 14, viewBox: "0 0 14 14", fill: "none", "aria-hidden": "true" },
+					e("path", { d: "M3.5 5.25 7 8.75l3.5-3.5", stroke: "currentColor", strokeWidth: 1.4, strokeLinecap: "round", strokeLinejoin: "round" })));
+			const body = !st
+				? e("div", { className: "cost-hint", style: { margin: "12px 0" } }, "加载云端同步状态…")
+				: e("div", {},
+					e("div", { className: "cost-hint" }, "填好地址与令牌后点「保存」，再点「测试连接」确认可达；首次同步会自动回补历史明细。"),
 				e("div", { className: "cost-sync-fields" },
 					field("设备名", e("input", {
 						className: "cost-input", style: { width: "200px" }, value: draft.deviceName || "", placeholder: "如：办公台式机",
@@ -1272,6 +1294,9 @@ window.__ModuleLoader__.load({
 				st.lastError ? e("div", { className: "cost-err" }, "最近错误：" + st.lastError) : null,
 				st.needAuth ? e("div", { className: "cost-err" }, "令牌无效：请在云端看板重新生成共享引导令牌后填入上方「共享令牌」。") : null,
 				st.url ? e("div", { className: "cost-hint", style: { marginTop: "6px" } }, "云端看板：" + st.url) : null);
+			return e("li", { className: "cost-pcard" + (open ? " is-open" : "") },
+				head,
+				open ? e("div", { className: "cost-pcard-body" }, body) : null);
 		}
 
 		function Dashboard() {
@@ -1575,18 +1600,16 @@ window.__ModuleLoader__.load({
 				() => e(Dashboard, {}),
 			));
 			// 插件配置卡片（设置 → 插件 → 插件配置）：以 settings 命名空间为键。
-			// 插槽由 @deepseek-ai/dsh-client-ui-settings-plugins 在运行时声明；
-			// 该版本未提供时静默跳过（功能由花费统计页的只读回显 + 工具承接）。
+			// 这里必须**无条件** inject，不能拿 slots.entries(key).length 当"插槽是否存在"的探测：
+			// entries 数的是"已经注册进该槽的条目"，而条目正是由各插件在插槽声明后才注册的，
+			// 所以在插件 apply 阶段它恒为空 —— 用探测就会把卡片永远挡在门外（1.8.0 的缺陷）。
+			// 宿主的官方卡片（dsh-client-ui-settings-plugins）与 dsh-context 都是无条件 inject：
+			// 插槽未声明时回调不触发、声明时自动触发，既不会误判也不需要重试。
 			const pluginItemKey = "settings.plugin.item";
-			const hasPluginItem = typeof slots.entries === "function" && slots.entries(pluginItemKey).length > 0;
-			if (hasPluginItem) {
-				slots.inject(pluginItemKey, () => slots.register(
-					{ name: pluginItemKey, key: "cost-tracker" },
-					() => e(PluginConfigCard, {}),
-				));
-			} else if (typeof console !== "undefined" && console.info) {
-				console.info("[dsh-cost-tracker] 未检测到 settings.plugin.item 插槽：插件配置卡未注册（云端配置仍可在「设置 → 花费统计」查看，或等待宿主升级后重启）。");
-			}
+			slots.inject(pluginItemKey, () => slots.register(
+				{ name: pluginItemKey, key: "cost-tracker" },
+				() => e(PluginConfigCard, {}),
+			));
 			slots.inject("conversation.composer.dock", () => slots.register(
 				{ name: "conversation.composer.dock", id: "cost", order: 1 },
 				(props) => e(StatusLine, props || {}),

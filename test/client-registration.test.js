@@ -195,6 +195,23 @@ console.log('\n[5] pending queue 模式（loader 尚未就绪）')
   check('未破坏原有的入队行为', queue.length === 1 && typeof queue[0].factory === 'function')
 }
 
+// ---------- [6] 插件配置卡片：必须以 settings 命名空间为键，且无条件注册 ----------
+// v1.8.0 缺陷：拿 `slots.entries("settings.plugin.item").length > 0` 当"宿主是否声明了该插槽"
+// 的探测。entries 返回的是**已经注册进该槽的条目**，而条目正是由各插件在插槽声明之后才注册的，
+// 所以在插件 apply 阶段它恒为空 → 卡片永远注册不上（设置 → 插件 → 插件配置 里看不到）。
+// 宿主的官方卡片（dsh-client-ui-settings-plugins）与 dsh-context 都是无条件 slots.inject。
+console.log('[6] 插件配置卡片注册方式')
+{
+  check('无条件 inject "settings.plugin.item"（不得再用 entries 探测）',
+    /slots\.inject\(\s*pluginItemKey\s*,/.test(source) && !/entries\(\s*pluginItemKey\s*\)/.test(source),
+    '应为 slots.inject(pluginItemKey, () => slots.register(...))，且不含 slots.entries(pluginItemKey) 守卫')
+  check('卡片条目键 = settings 命名空间 "cost-tracker"',
+    /name:\s*pluginItemKey\s*,\s*key:\s*"cost-tracker"/.test(source),
+    '宿主按命名空间为键派发 settings.plugin.item，键必须与 installSection 的 ns 一致')
+  check('与宿主 installSection 的命名空间一致',
+    /installSection\([^,]+,\s*'cost-tracker'/.test(readFileSync(join(root, 'index.js'), 'utf8')))
+}
+
 console.log('')
 if (failures > 0) {
   console.log(`FAILED: ${failures} 项断言未通过`)

@@ -19,7 +19,7 @@ import { createSyncEngine, setPluginVersion, SOURCE as SYNC_SOURCE, SYNC_VERSION
 import { Schema } from './schema.js'
 
 /** 插件版本（写入上报信封，便于云端排查版本差异） */
-const PLUGIN_VERSION = '1.8.0'
+const PLUGIN_VERSION = '1.8.1'
 setPluginVersion(PLUGIN_VERSION)
 
 /** 「设置 → 插件 → 插件配置」里的卡片字段（与 settings 命名空间一致） */
@@ -205,11 +205,12 @@ export default {
       if (JSON.stringify(cloudConfig) !== before) saveConfig()
     }
 
-    function installSettingsSection() {
-      const settings = ctx.get('settings')
+    function installSettingsSection(provider, owner) {
+      if (settingsScope) return true // 幂等：宿主对同一 ns 二次注册会抛 "already registered"
+      const settings = provider || ctx.get('settings')
       if (!settings || typeof settings.installSection !== 'function') return false
       try {
-        settingsScope = settings.installSection(ctx, 'cost-tracker', SyncSchema, {}, {
+        settingsScope = settings.installSection(owner || ctx, 'cost-tracker', SyncSchema, {}, {
           setSource(getter) { settingsSource = typeof getter === 'function' ? getter : (() => ({})) },
           onChange() { settingsCardInstalled = true; applySettingsPatch(settingsSource()) },
           validate(value) { return normalizeCloudConfig(Object.assign({}, cloudConfig, value || {})) },
@@ -1303,6 +1304,20 @@ export default {
     loadRecords()
     loadConfig()
     const settingsOk = installSettingsSection()
+    if (!settingsOk) {
+      // settings 是可选服务（宿主未组合时不报错、不阻断启动），但不能像 1.8.0 那样只探一次：
+      // 它晚于本插件就绪时，那一次 ctx.get('settings') 必然落空 → 命名空间永不注册 →
+      // 「设置 → 插件 → 插件配置」里永远没有本插件的卡片。
+      // 与 dsh-context 的 installSettings 同款写法：ctx.inject 等它就绪后再装，始终缺席则自然 inert。
+      try {
+        ctx.inject(['settings'], (sctx) => {
+          const provider = sctx.get('settings') || sctx.settings
+          if (installSettingsSection(provider, sctx)) publishSettings()
+        })
+      } catch (e) {
+        startupLog('settings inject skipped: ' + String(e && e.message ? e.message : e))
+      }
+    }
     startSyncTimer()
     if (cloudConfig.cloudEnabled) scheduleSync(5000)
     ctx.effect(() => () => {
