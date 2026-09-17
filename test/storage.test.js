@@ -4,12 +4,13 @@
 // 覆盖：日键/保留边界/日汇总聚合/总量合并/旧格式迁移/
 //       持久化往返/损坏自愈/安全上限/索引文件可加载
 // ============================================================
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   createStore, collectTotals, collectByDay, rollupRecord,
-  applyRetention, dayKey, DETAIL_DAYS, MAX_AXIS_DAYS, MAX_DETAILS,
+  applyRetention, dayKey, writeFileAtomic, isTransientRenameError,
+  DETAIL_DAYS, MAX_AXIS_DAYS, MAX_DETAILS,
 } from '../store.js'
 
 let failures = 0
@@ -224,6 +225,83 @@ ok(MAX_DETAILS === 200000, '常量: MAX_DETAILS=200000')
   const mod = await import('../index.js')
   ok(mod.default && mod.default.name === 'cost-tracker', 'index.js: 默认导出插件对象 name=cost-tracker')
   ok(typeof mod.default.apply === 'function', 'index.js: apply 为函数')
+}
+
+// ---------- 13. 原子落盘：Windows 瞬时占用（EPERM/EBUSY）必须重试而非直接失败 ----------
+// 线上现场（v1.8.9 重启时）：
+//   cost tracker persist failed Error: EPERM: operation not permitted,
+//     rename '...cost-tracker-records.json.tmp' -> '...cost-tracker-records.json'
+// 旧实现「一次 rename 定生死」：杀毒/索引器/上一个实例的瞬时占用就报错，用户看到完整堆栈。
+// 新实现：临时文件名带 pid + 退避重试；仍失败也不「直接覆盖写」（半个 JSON 会被
+// load() 判为损坏并改名 .corrupt-*，损失更大），而是留给调用方重试。
+{
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-ct-atomic-'))
+  const file = join(dir, 'records.json')
+  try {
+    // 13.1 正常路径：一次 rename 成功，且不留临时文件
+    const r1 = writeFileAtomic(file, '{"a":1}', {})
+    ok(r1.ok && r1.mode === 'rename' && r1.attempts === 1, `原子写: 一次成功（attempts=${r1.attempts}）`)
+    ok(readFileSync(file, 'utf8') === '{"a":1}', '原子写: 内容正确')
+    ok(readdirSync(dir).length === 1, `原子写: 不留临时文件（实际 ${readdirSync(dir).join(', ')}）`)
+
+    // 13.2 瞬时占用：前两次 EPERM，第三次成功 → 退避重试应救回来
+    const eperm = () => Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' })
+    let calls = 0
+    const sleeps = []
+    let tmpName = ''
+    const flaky = {
+      mkdirSync: () => {},
+      writeFileSync: (p, d) => { tmpName = p; writeFileSync(p, d, 'utf8') },
+      unlinkSync: (p) => { try { rmSync(p) } catch (e) {} },
+      renameSync: (from, to) => { calls += 1; if (calls <= 2) throw eperm(); renameSync(from, to) },
+    }
+    const r2 = writeFileAtomic(join(dir, 'flaky.json'), '{"b":2}', { fs: flaky, sleep: (ms) => sleeps.push(ms) })
+    ok(r2.ok && r2.attempts === 3, `瞬时占用: 重试 3 次后成功（attempts=${r2.attempts}, ok=${r2.ok}）`)
+    ok(sleeps.length === 2 && sleeps[0] === 20 && sleeps[1] === 40, `瞬时占用: 退避 20/40ms（实际 ${sleeps.join('/')}）`)
+    ok(tmpName.includes(String(process.pid)), '临时文件名带 pid（两实例不抢同一个临时文件）')
+    ok(!existsSync(join(dir, 'flaky.json.' + process.pid + '.tmp')), '瞬时占用: 成功后临时文件已 rename 走')
+
+    // 13.3 持续占用：不覆盖目标、不无限重试、临时文件清理掉
+    let unlinked = null
+    let wroteTarget = false
+    const locked = {
+      mkdirSync: () => {},
+      writeFileSync: (p) => { if (!p.endsWith('.tmp')) wroteTarget = true },
+      unlinkSync: (p) => { unlinked = p },
+      renameSync: () => { throw eperm() },
+    }
+    const r3 = writeFileAtomic(file, '{"c":3}', { fs: locked, sleep: () => {}, tries: 4 })
+    ok(!r3.ok && r3.attempts === 4 && r3.transient === true, `持续占用: 重试 ${r3.attempts} 次后放弃且标记为占用`)
+    ok(!wroteTarget, '持续占用: **不得**直接覆盖写目标（半个 JSON 会被判损坏）')
+    ok(unlinked !== null, '持续占用: 临时文件已清理')
+    ok(readFileSync(file, 'utf8') === '{"a":1}', '持续占用: 目标文件保持原内容不变')
+
+    // 13.4 非占用类错误（ENOENT）：不值得重试，立刻失败
+    let enoentCalls = 0
+    const broken = {
+      mkdirSync: () => {},
+      writeFileSync: () => {},
+      unlinkSync: () => {},
+      renameSync: () => { enoentCalls += 1; throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) },
+    }
+    const r4 = writeFileAtomic(join(dir, 'x.json'), '{}', { fs: broken, sleep: () => {} })
+    ok(!r4.ok && enoentCalls === 1, `非占用类错误: 只尝试 1 次（实际 ${enoentCalls}）`)
+    ok(r4.transient === false, '非占用类错误: 不标记为「被占用」')
+
+    // 13.5 store.persist() 走同一路径：真实文件系统上正常落盘并可读回
+    const s = createStore(file)
+    s.add(rec(NOW - 1 * DAY, { cost: 1.25 }))
+    ok(s.persist() === true, 'store.persist(): 正常环境下成功')
+    const back = createStore(file)
+    back.load()
+    approx(collectTotals(back.details, back.rollups).realCost, 1.25, 'store.persist(): 落盘后可读回')
+
+    // 13.6 错误分类：占用码可重试，代码类错误不重试
+    ok(isTransientRenameError({ code: 'EPERM' }) && isTransientRenameError({ code: 'EBUSY' }), '错误分类: EPERM/EBUSY 视为占用')
+    ok(!isTransientRenameError({ code: 'ENOENT' }) && !isTransientRenameError(null), '错误分类: 其它错误不重试')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 }
 
 console.log('\n' + passed.length + ' passed, ' + failures + ' failed')

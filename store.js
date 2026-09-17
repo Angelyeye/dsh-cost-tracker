@@ -16,7 +16,7 @@
 //   v1（旧版裸数组）在 load() 时自动迁移；损坏文件自动备份为
 //   .corrupt-<时间戳> 并从零开始，不阻断启动。
 // ============================================================
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { createHash } from 'node:crypto'
 
@@ -52,6 +52,82 @@ export function emptyEntry(provider, model, subscription, estimated) {
 
 /** 单条日汇总最多记录多少条被吸收明细的键（云端据此排除重复，超出部分不再追溯） */
 export const MAX_ABSORBED_KEYS = 5000
+
+// ---------- 原子落盘（Windows 友好） ----------
+/**
+ * rename 的**瞬时**失败码。Windows 上目标文件被短暂占用时 renameSync 会抛这些：
+ *   · 杀毒 / 搜索索引器刚扫过刚写完的临时文件；
+ *   · 资源管理器预览、备份/同步工具正在读该文件；
+ *   · 上一个 dsh 实例还没退干净（或同时跑了两个实例）。
+ * 这类「等一下就好」，退避重试即可；代码类错误（ENOENT、EISDIR…）不该重试。
+ */
+const TRANSIENT_RENAME_CODES = new Set(['EPERM', 'EACCES', 'EBUSY'])
+export function isTransientRenameError(e) {
+  return !!e && TRANSIENT_RENAME_CODES.has(String(e.code || ''))
+}
+
+/** 同步睡眠（Node 没有 sleepSync；Atomics.wait 不占 CPU） */
+function sleepSync(ms) {
+  try {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+  } catch (e) {
+    const end = Date.now() + ms
+    while (Date.now() < end) { /* 无 SharedArrayBuffer 的极端环境下退化为忙等 */ }
+  }
+}
+
+/**
+ * 原子落盘：写临时文件 → rename 覆盖目标。
+ *
+ * · 临时文件名带 **pid**：两个实例各写各的临时文件，不会互相盖掉半个文件
+ *   （旧实现固定用 `<file>.tmp`，两实例必然抢同一个临时文件）。
+ * · rename 遇瞬时占用时按 20/40/80/160ms 退避重试（默认 5 次，约 0.3s）。
+ * · 仍失败**不做**「直接覆盖写」：那会让并发读方看到半个 JSON，而 store.load()
+ *   一旦读到半个 JSON 会把文件改名为 `.corrupt-*` 并清空 —— 损失远大于「晚几秒落盘」。
+ *   数据留在内存里，由调用方稍后重试（见 index.js 的 writeRecords 重试链）。
+ *
+ * @returns {{ok:boolean, attempts:number, mode:'rename'|'failed', error?:Error|null, transient?:boolean}}
+ */
+export function writeFileAtomic(filePath, data, opts) {
+  const o = opts || {}
+  const fs = Object.assign({ mkdirSync, writeFileSync, renameSync, unlinkSync }, o.fs || {})
+  const sleep = o.sleep || sleepSync
+  const tries = Math.max(1, Number(o.tries) || 5)
+  const tmp = filePath + '.' + process.pid + '.tmp'
+  const cleanup = () => { try { fs.unlinkSync(tmp) } catch (e) { /* 已被 rename 走或从未创建 */ } }
+  try {
+    fs.mkdirSync(dirname(filePath), { recursive: true })
+    fs.writeFileSync(tmp, data, 'utf8')
+  } catch (e) {
+    cleanup()
+    return { ok: false, attempts: 0, mode: 'failed', error: e, transient: isTransientRenameError(e) }
+  }
+  let attempts = 0
+  let last = null
+  for (let i = 0; i < tries; i++) {
+    attempts += 1
+    try {
+      fs.renameSync(tmp, filePath)
+      return { ok: true, attempts, mode: 'rename', error: last }
+    } catch (e) {
+      last = e
+      if (!isTransientRenameError(e)) break
+      if (i < tries - 1) sleep(20 * Math.pow(2, i))
+    }
+  }
+  cleanup()
+  return { ok: false, attempts, mode: 'failed', error: last, transient: isTransientRenameError(last) }
+}
+
+/** 给用户看的失败原因（区分「被占用」与「文件系统错误」） */
+function explainPersistError(res) {
+  if (res.transient) {
+    return '记录文件被占用（杀毒/索引器/备份工具正在读它，或另有一个 dsh 实例在跑；'
+      + 'Windows 上 rename 需要目标文件的删除权限，被占用时会失败）'
+  }
+  return '文件系统错误（不是占用问题）'
+}
+
 
 /**
  * 由插件侧统一计算明细的内容哈希键（与云端契约 §6 一致）。
@@ -299,17 +375,45 @@ export function createStore(filePath, opts) {
     return r
   }
 
-  function persist() {
-    try {
-      mkdirSync(dirname(filePath), { recursive: true })
-      const tmp = filePath + '.tmp'
-      writeFileSync(tmp, JSON.stringify({ v: 2, seq, resetEpoch, details, rollups }), 'utf8')
-      renameSync(tmp, filePath)
+  // 落盘失败只报一次（避免每 1.5 秒刷屏）；恢复后又失败会再次提示
+  let persistWarned = false
+  // 最近一次失败的原因（供调用方在重试链耗尽后打印）
+  let lastPersistError = null
+  let lastPersistTransient = false
+  /** 供调用方在「自己还有重试机会」时静默（quiet=1），等重试链耗尽再报一次 */
+  function persistProblemText(res) {
+    return 'cost tracker persist failed: ' + ((res.error && res.error.message) || String(res.error))
+      + '\n  原因：' + explainPersistError(res)
+      + '\n  影响：数据仍在内存中，会在下一次写入时自动重试（不会丢）；'
+      + '若反复出现，请确认没有同时运行两个 dsh 实例'
+  }
+  function persist(opts) {
+    const o = opts || {}
+    const res = writeFileAtomic(filePath, JSON.stringify({ v: 2, seq, resetEpoch, details, rollups }), o)
+    if (res.ok) {
+      lastPersistError = null
+      lastPersistTransient = false
+      if (res.attempts > 1 && !persistWarned) {
+        persistWarned = true
+        console.error('cost tracker persist: 文件被短暂占用，重试 ' + res.attempts + ' 次后已写入（'
+          + explainPersistError({ transient: true }) + '）')
+      } else if (res.attempts === 1) {
+        persistWarned = false
+      }
       return true
-    } catch (e) {
-      console.error('cost tracker persist failed', e)
-      return false
     }
+    lastPersistError = res.error
+    lastPersistTransient = res.transient === true
+    if (!o.quiet && !persistWarned) {
+      persistWarned = true
+      console.error(persistProblemText(res))
+    }
+    return false
+  }
+  /** 重试链彻底放弃时由调用方打印（保证「只在真的没救时」才出现一次） */
+  function persistProblem() {
+    persistWarned = true
+    return persistProblemText({ error: lastPersistError, transient: lastPersistTransient })
   }
 
   function clear() {
@@ -328,7 +432,7 @@ export function createStore(filePath, opts) {
   }
 
   return {
-    details, rollups, load, add, persist, clear, counts,
+    details, rollups, load, add, persist, persistProblem, clear, counts,
     /** 当前最大序号（云端水位比较用） */
     maxSeq: () => seq,
     /** 清空次数（参与去重键） */

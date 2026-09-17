@@ -19,7 +19,7 @@ import { createSyncEngine, setPluginVersion, SOURCE as SYNC_SOURCE, SYNC_VERSION
 import { Schema } from './schema.js'
 
 /** 插件版本（写入上报信封，便于云端排查版本差异） */
-const PLUGIN_VERSION = '1.8.9'
+const PLUGIN_VERSION = '1.8.10'
 setPluginVersion(PLUGIN_VERSION)
 
 /** 「设置 → 插件 → 插件配置」里的卡片字段（与 settings 命名空间一致） */
@@ -139,7 +139,32 @@ export default {
     const records = store.details
     const rollups = store.rollups
 
-    function writeRecords() { store.persist() }
+    /**
+     * 落盘。store.persist() 内部已对「文件被短暂占用」退避重试（约 0.3s）；
+     * 仍失败时在这里**再排 3 次延迟重试**（2s / 4s / 6s）——
+     * 杀毒或备份工具一次扫描常常持续数秒，仅靠同步重试兜不住，
+     * 而数据一直在内存里，晚几秒落盘没有任何损失。
+     *
+     * 期间对 store 用 quiet 模式：重试链没走完之前**不打日志**，
+     * 避免「其实马上就好了」的情况在启动日志里甩出一段吓人的 EPERM 堆栈
+     * （v1.8.9 重启时的真实现场）。彻底放弃时才打印一次带原因与影响的说明。
+     */
+    let persistRetry = 0
+    let persistRetryTimer = null
+    function writeRecords() {
+      if (store.persist({ quiet: true })) { persistRetry = 0; return true }
+      if (persistRetry >= 3) {
+        console.error(store.persistProblem())
+        return false
+      }
+      persistRetry += 1
+      const delay = 2000 * persistRetry
+      const fire = () => { persistRetryTimer = null; writeRecords() }
+      const timer = ctx.get('timer')
+      if (persistRetryTimer) { try { persistRetryTimer() } catch (e) {} }
+      persistRetryTimer = timer ? timer.timeout(fire, delay) : setTimeout(fire, delay)
+      return false
+    }
 
     // ---------- plugin config（峰谷计价 + 云端同步） ----------
     // 与记录分开存储：$DSH_HOME/storages/cost-tracker-config.json。
@@ -278,6 +303,7 @@ export default {
     function persistNow() {
       persistPending = false
       if (persistTimer) { try { persistTimer() } catch (e) {} persistTimer = null }
+      if (persistRetryTimer) { try { persistRetryTimer() } catch (e) {} persistRetryTimer = null }
       writeRecords()
     }
 
@@ -1381,7 +1407,9 @@ export default {
     startSyncTimer()
     if (cloudConfig.cloudEnabled) scheduleSync(5000)
     ctx.effect(() => () => {
-      try { writeRecords() } catch (e) {}
+      // 退出前最后一次落盘：给足重试（10 次 ≈ 2s）——否则被瞬时占用就会丢掉本次会话的记录；
+      // 这里不能用 writeRecords()，它失败后只是「排个延迟重试」，而进程马上要退出。
+      try { store.persist({ tries: 10 }) } catch (e) {}
       if (syncTimer) { try { syncTimer() } catch (e) {} }
       if (syncDebounce) { try { syncDebounce() } catch (e) {} }
     }, 'cost-tracker: final flush')
