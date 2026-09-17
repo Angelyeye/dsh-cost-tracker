@@ -130,6 +130,7 @@ export function normalizePeakConfig(raw) {
  * Privacy defaults deliberately remain secure when a field is omitted:
  * - maskSessionId defaults to true.
  * - includePurpose defaults to false and requires explicit true.
+ * Invalid non-boolean values are rejected rather than coerced.
  *
  * @param {object} raw Arbitrary user input.
  * @returns {object} Normalized cloud configuration.
@@ -149,7 +150,7 @@ export function normalizeCloudConfig(raw) {
     deviceId: typeof raw.deviceId === 'string' ? raw.deviceId.trim().slice(0, 128) : '',
     syncIntervalSec: intIn(raw.syncIntervalSec, 15, 3600, defaults.syncIntervalSec),
     syncBatchSize: intIn(raw.syncBatchSize, 50, 2000, defaults.syncBatchSize),
-    maskSessionId: raw.maskSessionId !== false,
+    maskSessionId: raw.maskSessionId === undefined ? defaults.maskSessionId : raw.maskSessionId === true,
     includePurpose: raw.includePurpose === true,
     syncRollups: raw.syncRollups !== false,
     syncSinceDays: intIn(raw.syncSinceDays, 0, 3650, defaults.syncSinceDays),
