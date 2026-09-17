@@ -19,7 +19,7 @@ import { createSyncEngine, setPluginVersion, SOURCE as SYNC_SOURCE, SYNC_VERSION
 import { Schema } from './schema.js'
 
 /** 插件版本（写入上报信封，便于云端排查版本差异） */
-const PLUGIN_VERSION = '1.8.8'
+const PLUGIN_VERSION = '1.8.9'
 setPluginVersion(PLUGIN_VERSION)
 
 /** 「设置 → 插件 → 插件配置」里的卡片字段（与 settings 命名空间一致） */
