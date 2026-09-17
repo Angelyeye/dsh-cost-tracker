@@ -10,7 +10,6 @@ The original upstream repository contains the pre-fork release history. This for
 
 - Project Studios package identity: `@shaunpalmer/dsh-cost-tracker`.
 - Hardened host wrapper (`index.safe.js`).
-- Lean English browser client (`client.en.js`).
 - Project Studios hardening documentation and regression checks.
 
 ### Security and privacy
@@ -23,8 +22,8 @@ The original upstream repository contains the pre-fork release history. This for
 
 ### Changed
 
+- Replaced the large upstream browser client with a compact English `client.js`.
 - The primary README now documents the hardened fork in English.
-- The exported browser client is English-first and intentionally smaller than the upstream dashboard.
 - The optional upstream settings-schema surface is suppressed by the hardened wrapper to avoid duplicate configuration surfaces while the fork is reduced.
 
 ### Preserved
