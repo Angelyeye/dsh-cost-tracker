@@ -4,8 +4,8 @@
 # an older installation and this fork cannot register two copies of the host
 # routes, tools, and UI slots at the same time.
 #
-# The package name below is the installable package identity. The browser bundle
-# must register the same fully scoped package id; see client.en.js.
+# The package name below is the installable Project Studios identity. The active
+# browser bundle registers the same fully scoped package id in `client.js`.
 - insert:
     - id: dsh-cost-tracker
       name: "@shaunpalmer/dsh-cost-tracker"
