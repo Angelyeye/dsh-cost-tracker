@@ -327,7 +327,6 @@ export function createSyncEngine(deps) {
     const out = []
     let bytes = 0
 
-    // Collect oldest to newest so the watermark never jumps past unsent rows.
     for (let k = 0; k < details.length; k += 1) {
       const r = details[k]
       if (!r || typeof r.ts !== 'number') continue
@@ -353,9 +352,6 @@ export function createSyncEngine(deps) {
         subscription: r.subscription === true,
         period: r.period || 'flat',
       }
-
-      // Deduplication uses the original local record. Masking only changes the
-      // uploaded presentation fields, preserving server compatibility.
       rec.dedupKey = dedupKeyOf(r, resetEpoch)
       const size = JSON.stringify(rec).length
       if (out.length > 0 && (out.length >= limit || bytes + size > MAX_BATCH_BYTES)) break
@@ -422,13 +418,17 @@ export function createSyncEngine(deps) {
       try { body = await res.json() } catch (e) { body = null }
       return { status: res.status, body }
     } catch (e) {
-      return { status: 0, body: null, error: String((e && e.message) || e) }
+      const transportError = String((e && e.message) || e)
+      return {
+        status: 0,
+        body: { ok: false, error: 'Cloud service is temporarily unavailable: ' + transportError },
+        error: transportError,
+      }
     } finally {
       clearTimeout(timer)
     }
   }
 
-  /** Resolve device identity without exposing credentials. */
   async function ensureDevice(cfg, st) {
     const id = identityOf()
     const deviceId = cfg.deviceId || id.machineId
@@ -436,7 +436,6 @@ export function createSyncEngine(deps) {
     return deviceId
   }
 
-  /** Run one sync cycle, manually or from the timer. */
   async function runOnce(opts) {
     const manual = !!(opts && opts.manual)
     const full = !!(opts && opts.full)
@@ -460,10 +459,6 @@ export function createSyncEngine(deps) {
     try {
       const st = readSyncState(safeSnapshot().storageDir || process.cwd())
       if (full) { st.watermark = 0; st.legacySent = false; st.backfillVer = 0 }
-
-      // Older builds could advance the watermark past unsent historical rows.
-      // Reset once per backfill algorithm version and replay oldest to newest;
-      // server-side content hashes make duplicate replays idempotent.
       const backfill = Number(st.backfillVer) !== BACKFILL_VER
       if (backfill) st.watermark = 0
       st.deviceId = await ensureDevice(cfg, st)
@@ -474,7 +469,6 @@ export function createSyncEngine(deps) {
       const id = identityOf()
       const base = cfg.cloudUrl
 
-      // 1. Detail records first.
       let pending = buildRecordsPayload(cfg, st, cfg.syncBatchSize)
       let sentRecords = 0
       let round = 0
@@ -512,9 +506,6 @@ export function createSyncEngine(deps) {
         result.duplicates += dup
         result.updated = (result.updated || 0) + updated
         result.invalid = (result.invalid || 0) + invalid
-
-        // Advance only to the highest sequence actually delivered in this
-        // batch; never trust a wider server-side device maximum here.
         if (accepted + dup + updated > 0) {
           if (pending.maxClientSeq > st.watermark) st.watermark = pending.maxClientSeq
         } else if (invalid > 0) {
@@ -528,7 +519,6 @@ export function createSyncEngine(deps) {
       st.legacySent = true
       st.backfillVer = BACKFILL_VER
 
-      // 2. Daily rollup snapshots after detail records.
       if (cfg.syncRollups) {
         const snaps = buildRollupsPayload(cfg, st)
         for (let k = 0; k < snaps.length; k += 100) {
@@ -555,7 +545,6 @@ export function createSyncEngine(deps) {
         }
       }
 
-      // 3. Success: reset backoff state.
       st.lastSyncAt = now()
       st.lastOkAt = now()
       st.lastError = ''
@@ -590,7 +579,6 @@ export function createSyncEngine(deps) {
     }
   }
 
-  /** Test the cloud endpoint and protocol version. */
   async function testConnection(cfgOverride) {
     const cfg = normalizeCloudConfig(cfgOverride || getConfig())
     if (!cfg.cloudUrl) return { ok: false, error: 'No service URL is configured.' }
@@ -615,7 +603,6 @@ export function createSyncEngine(deps) {
     }
   }
 
-  /** Return sync status for the UI. */
   function status() {
     const cfg = normalizeCloudConfig(getConfig())
     const st = readSyncState(safeSnapshot().storageDir || process.cwd())
