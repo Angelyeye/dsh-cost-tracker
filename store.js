@@ -128,6 +128,72 @@ function explainPersistError(res) {
   return '文件系统错误（不是占用问题）'
 }
 
+// ---------- 实例锁（只提示，不阻断） ----------
+/** 进程是否存活：Windows 上 EPERM 表示「存在但无权限」，同样算存活 */
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (e) {
+    return !!e && e.code === 'EPERM'
+  }
+}
+
+/**
+ * 检测同一份记录文件是否已被**另一个存活的 dsh 实例**占用。
+ *
+ * 为什么需要：两个实例同时写同一份记录会互相覆盖，并且在 Windows 上很容易撞上
+ * rename 的 EPERM（v1.8.10 的现场根因就是「上一个实例还在跑，又起了一个」）。
+ * 与其让用户对着 EPERM 堆栈猜，不如启动时直接说清楚。
+ * 纯提示：读不到 / 解析失败 / 陈旧锁都返回 null，绝不阻断启动。
+ * @returns {{heldBy:number|null, text:string|null}}
+ */
+export function checkStoreLock(filePath, opts) {
+  const o = opts || {}
+  const isAlive = o.isAlive || pidAlive
+  const lockFile = filePath + '.lock'
+  try {
+    if (!existsSync(lockFile)) return { heldBy: null, text: null }
+    const prev = JSON.parse(readFileSync(lockFile, 'utf8'))
+    const pid = Number(prev && prev.pid)
+    if (!pid || pid === process.pid || !isAlive(pid)) return { heldBy: null, text: null }
+    return {
+      heldBy: pid,
+      text: 'cost tracker: 检测到另一个 dsh 实例（PID ' + pid + (prev && prev.version ? ' · v' + prev.version : '')
+        + '）正在使用同一份记录文件：\n  ' + filePath
+        + '\n  两个实例会互相覆盖对方的记录，并可能在 Windows 上触发 rename EPERM（需要目标文件的删除权限）。'
+        + '\n  请只保留一个 dsh 实例：先 Ctrl+C 停掉旧的，再启动新的。',
+    }
+  } catch (e) {
+    return { heldBy: null, text: null }
+  }
+}
+
+/** 写下本进程的实例锁（带上版本，便于提示里说清是谁占着） */
+export function writeStoreLock(filePath, opts) {
+  const o = opts || {}
+  try {
+    mkdirSync(dirname(filePath), { recursive: true })
+    writeFileSync(filePath + '.lock', JSON.stringify({ pid: process.pid, at: Date.now(), version: o.version || '' }), 'utf8')
+    return true
+  } catch (e) {
+    return false
+  }
+}
+
+/** 退出时清理实例锁（只删自己的，别删别人的） */
+export function releaseStoreLock(filePath) {
+  const lockFile = filePath + '.lock'
+  try {
+    const prev = JSON.parse(readFileSync(lockFile, 'utf8'))
+    if (Number(prev && prev.pid) === process.pid) unlinkSync(lockFile)
+    return true
+  } catch (e) {
+    return false
+  }
+}
+
+
 
 /**
  * 由插件侧统一计算明细的内容哈希键（与云端契约 §6 一致）。
@@ -433,6 +499,17 @@ export function createStore(filePath, opts) {
 
   return {
     details, rollups, load, add, persist, persistProblem, clear, counts,
+    /**
+     * 启动时登记实例锁：先把「另一个实例还占着」讲清楚，再写自己的锁。
+     * 只提示、不阻断——多实例本来就是用户的操作问题，不是插件的错误。
+     */
+    lock(opts) {
+      const res = checkStoreLock(filePath, opts)
+      if (res.text) console.error(res.text)
+      writeStoreLock(filePath, opts)
+      return res
+    },
+    releaseLock: () => releaseStoreLock(filePath),
     /** 当前最大序号（云端水位比较用） */
     maxSeq: () => seq,
     /** 清空次数（参与去重键） */

@@ -19,7 +19,7 @@ import { createSyncEngine, setPluginVersion, SOURCE as SYNC_SOURCE, SYNC_VERSION
 import { Schema } from './schema.js'
 
 /** 插件版本（写入上报信封，便于云端排查版本差异） */
-const PLUGIN_VERSION = '1.8.10'
+const PLUGIN_VERSION = '1.8.11'
 setPluginVersion(PLUGIN_VERSION)
 
 /** 「设置 → 插件 → 插件配置」里的卡片字段（与 settings 命名空间一致） */
@@ -285,6 +285,9 @@ export default {
       const n = store.load()
       const ru = Object.keys(rollups).length
       if (n > 0 || ru > 0) startupLog('cost tracker restored ' + n + ' detail records, ' + ru + ' rollup days from ' + STORE_FILE)
+      // 实例锁：若同一份记录文件已被另一个存活的 dsh 实例占用，明确报出来
+      // （多实例会互相覆盖记录，并可能在 Windows 上触发 rename EPERM —— v1.8.10 的现场根因）
+      store.lock({ version: PLUGIN_VERSION })
     }
 
     let persistPending = false
@@ -1410,6 +1413,7 @@ export default {
       // 退出前最后一次落盘：给足重试（10 次 ≈ 2s）——否则被瞬时占用就会丢掉本次会话的记录；
       // 这里不能用 writeRecords()，它失败后只是「排个延迟重试」，而进程马上要退出。
       try { store.persist({ tries: 10 }) } catch (e) {}
+      try { store.releaseLock() } catch (e) {}
       if (syncTimer) { try { syncTimer() } catch (e) {} }
       if (syncDebounce) { try { syncDebounce() } catch (e) {} }
     }, 'cost-tracker: final flush')

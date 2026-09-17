@@ -10,6 +10,7 @@ import { join } from 'node:path'
 import {
   createStore, collectTotals, collectByDay, rollupRecord,
   applyRetention, dayKey, writeFileAtomic, isTransientRenameError,
+  checkStoreLock, writeStoreLock, releaseStoreLock,
   DETAIL_DAYS, MAX_AXIS_DAYS, MAX_DETAILS,
 } from '../store.js'
 
@@ -299,6 +300,59 @@ ok(MAX_DETAILS === 200000, '常量: MAX_DETAILS=200000')
     // 13.6 错误分类：占用码可重试，代码类错误不重试
     ok(isTransientRenameError({ code: 'EPERM' }) && isTransientRenameError({ code: 'EBUSY' }), '错误分类: EPERM/EBUSY 视为占用')
     ok(!isTransientRenameError({ code: 'ENOENT' }) && !isTransientRenameError(null), '错误分类: 其它错误不重试')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+// ---------- 14. 实例锁：多实例要「说清楚」，且绝不阻断启动 ----------
+// 现场根因（v1.8.10）：上一个 dsh 实例还在跑，用户又起了一个 —— 两个实例写同一份
+// 记录文件，旧的固定临时文件名 + 单次 rename 就撞上 EPERM。这里改成启动时直接点名。
+{
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-ct-lock-'))
+  const file = join(dir, 'records.json')
+  const lockFile = file + '.lock'
+  try {
+    // 14.1 没有锁文件 → 不提示
+    ok(checkStoreLock(file).heldBy === null, '实例锁: 无锁文件时不提示')
+
+    // 14.2 自己写的锁不提示（同一个进程重复初始化很常见）
+    writeStoreLock(file, { version: '1.8.11' })
+    ok(existsSync(lockFile), '实例锁: 已写入锁文件')
+    const mine = JSON.parse(readFileSync(lockFile, 'utf8'))
+    ok(mine.pid === process.pid && mine.version === '1.8.11', '实例锁: 记录 pid 与版本')
+    ok(checkStoreLock(file).heldBy === null, '实例锁: 自己的锁不提示')
+
+    // 14.3 另一个「存活」实例的锁 → 明确提示（注入存活判定，避免依赖真实进程）
+    writeFileSync(lockFile, JSON.stringify({ pid: 424242, at: Date.now(), version: '1.8.9' }), 'utf8')
+    const held = checkStoreLock(file, { isAlive: (p) => p === 424242 })
+    ok(held.heldBy === 424242, '实例锁: 认出占用者 pid')
+    ok(!!held.text && held.text.includes('424242') && held.text.includes('1.8.9'), '实例锁: 提示里含 pid 与占用者版本')
+    ok(/请只保留一个 dsh 实例/.test(held.text), '实例锁: 给出可执行的处理办法')
+
+    // 14.4 陈旧锁（持有者已退出）不提示
+    ok(checkStoreLock(file, { isAlive: () => false }).heldBy === null, '实例锁: 陈旧锁不提示')
+
+    // 14.5 真实存活判定：自己 / 不存在的 pid
+    writeFileSync(lockFile, JSON.stringify({ pid: process.pid }), 'utf8')
+    ok(checkStoreLock(file).heldBy === null, '实例锁: 真实判定下自己的 pid 不算占用')
+    writeFileSync(lockFile, JSON.stringify({ pid: 999999 }), 'utf8')
+    ok(checkStoreLock(file).heldBy === null, '实例锁: 不存在的 pid 视为陈旧')
+
+    // 14.6 只清理自己的锁
+    writeFileSync(lockFile, JSON.stringify({ pid: 424242 }), 'utf8')
+    releaseStoreLock(file)
+    ok(existsSync(lockFile), '实例锁: 不删别人的锁')
+    writeFileSync(lockFile, JSON.stringify({ pid: process.pid }), 'utf8')
+    releaseStoreLock(file)
+    ok(!existsSync(lockFile), '实例锁: 退出时删掉自己的锁')
+
+    // 14.7 锁文件损坏也不炸、不阻断
+    writeFileSync(lockFile, '{ 坏掉的 json', 'utf8')
+    ok(checkStoreLock(file).heldBy === null, '实例锁: 锁文件损坏时静默忽略')
+    const s = createStore(file)
+    s.load()
+    ok(s.lock({ version: '1.8.11' }) !== null, '实例锁: store.lock() 不抛错（启动不被阻断）')
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

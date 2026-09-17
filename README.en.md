@@ -243,6 +243,20 @@ Example: `curl -X POST http://127.0.0.1:3080/api/cost-tracker/summary -d '{}'`
 
 > Highlights only — the full version-by-version history lives in [`CHANGELOG.md`](./CHANGELOG.md) (Chinese).
 
+### v1.8.11 (2026-09-17)
+
+**Added: startup detection of "another dsh instance is using the same records file", reported by name**
+
+- The root cause behind the v1.8.10 `EPERM` report was exactly this: **a previous `dsh` instance was still running when another was started**, so two instances wrote the same records file, overwrote each other, and tripped `rename`'s EPERM on Windows. Until now the only clue was a stack trace.
+- On startup the plugin now registers a **advisory-only** instance lock next to the records file (`.lock`, holding pid / version). If the holder is still alive it prints the culprit and what to do (Ctrl+C the old instance first). It **never blocks startup**: a stale, corrupted or self-owned lock is ignored, and shutdown only removes its own lock.
+- Verified with two real processes: the second instance printed `检测到另一个 dsh 实例（PID 15784 · v1.8.10）…` (detected another dsh instance) immediately.
+
+**Docs: both READMEs caught up on long-standing drift (no functional change)**
+
+- The English changelog was backfilled with v1.8.7–v1.8.10 (it had stopped at v1.8.6) plus the missing v1.3.0; the "This machine + cloud" semantics were corrected from the outdated "the server excludes this machine" to the actual **union** (other devices ∪ non-DSH agents on this machine); a "Multi-machine aggregation (cloud sync)" feature row and `sync.js` / `view.js` / `schema.js` were added (the feature table had no cloud entry at all).
+- The Chinese README gained the two missing dashboard bullets (**Six overview cards**, **Peak-price notice**) and a note in the restart FAQ about transient write locks.
+- Both READMEs now use a **dynamic npm version badge** (instead of a hardcoded v1.6.0), and the changelog heading points at `CHANGELOG.md` for the full history.
+
 ### v1.8.10 (2026-09-17)
 
 **Fixed: occasional `EPERM` on flush (a `rename` blocked by a transient lock) printing a scary stack trace**
