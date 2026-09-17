@@ -19,6 +19,7 @@ function read(path) {
 
 const packageJson = JSON.parse(read('package.json'))
 const client = read('client.js')
+const view = read('view.js')
 const wrapper = read('index.safe.js')
 const store = read('store.js')
 const cordis = read('cordis.patch.yml')
@@ -27,6 +28,7 @@ check(packageJson.name === '@shaunpalmer/dsh-cost-tracker', 'fork package id is 
 check(packageJson.main === 'index.safe.js', 'hardened wrapper is the package entrypoint')
 check(packageJson.exports['./client'] === './client.js', 'DSH client export resolves to the English client')
 check(client.includes("id: '@shaunpalmer/dsh-cost-tracker'"), 'browser bundle id matches package id')
+check(view.includes('id: "@shaunpalmer/dsh-cost-tracker/view"'), 'view bundle id matches fork package id')
 check(cordis.includes('name: "@shaunpalmer/dsh-cost-tracker"'), 'Cordis patch points at the fork package')
 
 const defaults = defaultCloudConfig()
@@ -55,6 +57,7 @@ check(store.includes('mode: 0o600'), 'storage file is written owner-only')
 const englishSurfaceFiles = [
   'client.js',
   'index.safe.js',
+  'view.js',
   'config.js',
   'store.js',
   'schema.js',
