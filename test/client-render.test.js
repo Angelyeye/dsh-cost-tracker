@@ -60,7 +60,10 @@ const DASH = {
   byDay: [{ date: '2026-09-15', label: '09/15', peak: 3.2, off: 2.1, flat: 0.51 }],
   byModel: [{ model: 'deepseek-v4.1-flash', calls: 391, tokens: 31382777, cost: 5.81 }],
   byModelDay: [{ model: 'deepseek-v4.1-flash', days: [{ date: '2026-09-15', label: '09/15', calls: 391, tokens: 31382777, input: 100, output: 50, cacheRead: 900, cacheWrite: 0, cost: 5.81 }] }],
-  recent: [], devices: [], sources: [],
+  recent: [
+    { time: '09-15 10:20', provider: 'deepseek', model: 'deepseek-flash', period: 'peak', input: 100, cacheRead: 900, cacheWrite: 0, output: 50, cost: 0.5, subscription: false },
+    { time: '09-15 11:40', provider: 'openai', model: 'gpt-5-codex', period: 'flat', input: 100, cacheRead: 0, cacheWrite: 0, output: 20, cost: 0.2, subscription: false },
+  ], devices: [], sources: [],
 }
 // 云端响应按**线上真实形态**构造：概览口径的金额字段是 realCost/subEquivalent，
 // 不是本地 buildDashboard 的 real/sub。早先的假数据误用了 real/sub，
@@ -79,9 +82,10 @@ const CLOUD = {
   byModelDay: [{ model: 'deepseek-v4.1-flash', days: [{ date: '2026-09-15', label: '09/15', calls: 100, tokens: 5000000, input: 10, output: 5, cacheRead: 90, cacheWrite: 0, cost: 2.0 }] }],
   recent: [], devices: [{ device: 'other-machine', name: '另一台', cost: 2.0, calls: 100 }], sources: [{ source: 'dsh', cost: 2.0, calls: 100 }],
 }
+let dashPayload = DASH
 const payloadFor = (name, syncView) => {
   if (name === 'sync') return Object.assign({}, SYNC, { view: syncView })
-  if (name === 'dashboard') return DASH
+  if (name === 'dashboard') return dashPayload
   if (name === 'cloud') return CLOUD
   return { ok: false }
 }
@@ -299,6 +303,33 @@ const cloudOnlyFallback = await renderAsync(makeModule({ view: null, syncView: '
 check('内联实现与 view.js 的云端金额口径一致',
   cloudOnlyFallback.text.replace(/\s+/g, ' ') === cloudText,
   `fallback=${JSON.stringify(cloudOnlyFallback.text.replace(/\s+/g, ' ').slice(0, 160))}`)
+
+// ---------- [6] 档位文案：官方只有「高峰 / 闲时」两档 ----------
+// 事故背景：图例第三项曾写作「平峰」（内部 period='flat' 的直译）。flat 的真实含义是
+// 「这笔计价不分峰谷」（订阅套餐、非 DeepSeek provider 兜底价、未识别模型的通用兜底价），
+// 而「平峰/平段」在电价语境里是**峰谷之间的第三个时段** —— 会让人以为 DeepSeek 有三档价。
+// 另外它常驻图例却不参与计费（恒为 0 时也要占一个色块），进一步强化了误解。
+console.log('[6] 档位文案与图例：不得出现「平峰」')
+hookSlots.clear()
+const periodTexts = await renderAsync(makeModule({ view: REAL_VIEW, syncView: 'local' }).section, {})
+const pText = periodTexts.text.replace(/\s+/g, ' ')
+check('渲染期无异常', periodTexts.errors.length === 0, describeErrors(periodTexts.errors))
+check('flat 档位显示为「不分峰谷」', pText.includes('不分峰谷'), JSON.stringify(pText.slice(0, 300)))
+check('图例/记录里不再出现「平峰」', !pText.includes('平峰'), JSON.stringify(pText.match(/.{0,20}平峰.{0,20}/) || ''))
+
+// flat 全为 0（只有 DeepSeek 按量调用时的真实情况）→ 图例只留高峰/闲时两项
+dashPayload = Object.assign({}, DASH, {
+  flatCost: 0,
+  byDay: [{ date: '2026-09-15', label: '09/15', peak: 3.2, off: 2.1, flat: 0 }],
+  recent: DASH.recent.filter((r) => r.period !== 'flat'),
+})
+hookSlots.clear()
+const noFlat = await renderAsync(makeModule({ view: REAL_VIEW, syncView: 'local' }).section, {})
+const nText = noFlat.text.replace(/\s+/g, ' ')
+check('flat 为 0 时渲染无异常', noFlat.errors.length === 0, describeErrors(noFlat.errors))
+check('flat 为 0 时图例不再出现第三项', !nText.includes('不分峰谷') && !nText.includes('平峰'), JSON.stringify(nText.slice(0, 300)))
+check('高峰与闲时始终在', nText.includes('高峰') && nText.includes('闲时'))
+dashPayload = DASH
 
 console.log('')
 if (failures > 0) {

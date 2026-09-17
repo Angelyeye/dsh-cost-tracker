@@ -1259,7 +1259,7 @@ export default {
           const lines = ['花费统计（' + (v.days === 0 ? '全部' : '近 ' + v.days + ' 天') + '）']
           if (v.local) {
             lines.push('【本机】按量消费：¥' + v.local.realTotal + '（高峰 ¥' + v.local.peakCost + ' · 闲时 ¥' + v.local.offCost
-              + (v.local.flatCost > 0 ? ' · 平峰 ¥' + v.local.flatCost : '') + '）· 请求 ' + v.local.realCalls + ' 次 · Tokens ' + v.local.realTokens)
+              + (v.local.flatCost > 0 ? ' · 不分峰谷 ¥' + v.local.flatCost : '') + '）· 请求 ' + v.local.realCalls + ' 次 · Tokens ' + v.local.realTokens)
             lines.push('【本机】订阅套餐：请求 ' + v.local.subCalls + ' 次 · Tokens ' + v.local.subTokens + ' · 等效 ¥' + v.local.subEquivalent + '（订阅已覆盖，仅供参考）')
           }
           if (v.cloud && v.cloud.ok) {

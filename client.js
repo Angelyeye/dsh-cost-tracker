@@ -285,7 +285,11 @@ window.__ModuleLoader__.load({
 			if (hr < 24) return hr + " 小时前";
 			return fmtClock(t);
 		}
-		function periodText(p) { return p === "peak" ? "高峰" : p === "off-peak" ? "闲时" : "平峰"; }
+		// 档位文案。官方**只有两档**：peak = 高峰（工作日 9-12 / 14-18），off-peak = 闲时（高峰 × 0.5，含周末全天）。
+		// flat 不是「第三个时段」，而是「这笔计价不分峰谷」（订阅套餐、非 DeepSeek provider 的兜底价、
+		// 未识别模型的通用兜底价：price.tiered === false）。此前译作「平峰」——电价语境里「平段」指峰谷
+		// 之间的那一档，会让人以为 DeepSeek 有三个时段，故改为「不分峰谷」。
+		function periodText(p) { return p === "peak" ? "高峰" : p === "off-peak" ? "闲时" : "不分峰谷"; }
 		function shortModel(m) { const i = m.lastIndexOf("/"); return i >= 0 ? m.slice(i + 1) : m; }
 		// 订阅套餐友好名称：kimi-coding / kimi → Kimi Coding Plan，其余保留 provider 名
 		function subPlanName(p) {
@@ -749,8 +753,14 @@ window.__ModuleLoader__.load({
 			const titles = dash.byDay.map(d => d.date);
 			const fmtMoneyValue = (v) => "¥" + fmtMoney(v);
 			if (tab === "period") {
-				const segs = [{ name: "闲时", color: BLUE }, { name: "高峰", color: AMBER }, { name: "平峰", color: GRAY }];
-				const rows = dash.byDay.map(d => [d.off, d.peak, d.flat]);
+				// 图例只列真实存在的档位：官方定价只有「高峰 / 闲时」两档；
+				// flat（不分峰谷：订阅套餐、非 DeepSeek provider 兜底价等）**为 0 时不占图例位置**——
+				// 常驻一个恒为 0 的第三项，会被读成「还有第三个时段」，与计费规则不符。
+				const flatTotal = dash.byDay.reduce((s, d) => s + (Number(d.flat) || 0), 0);
+				const hasFlat = flatTotal > 0;
+				const segs = [{ name: "闲时", color: BLUE }, { name: "高峰", color: AMBER }]
+					.concat(hasFlat ? [{ name: "不分峰谷", color: GRAY }] : []);
+				const rows = dash.byDay.map(d => hasFlat ? [d.off, d.peak, d.flat] : [d.off, d.peak]);
 				chart = e(StackedBarsChart, { labels, titles, segs, rows, fmtY: fmtAxisMoney, fmtValue: fmtMoneyValue });
 				legend = segs;
 			} else {
