@@ -6,7 +6,7 @@
 
 **简体中文** | [English](./README.en.md)
 
-![version](https://img.shields.io/badge/version-v1.6.0-blue?style=flat-square)
+[![version](https://img.shields.io/npm/v/@angelyeye/dsh-cost-tracker?label=version&style=flat-square)](https://www.npmjs.com/package/@angelyeye/dsh-cost-tracker)
 ![license](https://img.shields.io/badge/license-MIT-green?style=flat-square)
 ![status](https://img.shields.io/badge/status-stable-brightgreen?style=flat-square)
 ![platform](https://img.shields.io/badge/platform-DSH%20Web-blueviolet?style=flat-square)
@@ -35,6 +35,7 @@
 | 👁️ | **视觉模型** | 支持 `deepseek-v4-flash-vision-exp`:legacy 时代单价与 flash 一致,2026-09-10 12:00 起随 V4.1 Flash 新价计费(该旧名已下线,请求由 V4.1 Flash 提供);图片按官方规则换算 token(每张上限 384 个,以接口用量计费) |
 | 🏷️ | **官方模型名对齐** | 计费支持**官方现役名 `deepseek-flash`**(价格卡脚注 (1):「模型名请使用 `deepseek-flash`」),旧写法 `deepseek-v4.1-flash` 等归一化后命中同一档价,避免因官方改名而落入兜底估算 |
 | 📊 | **可视化仪表盘** | 设置页新增「花费统计」:概览卡片、消费柱状图(按峰谷/按模型)、分模型的请求次数与 Tokens 图表,**全部支持鼠标悬停查看明细** |
+| 🧭 | **多机汇总(云端同步)** | 可对接**自建云端服务**(独立仓库 `dsh-cost-cloud`,零运行时依赖):多台电脑的用量汇总到一处,看板顶部出现 **本机 / 本机+云端 / 仅云端** 三态开关,并支持**设备 × Agent 矩阵**(行合计 = 列合计 = 总计);上报内容仅 token 数、费用、时间戳与标识符,可选会话脱敏 |
 | 🔥 | **用量热力图** | 设置页新增「Token 用量统计」:类 Codex 的 **26 周日用量方格热图**,按天着色(输入 / 缓存 / 输出 / 费用),悬停看当日明细、今天高亮描边,顶部显示全时段累计 |
 | 📈 | **订阅配额监控** | Kimi Coding Plan 等订阅套餐:本周配额、5 小时滚动窗口限额、等效按量费用参考 |
 | 💳 | **余额查询** | 一键查询 DeepSeek 官方账户余额(总余额 / 充值 / 赠送 / 状态) |
@@ -154,10 +155,12 @@ rm -rf ~/.dsh/profiles/node_modules/dsh-cost-tracker
 ### 设置页「花费统计」
 
 - **时间范围**:右上角可切换近 7 天 / 近 30 天 / 全部;
+- **六组概览卡**:今日费用 / 本月费用 / 总花费 / API 请求次数 / Tokens / **总余额**。前三个金额卡**不含订阅会员等效费用**,订阅以附注展示;
 - **消费金额图**:支持「按峰谷」「按模型」两种分段方式,鼠标悬停查看当日明细;
 - **配色切换**:「按模型」视图下,消费金额标题旁有三套装色款条(橙→黄 / 蓝→紫 / 蓝→浅蓝)可切换;模型按总消费降序排名取色(第 1 名最深夜底、逐级变浅,不循环不撞色),选择保存在浏览器本地;
 - **分模型区块**:每个模型一张请求次数图 + 一张 Tokens 构成图(输入/缓存写入/输出/缓存命中);
 - **Token 用量统计热力图**:类 Codex 的 26 周每日用量方格,颜色深浅按当日 token 相对最大值分档;悬停任一格看该日明细(输入 / 缓存 / 输出 / 费用),今天高亮描边;
+- **峰谷计价与提示**:时段条样式可选(**简洁单行·按 24h 比例**(白色实时进度线) / **环形表盘·相位色点**),简洁样式可选**双行紧凑**(条上文下 / 文上条下),可开关「显示时间」刻度(00:00–21:00),设置峰/谷切换前的弹窗提醒提前量(1–30 分钟)、提醒类型(两者 / 进入高峰 / 进入闲时)、弹窗位置(右下角 / 屏幕中心)与浏览器系统通知;全部自动保存。侧边栏底部常驻时段条显示当前档位与下次切换倒计时;
 - **导出 CSV**:导出明细记录(近 180 天)+ 日汇总行(`purpose=rollup`)。
 
 ### 对话中的 Agent 工具
@@ -237,6 +240,8 @@ POST /api/cost-tracker/export       导出 CSV
 ---
 
 ## 更新记录
+
+> 这里只列重要版本;逐版完整记录见 [`CHANGELOG.md`](./CHANGELOG.md)。
 
 ### v1.8.10(2026-09-17)
 
@@ -390,7 +395,8 @@ POST /api/cost-tracker/export       导出 CSV
 全部数据只存在你本机的 `~/.dsh/storages/cost-tracker-records.json`,不会上传到任何服务器。API 只监听本机回环地址,但无鉴权——**不要把 DSH 端口暴露到公网**。
 
 **Q:重启 DSH 数据会丢吗?**
-不会。记录防抖写入磁盘(原子写入),重启后自动恢复;文件损坏时自动备份为 `.corrupt-<时间戳>` 并从头开始。
+不会。记录防抖写入磁盘(临时文件 + rename 原子替换),重启后自动恢复;文件损坏时自动备份为 `.corrupt-<时间戳>` 并从头开始。
+落盘遇到**瞬时占用**(Windows 上杀毒 / 索引器 / 备份工具正在读该文件,或上一个 `dsh` 实例还没退干净)时会**退避重试**;重试仍失败则数据留在内存、稍后自动重试,**不会写坏原文件**。若反复出现,请确认没有同时运行两个 DSH 实例。
 
 **Q:历史记录会保留多久?统计有上限吗?**
 明细记录保留最近 **180 天**;更早的记录自动按「天 + 模型」压缩为**永久日汇总**(只保留聚合数字:调用数 / 各段 tokens / 费用,不再保留单次调用)。因此「全部」时间的总花费、分模型统计**永远精确**,且内存、磁盘、写入量有界,跑多久都不会膨胀。按天图表日期轴最长 730 天。数据文件支持旧版格式自动迁移;可用环境变量 `DSH_COST_TRACKER_STORE` 覆盖存储路径(默认 `$DSH_HOME/storages`,未设 `DSH_HOME` 时为 `~/.dsh`)。
@@ -419,9 +425,12 @@ POST /api/cost-tracker/export       导出 CSV
 
 ```
 ├── index.js        Host 半端:用量采集、聚合、HTTP API、Agent 工具
-├── store.js        存储层:明细保留 + 永久日汇总 + 持久化(纯逻辑,可独立测试)
+├── store.js        存储层:明细保留 + 永久日汇总 + 原子落盘(含占用重试,纯逻辑可独立测试)
 ├── pricing.js      定价与 Token 层:单价表、峰谷计价、视觉模型、峰值相位(纯逻辑,可独立测试)
-├── config.js       配置层:峰谷计价提示的默认值与规范化(纯逻辑,可独立测试)
+├── config.js       配置层:峰谷计价提示 + 云端同步的默认值与规范化(纯逻辑,可独立测试)
+├── sync.js         云端同步引擎:设备身份、增量水位、幂等批次、退避重试
+├── schema.js       宿主设置空间的 schema(插件配置卡片字段)
+├── view.js         三态视图合并:本机 / 本机+云端 / 仅云端的口径归一化(浏览器与测试共用)
 ├── client.js       Client 半端:设置页仪表盘、状态栏与峰谷提示 UI
 ├── package.json    插件清单:声明 dsh.bundle(插件可被安装的关键)与 dsh.client(前端 UI)
 ├── cordis.patch.yml Bundle 补丁:把本插件注册进 DSH 的 loader,由 dsh.bundle 指向
@@ -429,7 +438,7 @@ POST /api/cost-tracker/export       导出 CSV
 ├── README.md       中文说明文档
 ├── README.en.md    英文说明文档
 ├── CHANGELOG.md    更新记录(中文)
-├── test/           单元测试(storage / pricing / config / recompute,node test/*.test.js)
+├── test/           单元测试(storage / pricing / config / recompute / 渲染 / 云端读取,node test/*.test.js)
 └── docs/           README 截图与设计文档
 ```
 

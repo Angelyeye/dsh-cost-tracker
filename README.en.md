@@ -6,7 +6,7 @@
 
 [简体中文](./README.md) | **English**
 
-![version](https://img.shields.io/badge/version-v1.6.0-blue?style=flat-square)
+[![version](https://img.shields.io/npm/v/@angelyeye/dsh-cost-tracker?label=version&style=flat-square)](https://www.npmjs.com/package/@angelyeye/dsh-cost-tracker)
 ![license](https://img.shields.io/badge/license-MIT-green?style=flat-square)
 ![status](https://img.shields.io/badge/status-stable-brightgreen?style=flat-square)
 ![platform](https://img.shields.io/badge/platform-DSH%20Web-blueviolet?style=flat-square)
@@ -35,6 +35,7 @@
 | 👁️ | **Vision model** | Supports `deepseek-v4-flash-vision-exp`: priced as flash in the legacy era, billed at V4.1 Flash rates from 2026-09-10 12:00 (that legacy id is retired; requests are served by V4.1 Flash); images are converted to tokens per the official rule (≤384 tokens each, billed per API usage) |
 | 🏷️ | **Official model-name alignment** | Billing recognises the official current name **`deepseek-flash`** (price-card note (1): "use the model name `deepseek-flash`"); older spellings such as `deepseek-v4.1-flash` normalize to the same rate, so an official rename can never silently drop usage into the fallback estimate |
 | 📊 | **Visual dashboard** | A new "Cost Statistics" page in Settings: overview cards, cost bar charts (by peak period / by model), per-model request & token charts — **all with hover tooltips** |
+| 🧭 | **Multi-machine aggregation (cloud sync)** | Point it at your own **self-hosted cloud service** (separate `dsh-cost-cloud` repo, zero runtime dependencies) to merge usage from several computers; the dashboard then offers a **This machine / This machine + cloud / Cloud only** switcher plus a **device × Agent matrix** (row totals = column totals = grand total). Only token counts, cost, timestamps and identifiers are uploaded, with optional session-id masking |
 | 📈 | **Subscription quota** | Kimi Coding Plan and similar subscriptions: weekly quota, 5-hour rolling window limit, pay-as-you-go-equivalent cost for reference |
 | 💳 | **Balance lookup** | One-click DeepSeek account balance (total / topped-up / granted / status) |
 | 🤖 | **Agent tools** | Ask in any chat: "how much have I spent today?" — the agent answers via `cost_stats` / `cost_prices` |
@@ -170,7 +171,7 @@ rm -rf ~/.dsh/profiles/node_modules/dsh-cost-tracker
 | `cost_prices` | Show the built-in price table & peak rules | "What does deepseek-v4-flash cost right now?" |
 | `cost_peak` | Show the current peak tier & next-switch countdown | "Is it peak hour right now?" |
 | `cost_recompute` | **Re-price stored records by pricing era (one-off backfill)**, dry-run by default | "Re-price the records from before the price change" |
-| `cost_sync` | **Cloud sync**: status / sync now / test connection / update config | "Sync my usage to the cloud" |
+| `cost_sync` | **Cloud sync**: status / sync now / test connection / update config | "Sync my usage to the cloud" · "Is cloud sync healthy?" |
 | `cost_reset` | **Erase ALL statistics (irreversible)** | "Reset my cost statistics" |
 
 ### Multi-machine aggregation (cloud sync, v1.8.0)
@@ -199,8 +200,11 @@ Then hit `Test connection` → `Sync now`. Back in **Settings → Cost Tracker**
 | View | Meaning |
 | --- | --- |
 | **This machine** | local-only (identical to running without cloud sync) |
-| **This machine + cloud** | local **plus** other devices — the server excludes this machine, so nothing is double-counted |
+| **This machine + cloud** | this machine + **all other devices** + **the other agents running on this machine** (server-side *union*, nothing double-counted) |
 | **Cloud only** | cloud records only (includes this machine's synced part) |
+
+> The union behind "This machine + cloud" is `other devices` ∪ `non-DSH agents on this machine`.
+> So with several machines and mixed agents: this machine's DSH numbers come from local storage, its ZCode/Codex (etc.) numbers come from the cloud, and every other computer comes from the cloud — the three add up to exactly the whole network, with nothing counted twice or missed.
 
 The dimension selector adds per-device / per-agent / per-model breakdowns and a **device × Agent matrix** (row totals = column totals = grand total).
 
@@ -236,6 +240,47 @@ Example: `curl -X POST http://127.0.0.1:3080/api/cost-tracker/summary -d '{}'`
 ---
 
 ## Changelog
+
+> Highlights only — the full version-by-version history lives in [`CHANGELOG.md`](./CHANGELOG.md) (Chinese).
+
+### v1.8.10 (2026-09-17)
+
+**Fixed: occasional `EPERM` on flush (a `rename` blocked by a transient lock) printing a scary stack trace**
+
+- **Symptom**: restarting `dsh web` printed `cost tracker persist failed Error: EPERM: operation not permitted, rename '...cost-tracker-records.json.tmp' -> '...cost-tracker-records.json'` with a full stack. **No data was lost** (it was still in memory and the next flush succeeded), but it looked like a crash.
+- **Root cause**: `persist()` is "write a temp file → `rename` over the target", but it **only tried once**. On Windows `rename` needs *delete* access to the target, which fails transiently when an antivirus/search indexer has just scanned the temp file, when Explorer preview or a backup/sync tool is reading it, or when a **previous `dsh` instance has not fully exited** (or two instances run at once). The temp file also used a fixed name (`<file>.tmp`), so two instances were guaranteed to collide on it.
+- **Fix**: temp name now carries the **pid**; `rename` **retries with backoff** on `EPERM/EACCES/EBUSY` (20/40/80/160 ms, 5 attempts ≈ 0.35 s) while `ENOENT`-style errors are not retried; if it still fails the plugin does **not** fall back to an in-place overwrite (a concurrent reader could see half a JSON file, and `load()` treats that as corruption — renaming it to `.corrupt-*` and starting empty, which is far worse than a few seconds of delay) — the data stays in memory and is retried instead. `index.js` then schedules **3 more delayed retries** (2 s / 4 s / 6 s) and stays **silent until the retry chain is exhausted**, printing one clear "cause + impact" message instead of a stack. The final flush on shutdown gets 10 attempts (~2 s).
+- **Verified** against a real Windows file lock (`[System.IO.File]::Open(..., FileShare.Read)`): a held lock → retries, then gives up with the **original file byte-identical**, no leftover temp file and a readable message; a lock released after 120 ms → the 3rd attempt succeeds with no intervention; quiet mode on failure → empty stderr.
+
+### v1.8.9 (2026-09-17)
+
+**Wording fix: "平峰" → "不分峰谷" (flat / tier-independent), and the third legend item is hidden when it is zero**
+
+- The peak/off-peak chart's third legend item was labelled 平峰 — a literal translation of the internal `period='flat'`. Official pricing has **only two tiers**: peak (Mon–Fri 9:00–12:00, 14:00–18:00 Beijing time) and off-peak (peak × 0.5, weekends fully off-peak). `flat` actually means "**this charge does not depend on the time of day**" (`price.tiered === false`: subscription plans, non-DeepSeek provider fallbacks, unknown-model generic rates). In Chinese electricity-tariff usage 平峰/平段 means a *third time-of-day tier*, so the label implied DeepSeek has three price tiers.
+- It also occupied a legend slot and a colour swatch even when the whole window was 0 (the normal case when only DeepSeek pay-as-you-go calls are recorded), reinforcing the illusion.
+- The legend, the "period" column of recent records and the `cost_peak` tool output now read **"不分峰谷"**, and the legend/chart only include the third series **when the window's flat total is > 0**. Billing logic and the `flat` field are unchanged.
+
+### v1.8.8 (2026-09-15)
+
+**Fixed: the "Cloud only" view showed request counts but every amount as ¥0.0000 (field-name mismatch)**
+
+- The cloud's `/api/v1/overview` returns `realCost` / `subEquivalent`, while the local dashboard and every card reads `real` / `sub`. The client-side normalization passed the fields straight through (and dropped `summary` entirely), so the amounts were all zero while `calls`/`tokens` — same names on both sides — survived. **The cloud fixture in the tests used `real/sub`, which hid the defect**; it now uses the real online shape.
+- `view.js` gained `cloudSlices()` for per-field mapping (accepting `realCost/real`, `subCost/subEquivalent/sub` for backwards compatibility), with the inline fallback in `client.js` kept identical.
+
+**Added: cloud `GET /api/v1/plugin-view` (device-token readable) so "Cloud only" can draw charts**
+
+- The client needs `byDay / byModel / byModelDay / recent` to draw the cost chart, per-model detail and recent records; `/api/v1/overview` only returned the summary cards, so those panels were structurally empty. The new endpoint returns exactly the local `buildDashboard` shape and supports `union`.
+- The plugin probes `/api/v1/health` capabilities and prefers `plugin-view`, falling back to `overview` on older cloud servers (cards work, charts stay empty) instead of failing outright.
+- Fixed the same class of bug on the cloud side: `pluginView()`'s today/month/all slices were taken from an unfiltered table scan, **bypassing `excludeDevice`** (so "This machine + cloud" counted this machine twice); they now use the same filter, with `calls/tokens` holding pay-as-you-go only and subscriptions counted separately (`subCalls`/`subTokens`).
+
+### v1.8.7 (2026-09-15)
+
+**Fixed: `cost_recompute` only scanned the most recent pricing era, silently skipping older stale records**
+
+- After the v1.8.6 backfill, **750 `deepseek-flash` records were still flagged "estimated"** (timestamps 09-10 21:24 … 09-14 02:36): the default `since` was the start of the latest pricing era (`v41pro` = 09-14 12:00), so nothing before it was scanned — yet the tool reported "no records needed re-pricing".
+- The default is now a **full-range scan (`since = 0`)**, and `since: 0` is correctly recognised as "all time" (the old `> 0` check fell through to the era default). In full-range mode `era` is reported as `null` instead of claiming a single era. The backfill is idempotent, so the extra scan is cheap.
+- Measured locally: `scanned=1642 / changed=772 / estimatedFlips=750 / delta=0.0000`, and a second run reported `changed=0` — the "estimated" flag was cleared on 1643 `deepseek-flash` records with **amounts unchanged** (only the 5 Kimi subscription records stay estimated, which is correct).
+- Hardening: `client-registration.test.js` now asserts that the `package.json` version equals `index.js`'s `PLUGIN_VERSION` (they had drifted in the v1.8.6 release).
 
 ### v1.8.6 (2026-09-15)
 
@@ -322,6 +367,24 @@ Example: `curl -X POST http://127.0.0.1:3080/api/cost-tracker/summary -d '{}'`
 **Fixed**
 - The preview popup was hardcoded to center; it now **follows your configured popup position** (bottom-right / center).
 
+### v1.3.0 (2026-08-23)
+
+**New**
+- **Token usage heatmap**: a "Token Usage" panel in Settings with a Codex-style **26-week daily-usage grid**, shaded into 4 levels by each day's token count relative to the maximum and stretched to the panel width; hover any cell for that day's breakdown (date / input / cache / output / cost), today outlined; all-time totals on top (`累计 X tokens · input · cache · output · N calls`). Adds `POST /api/cost-tracker/usage`. Date keys are always Beijing time (UTC+8), matching the server's bucketing.
+- **Per-model split for the current session**: the status line breaks the session down by the models actually used, with subscriptions counted separately from pay-as-you-go.
+
+**Improved**
+- **Status line redesign**: a **segmented pill** layout (session / subscription plan / per-model), pipe-separated and baseline-aligned.
+- **Session cost only**: no more cumulative amount or current peak/off-peak price.
+- **Subscription de-duplication**: subscriptions appear once as a colored badge (plan name + total equivalent cost) instead of repeating in the model area.
+- **Multi-model collapsing**: top-2 models plus a count by default; click `▸` to expand the full list.
+- **Less noise**: quota leftovers and per-model call counts (`×N`) removed.
+- **Visual consistency**: unified amount weight and colors.
+
+**Fixed**
+- The status line no longer depends on the "currently selected model"; it follows the models/subscriptions actually used in the session, fixing wrong figures when switching sessions and subscription sessions showing ¥0.
+- The heatmap tooltip now repositions near the left/right/top edges instead of being clipped by the container.
+
 ---
 
 ## FAQ
@@ -330,7 +393,8 @@ Example: `curl -X POST http://127.0.0.1:3080/api/cost-tracker/summary -d '{}'`
 Everything stays on your machine in `~/.dsh/storages/cost-tracker-records.json`; nothing is uploaded. The API binds to loopback but has no authentication — **do not expose the DSH port to the public internet**.
 
 **Q: Do I lose data when DSH restarts?**
-No. Records are flushed to disk with debounced atomic writes and restored on startup. A corrupted file is backed up as `.corrupt-<timestamp>` and tracking restarts cleanly.
+No. Records are flushed to disk with debounced atomic writes (temp file + `rename`) and restored on startup. A corrupted file is backed up as `.corrupt-<timestamp>` and tracking restarts cleanly.
+If a flush hits a **transient lock** (on Windows: an antivirus/indexer/backup tool reading the file, or a previous `dsh` instance that has not exited yet) it **retries with backoff**; if the retries fail the data stays in memory and is retried later, and the existing file is **never left half-written**. If this keeps happening, make sure two DSH instances are not running at once.
 
 **Q: How long is history kept? Is there a stats cap?**
 Detail records are kept for the last **180 days**; older records are auto-compressed into **permanent daily rollups** (aggregates only: calls / token breakdown / cost — no per-call details). So all-time totals and per-model stats stay **exact forever**, while memory, disk and write volume stay bounded no matter how long you run. The daily chart axis spans up to 730 days. Old-format data files migrate automatically; set the `DSH_COST_TRACKER_STORE` env var to override the store path (default `$DSH_HOME/storages`, or `~/.dsh` when `DSH_HOME` is unset).
@@ -359,14 +423,20 @@ Either way: if only the UI (`client.js`) changed, a **hard browser refresh** (Cm
 
 ```
 ├── index.js        Host half: usage capture, aggregation, HTTP API, agent tools
-├── store.js        Storage layer: 180-day detail retention + permanent daily rollups + persistence (pure logic, unit-testable)
+├── store.js        Storage layer: 180-day detail retention + permanent daily rollups + atomic writes (with lock retries; pure logic, unit-testable)
 ├── pricing.js      Pricing & tokens: price tables, peak/off-peak billing, vision model, peak-phase math (pure logic, unit-testable)
-├── config.js       Config layer: defaults & normalization for the peak-price notice (pure logic, unit-testable)
+├── config.js       Config layer: defaults & normalization for the peak-price notice and cloud sync (pure logic, unit-testable)
+├── sync.js         Cloud sync engine: device identity, incremental watermark, idempotent batches, backoff
+├── schema.js       Host settings schema (the plugin-config card fields)
+├── view.js         Three-state view merge: normalizes This machine / + cloud / Cloud only (shared by browser and tests)
 ├── client.js       Client half: settings dashboard, status line & peak-price notice UI
 ├── package.json    Plugin manifest: declares dsh.bundle (what makes it installable) and dsh.client (browser UI)
 ├── cordis.patch.yml Bundle patch: registers the plugin with DSH's loader, pointed at by dsh.bundle
 ├── screenshots.json Marketplace detail-page screenshot list (relative paths, 1-8 images)
-├── test/           Unit tests (storage / pricing / config / recompute, node test/*.test.js)
+├── README.md       Chinese documentation
+├── README.en.md    English documentation
+├── CHANGELOG.md    Changelog (Chinese)
+├── test/           Unit tests (storage / pricing / config / recompute / render / cloud read; node test/*.test.js)
 └── docs/           README screenshots and design notes
 ```
 
