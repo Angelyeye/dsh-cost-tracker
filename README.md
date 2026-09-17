@@ -8,8 +8,8 @@ This fork keeps the upstream accounting engine and pricing logic, while narrowin
 
 - Uses the package identity `@shaunpalmer/dsh-cost-tracker`.
 - Loads through `index.safe.js`, which prevents the upstream nav-icon routine from modifying installed DSH UI files.
-- Uses `client.en.js` as the exported browser client.
-- Presents a compact English dashboard focused on the numbers that matter: today, month, all-time spend, requests, tokens, balance, recent records, CSV export, and current conversation cost.
+- Replaces the upstream browser UI with a compact English `client.js`.
+- Presents the numbers that matter: today, month, all-time spend, requests, tokens, balance, recent records, CSV export, and current conversation cost.
 - Keeps cloud sync disabled by default.
 - Hashes session ids by default if cloud sync is manually enabled.
 - Does not upload project/purpose metadata unless explicitly opted in.
@@ -56,7 +56,7 @@ Original project: `Angelyeye/dsh-cost-tracker`.
 
 Upstream version at fork baseline: `1.8.8`.
 
-Detailed upstream English documentation is retained in `README.en.md` while the fork is being reduced and hardened.
+Detailed upstream English documentation is retained in `README.en.md` while the remaining source-English conversion is completed.
 
 ## Licence
 
