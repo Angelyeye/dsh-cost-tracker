@@ -1,91 +1,182 @@
-# 峰谷「环形表盘」设计方案
+# Peak and Valley "Circular Dial" Design Scheme
 
-> 插件：`dsh-cost-tracker` · 目标：把「时段条样式」下拉框里的 **经典（两行）** 选项，改造成一个按 24h 划分的**中空圆环**。
-> 预览页：`docs/peak-dial-preview.html`（已用浏览器逐项渲染验证）。
+
+
+> Plugin: `dsh-cost-tracker` · Goal: To transform the **classic (two rows)** option in the "Time Period Bar Style" dropdown into a **hollow ring** divided by 24 hours.
+
+Preview page: `docs/peak-dial-preview.html` (has been verified by rendering each item in a browser).
+
+
 
 ---
 
-## 1. 需求
 
-- 现有「经典（两行）」是一段固定宽度的线性轨道 + 两行文字（chip / 倒计时），无法直观看出一天中峰谷的分布与当前所处位置。
-- 期望改为**中空圆形（环形 / 甜甜圈状）表盘**，按 24h 划分；
-  - **橙色** = 高峰时段（工作日 9:00-12:00、14:00-18:00）
-  - **蓝色** = 平价时段（其余时间）
-  - **周末** = 全天谷价（整体蓝色）
-  - 一根**指针**指向「当前时刻」，圆心展示「当前相位 + 倒计时」。
 
-## 2. 设计要点
+## 1. Requirements
 
-### 2.1 造型
-- **SVG 环形**：一条铺满 24h 的蓝色底环，再按高峰窗口叠加橙色弧段（`[9,12]`、`[14,18]`）。
-- **坐标系**：`0:00` 在顶部，`6:00` 在右，`12:00` 在底部，`18:00` 在左（标准 24h 时钟）。每 3h 一个刻度标签。
-- **指针**：由圆心指向当前时刻的细杆 + 顶端圆点，随 `now` 旋转。
-- **圆心内容**：当前相位词（`高峰时段 / 平价时段 / 周末全谷`）+ 倒计时（如「1小时30分后进入平价」）。
-- **等比缩放**：用 SVG `viewBox`，同一份代码可自适应设置面板（wide）与窄栏（rail）两种宽度。
 
-### 2.2 配色（沿用插件现有色板）
-| 用途 | 值 |
+
+- The existing "Classic (Two Lines)" is a fixed-width linear track + two lines of text (chip / countdown), which cannot intuitively show the distribution of peaks and valleys throughout the day and the current location.
+
+- We hope to change it to a **hollow circular (ring/donut-shaped) dial**, divided into 24 hours;
+
+  - **Orange** = Peak hours (weekdays 9:00-12:00, 14:00-18:00)
+
+  - **Blue** = Price-off period (other times)
+
+  - **Weekend** = All-day price (overall blue)
+
+  - A pointer points to the "current moment", and the center of the circle displays the "current phase + countdown".
+
+
+
+## 2. Design Considerations
+
+
+
+### 2.1 Styling
+
+- **SVG Ring**: A blue base ring that covers 24 hours, then orange arcs (`[9,12]`, `[14,18]`) are superimposed according to the peak window.
+
+- **Coordinate system:** `0:00` at the top, `6:00` on the right, `12:00` at the bottom, and `18:00` on the left (standard 24-hour clock). A scale mark every 3 hours.
+
+- **Pointer**: A thin rod pointing from the center to the current time + the top dot, rotating with `now`.
+
+- **Center Content**: Current phase keyword (`peak hours/low price hours/weekend full valley`) + countdown (e.g., "low price in 1 hour and 30 minutes").
+
+- **Proportional scaling**: Using SVG `viewBox`, the same code can adapt to both wide and narrow rail widths.
+
+
+
+### 2.2 Color Scheme (using the existing color palette of the plugin)
+
+| Uses | Value |
+
 | --- | --- |
-| 高峰橙 | `#ff9800`（对应 `.cost-ps-peakseg`） |
-| 平价蓝 | `--dsw-alias-state-business-primary, #4176e6` |
-| 周末绿 | `#34a853` |
-| 主/次/弱文字 | `#171a1f / #5b6472 / #9ca3af` |
 
-### 2.3 数据口径
-- 后端已有一套与 `isPeak / peakPhaseAt` 同口径的窗口：`pricing.js` 的 `PEAK_HOUR_WINDOWS = [{start:9,end:12},{start:14,end:18}]`。
-- **新增**：在 `index.js` 的 `peakSnapshot()` 里下发结构化窗口数组 `peakHours: PEAK_HOUR_WINDOWS` 给前端，前端据此画弧，避免把窗口写死在前端、与计费口径不同步。
-- 周末判定沿用 `snap.phase.weekend`：为真则**不画任何橙色弧**，整环蓝。
+| Peak Orange | `#ff9800` (corresponding to `.cost-ps-peakseg`) |
 
-## 3. 实现改动（面）
+Affordable Blue | `--dsw-alias-state-business-primary, #4176e6` |
 
-| 文件 | 改动 |
+| Weekend Green | `#34a853` |
+
+| Primary/Secondary/Weak Text| `#171a1f / #5b6472 / #9ca3af` |
+
+
+
+### 2.3 Data Scope
+
+- The backend already has a window with the same scope as `isPeak / peakPhaseAt`: `pricing.js`'s `PEAK_HOUR_WINDOWS = [{start:9,end:12},{start:14,end:18}]`.
+
+- **New Feature**: In `index.js`'s `peakSnapshot()`, a structured window array `peakHours: PEAK_HOUR_WINDOWS` is sent to the front end. The front end uses this array to draw arcs, avoiding hardcoding the window on the front end and ensuring synchronization with the billing standard.
+
+- The weekend determination follows `snap.phase.weekend`: if true, **no orange arc is drawn**, and the entire ring is blue.
+
+
+
+## 3. Implement the changes (surface)
+
+
+
+| File | Changes |
+
 | --- | --- |
-| `index.js` | `peakSnapshot()` 增加 `peakHours: PEAK_HOUR_WINDOWS`；从 `./pricing.js` 补充导入 `PEAK_HOUR_WINDOWS`。 |
-| `config.js` | 仅更新注释；`peakStyle` 值仍为 `classic`，但语义改为「环形表盘」，并保持 `compact` 不变（老配置无需迁移）。 |
-| `client.js` | ① 新增 `PeakDial` SVG 组件与 `cost-ps-ring*` 样式；② 重写 `classic` 分支为该圆环；③ 下拉框标签改为「环形表盘（24h）」；④ 设置面板说明文案同步。 |
 
-### 3.1 `client.js` 关键片段
+| `index.js` | `peakSnapshot()` adds `peakHours: PEAK_HOUR_WINDOWS`; imports `PEAK_HOUR_WINDOWS` from `./pricing.js`.
+
+| `config.js` | Only comments have been updated; the value of `peakStyle` remains `classic`, but the semantics have been changed to "circular dial", and `compact` remains unchanged (old configurations do not need to be migrated).
+
+| `client.js` | ① Added the `PeakDial` SVG component and the `cost-ps-ring*` style; ② Rewrote the `classic` branch to this ring; ③ Changed the dropdown label to "Ring Clock (24h)"; ④ Set the panel description text to synchronize. |
+
+
+
+### 3.1 Key snippets of `client.js`
+
+
 
 ```js
-// 24h 环形表盘：底环蓝色铺满，高峰窗口叠加橙色弧段，指针指向当前时刻。
+
+// 24-hour circular dial: The bottom ring is entirely blue, with orange arcs superimposed on the peak window, and the hands point to the current time.
+
 function PeakDial(props) {
+
   const p = props.phase;                       // { inPeak, weekend, nextAtMs, ... }
+
   const now = props.now;
+
   const windows = props.windows || [{start:9,end:12},{start:14,end:18}];
+
   const size = props.size || 150;
+
   const CX = 90, CY = 90, R = 62, SW = 18;     // viewBox 180
-  const deg = (h) => h * 15;                    // 0:00 顶部，顺时针
+
+  const deg = (h) => h * 15; // 0:00 Top, clockwise
+
   const polar = (d, r) => [CX + r*Math.sin(d*Math.PI/180), CY - r*Math.cos(d*Math.PI/180)];
+
   const arc = (a, b) => { const s = polar(deg(a), R), e2 = polar(deg(b), R);
+
     return `M ${s[0]} ${s[1]} A ${R} ${R} 0 ${(b-a)%360>180?1:0} 1 ${e2[0]} ${e2[1]}`; };
+
   const minuteOfDay = /* from now (Beijing) */;
+
   const marker = polar(minuteOfDay / 1440 * 360, R);
+
   const color = p.weekend ? GREEN : p.inPeak ? AMBER : BLUE;
-  // ... 组装 SVG：底环 + 橙色弧 + 刻度 + 指针 + 圆心文字
+
+  // ... Assemble the SVG: bottom ring + orange arc + tick marks + pointer + center text
+
 }
+
 ```
+
+
 
 ```js
-if (style === "classic") {                     // 改造后：环形表盘
+
+if (style === "classic") { // After modification: circular dial
+
   return e("div", { className: "cost-ps cost-ps-ring" + wordClass, title: countdown },
+
     e(PeakDial, { phase: p, windows: snap.peakHours, now }),
+
     e("div", { className: "cost-ps-ringfoot" },
+
       e("span", { className: "cost-ps-chip" }, peakWord(p) + " · " + countdown)));
+
 }
+
 ```
 
-## 4. 交互与边界
 
-- **指针实时性**：`PeakSidebar` 已有 `now` 定时器（10s），圆环复用 `now`，指针平滑随当前时刻移动。
-- **切换前后**：圆心倒计时与既有 `peakCountdown` 使用同一份相位数据，口径一致。
-- **周末**：整环蓝色、圆心显示「周末全谷」，不渲染橙色弧。
-- **窄栏（rail）态**：仍是竖排短词，不显示圆环（保持窄栏简洁）。
-- **可访问性**：外层 `title` 保留倒计时提示；环形为主视觉，`aria-label` 可后续补充。
 
-## 5. 验收
+## 4. Interaction and Boundaries
 
-- [ ] 设置面板选择「环形表盘（24h）」后，设置面板出现圆环 + 圆心相位/倒计时。
-- [ ] 侧边栏（wide）同样展示圆环；窄栏（rail）仍为竖排短词。
-- [ ] 工作日高峰/平价两个时刻，橙/蓝弧与指针正确，圆心文案随相位切换。
-- [ ] 周末整环无橙色，圆心显示「周末全谷」。
-- [ ] `npm test`（config / pricing / storage）全部通过。
+
+
+- **Pointer Real-Time Performance**: `PeakSidebar` already has a `now` timer (10s), and the circular loop reuses `now`, allowing the pointer to move smoothly with the current time.
+
+- **Before and after switching:** The center countdown and the existing `peakCountdown` use the same phase data and have the same caliber.
+
+- **Weekend**: The entire ring is blue, and the center displays "Weekend Valley" without rendering an orange arc.
+
+- **Narrow rail mode**: Still vertical short words, no circular display (keeping the narrow rail simple).
+
+- **Accessibility**: The outer `title` retains the countdown prompt; the ring shape is the main visual element, and the `aria-label` can be added later.
+
+
+
+## 5. Acceptance
+
+
+
+- [ ] After selecting "Circular Dial (24h)" in the settings panel, the settings panel will display a circular dial with a central phase/countdown.
+
+- [ ] The wide sidebar also displays a circular pattern; the rail remains a vertical bar of short words.
+
+- [ ] During peak/average weekday times, the orange/blue arc and pointer are correct, and the text at the center of the circle changes with the phase.
+
+- [ ] The entire ring is free of orange on weekends, and the center of the circle displays "Weekend Valley".
+
+- [ ] `npm test` (config / pricing / storage) all passed.
+
