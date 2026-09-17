@@ -1,6 +1,6 @@
 {
   "name": "@shaunpalmer/dsh-cost-tracker",
-  "version": "1.8.8-ps.1",
+  "version": "1.8.8-ps.2",
   "description": "Project Studios hardened English fork of the DSH token usage and cost tracker.",
   "type": "module",
   "main": "index.safe.js",

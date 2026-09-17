@@ -4,6 +4,21 @@ All notable changes to the Project Studios fork are recorded here.
 
 The original upstream repository contains the pre-fork release history. This fork began from upstream commit `65bfdb57da16f9963ac63d34c6b4098dc3535d17` at upstream version `1.8.8`.
 
+## 1.8.8-ps.2 - 2026-09-17
+
+### Added
+
+- New Zealand dollar display for dashboard spend, DeepSeek balance, recent records, and current-conversation cost.
+- A cached daily CNY→NZD reference-rate lookup using Frankfurter's public exchange-rate API.
+- Safe fallback to the original CNY display when a fresh or cached FX rate is unavailable.
+
+### Accounting behavior
+
+- CNY remains the canonical stored and calculated currency. Historical records are not rewritten when exchange rates move.
+- NZD conversion happens only in the browser display layer.
+- The last valid rate is cached locally for 24 hours; an older cached rate may be used if the rate service is temporarily unavailable and is labelled as cached in the dashboard note.
+- The FX request contains only the currency pair and sends no cost records, session identifiers, project metadata, or DeepSeek credentials.
+
 ## 1.8.8-ps.1 - 2026-09-17
 
 ### Added
