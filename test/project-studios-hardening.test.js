@@ -33,6 +33,14 @@ check(client.includes("id: '@shaunpalmer/dsh-cost-tracker'"), 'browser bundle id
 check(view.includes('id: "@shaunpalmer/dsh-cost-tracker/view"'), 'view bundle id matches fork package id')
 check(cordis.includes('name: "@shaunpalmer/dsh-cost-tracker"'), 'Cordis patch points at the fork package')
 
+check(client.includes("FX_ENDPOINT = 'https://api.frankfurter.dev/v2/rate/cny/nzd'"), 'NZD display uses the documented Frankfurter CNY to NZD reference endpoint')
+check(client.includes("FX_CACHE_KEY = 'project-studios-cost-tracker:fx:cny-nzd:v1'"), 'FX rate has a namespaced browser cache')
+check(client.includes('FX_CACHE_TTL_MS = 24 * 60 * 60 * 1000'), 'FX cache refreshes daily')
+check(client.includes("return 'NZ$' + number.toLocaleString('en-NZ'"), 'NZD values use explicit New Zealand display formatting')
+check(client.includes("return { primary: cnyLabel(cny), secondary: '' }"), 'CNY remains the safe display fallback when FX is unavailable')
+check(client.includes('CNY remains canonical.'), 'UI states that CNY remains the canonical accounting currency')
+check(client.includes('Display conversion must never make the tracker unusable.'), 'FX cache failures are isolated from the cost tracker')
+
 const defaults = defaultCloudConfig()
 check(defaults.cloudEnabled === false, 'cloud sync is disabled by default')
 check(defaults.maskSessionId === true, 'session ids are masked by default')
