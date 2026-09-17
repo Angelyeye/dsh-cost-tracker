@@ -7,7 +7,6 @@
   "files": [
     "index.safe.js",
     "index.js",
-    "client.en.js",
     "client.js",
     "view.js",
     "store.js",
@@ -21,7 +20,7 @@
   ],
   "exports": {
     ".": "./index.safe.js",
-    "./client": "./client.en.js",
+    "./client": "./client.js",
     "./view": "./view.js",
     "./package.json": "./package.json"
   },
