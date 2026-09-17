@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { defaultCloudConfig, normalizeCloudConfig } from '../config.js'
+import { normalizeCloudConfig as normalizeSyncCloudConfig } from '../sync.js'
 
 let failures = 0
 let passes = 0
@@ -22,6 +23,7 @@ const client = read('client.js')
 const view = read('view.js')
 const wrapper = read('index.safe.js')
 const store = read('store.js')
+const sync = read('sync.js')
 const cordis = read('cordis.patch.yml')
 
 check(packageJson.name === '@shaunpalmer/dsh-cost-tracker', 'fork package id is Project Studios scoped')
@@ -49,6 +51,13 @@ const normalizedOptIn = normalizeCloudConfig({
 check(normalizedOptIn.maskSessionId === false, 'explicit session-id opt-out is preserved')
 check(normalizedOptIn.includePurpose === true, 'explicit purpose opt-in is preserved')
 
+const syncDefaults = normalizeSyncCloudConfig({})
+check(syncDefaults.cloudEnabled === false, 'sync engine keeps cloud disabled by default')
+check(syncDefaults.maskSessionId === true, 'sync engine masks session ids by default')
+check(syncDefaults.includePurpose === false, 'sync engine excludes purpose metadata by default')
+check(sync.includes('mode: 0o700'), 'sync directories are created owner-only')
+check(sync.includes('mode: 0o600'), 'sync identity/state files are written owner-only')
+
 check(wrapper.includes("SAFE_ENTRY_SENTINEL = '/nonexistent/project-studios/dsh-cost-tracker'"), 'wrapper blocks upstream DSH installation discovery')
 check(wrapper.includes("BLOCKED_SETTINGS_SERVICE = 'settings'"), 'wrapper suppresses the upstream settings surface')
 check(store.includes('mode: 0o700'), 'storage directory is created owner-only')
@@ -60,6 +69,7 @@ const englishSurfaceFiles = [
   'view.js',
   'config.js',
   'store.js',
+  'sync.js',
   'schema.js',
   'README.md',
   'CHANGELOG.md',
