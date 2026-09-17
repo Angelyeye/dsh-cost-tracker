@@ -16,6 +16,10 @@ window.__ModuleLoader__.load({
     const useEffect = React.useEffect
     const useState = React.useState
 
+    const FX_ENDPOINT = 'https://api.frankfurter.dev/v2/rate/cny/nzd'
+    const FX_CACHE_KEY = 'project-studios-cost-tracker:fx:cny-nzd:v1'
+    const FX_CACHE_TTL_MS = 24 * 60 * 60 * 1000
+
     /**
      * Call one host API route exposed by the accounting engine.
      *
@@ -51,6 +55,97 @@ window.__ModuleLoader__.load({
     function formatMoney(value) {
       const number = Number(value) || 0
       return number >= 1 ? number.toFixed(2) : number.toFixed(4)
+    }
+
+    function isValidFxRate(value) {
+      const rate = Number(value)
+      return Number.isFinite(rate) && rate > 0
+    }
+
+    function formatNzd(value) {
+      const number = Number(value) || 0
+      const decimals = Math.abs(number) >= 1 ? 2 : 4
+      return 'NZ$' + number.toLocaleString('en-NZ', {
+        minimumFractionDigits: decimals,
+        maximumFractionDigits: decimals,
+      })
+    }
+
+    function cnyLabel(value) {
+      return '¥' + formatMoney(value) + ' CNY'
+    }
+
+    function moneyLabels(value, fxRate) {
+      const cny = Number(value) || 0
+      if (!isValidFxRate(fxRate)) {
+        return { primary: cnyLabel(cny), secondary: '' }
+      }
+
+      return {
+        primary: formatNzd(cny * Number(fxRate)),
+        secondary: cnyLabel(cny),
+      }
+    }
+
+    function readFxCache() {
+      try {
+        const raw = window.localStorage && window.localStorage.getItem(FX_CACHE_KEY)
+        if (!raw) return null
+        const parsed = JSON.parse(raw)
+        if (!isValidFxRate(parsed.rate) || !Number.isFinite(Number(parsed.fetchedAt))) return null
+        return {
+          rate: Number(parsed.rate),
+          fetchedAt: Number(parsed.fetchedAt),
+          date: typeof parsed.date === 'string' ? parsed.date : '',
+        }
+      } catch (_) {
+        return null
+      }
+    }
+
+    function writeFxCache(value) {
+      try {
+        if (!window.localStorage) return
+        window.localStorage.setItem(FX_CACHE_KEY, JSON.stringify(value))
+      } catch (_) {
+        // Display conversion must never make the tracker unusable.
+      }
+    }
+
+    async function loadCnyNzdRate() {
+      const cached = readFxCache()
+      const now = Date.now()
+      if (cached && now - cached.fetchedAt < FX_CACHE_TTL_MS) {
+        return { ...cached, stale: false, source: 'cache' }
+      }
+
+      const controller = typeof AbortController === 'function' ? new AbortController() : null
+      const timeout = controller ? setTimeout(() => controller.abort(), 4000) : null
+
+      try {
+        const response = await fetch(FX_ENDPOINT, {
+          method: 'GET',
+          headers: { accept: 'application/json' },
+          ...(controller ? { signal: controller.signal } : {}),
+        })
+        if (!response.ok) throw new Error('FX HTTP ' + response.status)
+        const payload = await response.json()
+        const rate = Number(payload && payload.rate)
+        if (!isValidFxRate(rate)) throw new Error('FX response did not contain a valid rate')
+
+        const value = {
+          rate,
+          fetchedAt: now,
+          date: payload && typeof payload.date === 'string' ? payload.date : '',
+        }
+        writeFxCache(value)
+        return { ...value, stale: false, source: 'frankfurter' }
+      } catch (_) {
+        if (cached) return { ...cached, stale: true, source: 'stale-cache' }
+        return { rate: null, fetchedAt: 0, date: '', stale: false, source: 'unavailable' }
+      } finally {
+        if (timeout) clearTimeout(timeout)
+      }
     }
 
     function installStyles(ctx) {
@@ -100,6 +195,7 @@ window.__ModuleLoader__.load({
       const [days, setDays] = useState(7)
       const [dashboard, setDashboard] = useState(null)
       const [balance, setBalance] = useState(null)
+      const [fx, setFx] = useState({ rate: null, date: '', stale: false, source: 'loading' })
       const [message, setMessage] = useState('')
       const [error, setError] = useState('')
       const [busy, setBusy] = useState(false)
@@ -127,6 +223,13 @@ window.__ModuleLoader__.load({
       }
 
       useEffect(() => { load() }, [days])
+      useEffect(() => {
+        let active = true
+        loadCnyNzdRate().then((result) => {
+          if (active) setFx(result)
+        })
+        return () => { active = false }
+      }, [])
 
       async function exportCsv() {
         setBusy(true)
@@ -147,23 +250,35 @@ window.__ModuleLoader__.load({
       const all = (dashboard && dashboard.all) || {}
       const recent = dashboard && Array.isArray(dashboard.recent) ? dashboard.recent : []
 
+      const todayMoney = moneyLabels(today.real, fx.rate)
+      const monthMoney = moneyLabels(month.real, fx.rate)
+      const allMoney = moneyLabels(all.real, fx.rate)
+
       let balanceValue = '—'
       let balanceSub = 'Balance lookup unavailable'
       if (balance && balance.ok) {
-        balanceValue = '¥' + String(balance.total || '0')
-        balanceSub = balance.available ? 'Available' : 'Unavailable'
+        const balanceMoney = moneyLabels(balance.total, fx.rate)
+        balanceValue = balanceMoney.primary
+        balanceSub = (balance.available ? 'Available' : 'Unavailable') + (balanceMoney.secondary ? ' · ' + balanceMoney.secondary : '')
       } else if (balance && balance.error) {
         balanceSub = String(balance.error)
       }
 
       const requestCount = (Number(all.calls) || 0) + (Number(all.subCalls) || 0)
       const tokenCount = (Number(all.tokens) || 0) + (Number(all.subTokens) || 0)
+      const fxNote = isValidFxRate(fx.rate)
+        ? 'NZD display uses a cached daily CNY→NZD reference rate from Frankfurter' + (fx.date ? ' (' + fx.date + ')' : '') + (fx.stale ? ' — cached rate' : '') + '. CNY remains canonical.'
+        : 'CNY remains canonical. NZD reference rate is unavailable, so CNY is shown.'
+
+      const allSpendSub = Number(all.sub) > 0
+        ? 'Subscription equivalent: ' + moneyLabels(all.sub, fx.rate).primary + (isValidFxRate(fx.rate) ? ' · ' + cnyLabel(all.sub) : '')
+        : 'Metered API spend'
 
       return e('div', { className: 'ps-cost' },
         e('div', { className: 'ps-cost-head' },
           e('div', null,
             e('div', { className: 'ps-cost-title' }, 'Cost Tracker'),
-            e('div', { className: 'ps-cost-note' }, 'Local-first Project Studios build. Cost values are shown in CNY.'),
+            e('div', { className: 'ps-cost-note' }, fxNote),
           ),
         ),
         e('div', { className: 'ps-cost-actions' },
@@ -182,9 +297,9 @@ window.__ModuleLoader__.load({
         ),
         error ? e('div', { className: 'ps-cost-error' }, error) : null,
         e('div', { className: 'ps-cost-grid' },
-          card('Today', '¥' + formatMoney(today.real), formatInteger(today.calls) + ' metered requests'),
-          card('This month', '¥' + formatMoney(month.real), formatCompact(month.tokens) + ' metered tokens'),
-          card('All-time spend', '¥' + formatMoney(all.real), Number(all.sub) > 0 ? 'Subscription equivalent: ¥' + formatMoney(all.sub) : 'Metered API spend'),
+          card('Today', todayMoney.primary, (todayMoney.secondary ? todayMoney.secondary + ' · ' : '') + formatInteger(today.calls) + ' metered requests'),
+          card('This month', monthMoney.primary, (monthMoney.secondary ? monthMoney.secondary + ' · ' : '') + formatCompact(month.tokens) + ' metered tokens'),
+          card('All-time spend', allMoney.primary, (allMoney.secondary ? allMoney.secondary + ' · ' : '') + allSpendSub),
           card('API requests', formatInteger(requestCount), 'Metered + subscription requests'),
           card('Tokens', formatInteger(tokenCount), 'Metered + subscription tokens'),
           card('DeepSeek balance', balanceValue, balanceSub),
@@ -203,12 +318,18 @@ window.__ModuleLoader__.load({
               ),
               e('tbody', null,
                 recent.length
-                  ? recent.map((record, index) => e('tr', { key: String(record.ts || index) + '-' + index },
-                    e('td', null, record.time || ''),
-                    e('td', null, String(record.provider || '') + '/' + String(record.model || '')),
-                    e('td', null, formatInteger((Number(record.input) || 0) + (Number(record.cacheRead) || 0) + (Number(record.cacheWrite) || 0) + (Number(record.output) || 0))),
-                    e('td', null, '¥' + formatMoney(record.cost)),
-                  ))
+                  ? recent.map((record, index) => {
+                    const recordMoney = moneyLabels(record.cost, fx.rate)
+                    return e('tr', { key: String(record.ts || index) + '-' + index },
+                      e('td', null, record.time || ''),
+                      e('td', null, String(record.provider || '') + '/' + String(record.model || '')),
+                      e('td', null, formatInteger((Number(record.input) || 0) + (Number(record.cacheRead) || 0) + (Number(record.cacheWrite) || 0) + (Number(record.output) || 0))),
+                      e('td', null,
+                        e('div', null, recordMoney.primary),
+                        recordMoney.secondary ? e('div', { className: 'ps-cost-sub' }, recordMoney.secondary) : null,
+                      ),
+                    )
+                  })
                   : e('tr', null, e('td', { colSpan: 4, className: 'ps-cost-note' }, 'No cost records yet.')),
               ),
             ),
@@ -220,6 +341,7 @@ window.__ModuleLoader__.load({
     function StatusLine(props) {
       const sessionId = props && props.sessionId ? String(props.sessionId) : ''
       const [summary, setSummary] = useState(null)
+      const [fx, setFx] = useState({ rate: null, date: '', stale: false, source: 'loading' })
 
       useEffect(() => {
         let active = true
@@ -234,6 +356,9 @@ window.__ModuleLoader__.load({
         }
 
         refresh()
+        loadCnyNzdRate().then((result) => {
+          if (active) setFx(result)
+        })
         const interval = setInterval(refresh, 30_000)
         return () => {
           active = false
@@ -245,11 +370,15 @@ window.__ModuleLoader__.load({
 
       const metered = Number(summary.sessionCost) || 0
       const subscription = Number(summary.sessionSub) || 0
-      const subtext = subscription > 0 ? ' + subscription equivalent ¥' + formatMoney(subscription) : ''
+      const meteredMoney = moneyLabels(metered, fx.rate)
+      const subscriptionMoney = moneyLabels(subscription, fx.rate)
+      const subtext = subscription > 0 ? ' + subscription equivalent ' + subscriptionMoney.primary : ''
+      const cnyText = meteredMoney.secondary ? ' (' + meteredMoney.secondary + ')' : ''
 
-      return e('span', { className: 'ps-cost-session', title: 'Current conversation cost' },
+      return e('span', { className: 'ps-cost-session', title: 'Current conversation cost; CNY is the canonical stored currency' },
         e('span', null, 'Session'),
-        e('strong', null, '¥' + formatMoney(metered)),
+        e('strong', null, meteredMoney.primary),
+        cnyText ? e('span', { className: 'ps-cost-note' }, cnyText) : null,
         subtext ? e('span', { className: 'ps-cost-note' }, subtext) : null,
       )
     }
