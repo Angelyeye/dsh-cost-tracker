@@ -21,7 +21,7 @@ The upstream accounting engine remains in `index.js` and the supporting pricing/
 
 ## Active browser surface
 
-The exported browser client is `client.en.js`. It contains only the local-first features currently required by Project Studios:
+The browser client is `client.js`, replaced by Project Studios rather than wrapping the upstream UI. It contains only the local-first features currently required:
 
 - today spend;
 - month spend;
@@ -32,8 +32,6 @@ The exported browser client is `client.en.js`. It contains only the local-first 
 - recent cost records;
 - CSV export; and
 - current conversation cost in the composer dock.
-
-The large upstream client remains reference material only until the full source-English pass is complete. It is not exported by the package.
 
 ## Privacy defaults
 
@@ -63,6 +61,6 @@ For each upstream update:
 
 ## Remaining source-English pass
 
-The runtime Project Studios surface is English-first. Several retained upstream implementation and historical test files still contain Chinese comments or messages. They are intentionally tracked as a separate mechanical source-conversion pass so translation does not get mixed with accounting logic changes.
+The runtime Project Studios surface is English. Several retained upstream implementation and historical test files still contain Chinese comments or messages. They are intentionally tracked as a separate mechanical source-conversion pass so translation does not get mixed with accounting logic changes.
 
 The final English-source gate should cover all maintained production modules and maintained tests before this fork is treated as fully independent from upstream.
