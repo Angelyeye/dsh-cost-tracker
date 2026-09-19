@@ -15,6 +15,7 @@ import {
   PEAK_WINDOWS, VISION_MODEL, VISION_IMAGE_MAX_TOKENS,
   isPeak, peakPhaseAt, priceFor, computeCost, normalizeTokens,
   eraAt, exactModelsAt, resolveModelInEra, normalizeModelName,
+  subscriptionPlanFor, VOLCENGINE_PLAN_PROVIDER_KEYS, VOLCENGINE_PLAN_RATES,
 } from '../pricing.js'
 
 let failures = 0
@@ -298,6 +299,70 @@ const PRO_SWITCH_TS = V41_PRO_ROUTE_AT
   ok(resolveModelInEra(null, 'x') === null, '归一化: 空 era 不命中')
   // 路由目标必须在目标时代单价表内，否则不生效（防止悬空路由）
   ok(resolveModelInEra({ models: {}, routes: { a: 'b' } }, 'a') === null, '归一化: 悬空路由不命中')
+}
+
+// ---------- 6g. 订阅门卫 + 火山方舟 Coding Plan（v1.8.14） ----------
+// 这组断言拦的是「把按量调用错记成订阅」——一旦记错，金额会从「真实花费」
+// 里消失，且原始记录被标成 subscription 后无法自动回滚。所以两个方向都要钉：
+//   · 订阅调用**必须**被识别为 subscription（否则订阅费用混进真实花费）
+//   · 同一 provider 下的按量调用**必须不**被识别（否则真实花费凭空缩水）
+{
+  // Kimi 回归：登记为「整档都是订阅」，任何模型名都算订阅（1.8.13 既有行为）
+  for (const np of ['kimi', 'kimi-coding']) {
+    for (const m of ['kimi-k3', 'kimi-k2.5', 'whatever']) {
+      const p = priceFor(np, m, V41_TS)
+      ok(p.subscription === true, '订阅回归: ' + np + '/' + m + ' 仍为订阅')
+      approx(p.rates.input, 6.5, '订阅回归: ' + np + '/' + m + ' 输入价 6.5')
+      ok(p.era === null, '订阅回归: ' + np + '/' + m + ' 不落在价格时代里')
+    }
+  }
+  // -official 后缀由宿主 normProvider 剥离，这里直接验证已剥离的形态
+  ok(priceFor('kimi-coding', 'kimi-k3', V41_TS).subscription === true, '订阅回归: kimi-coding-official 剥离后仍命中')
+
+  // 专属 Coding Plan 端点：baseURL 指向 /api/coding/v3 的 provider 整档都是订阅，
+  // 因此**不必**追模型日期后缀（用户实测 id 形如 glm-5-3-flash-260828）。
+  for (const np of ['byteblus-coding-plan-cn', 'byteplus-coding-plan-cn', 'volcengine-coding', 'volcengine-plan']) {
+    for (const m of ['glm-5-3-flash-260828', 'deepseek-v4-1-flash-260910', 'doubao-seed-2-1-pro-260915', '未来新模型']) {
+      const p = priceFor(np, m, V41_TS)
+      ok(p.subscription === true, '火山专属端点: ' + np + '/' + m + ' 计为订阅')
+      approx(p.rates.input, 3.0, '火山专属端点: ' + np + '/' + m + ' 输入价 3.0')
+      ok(p.estimated === true, '火山专属端点: ' + np + '/' + m + ' 标为估算（等效参考，非真实扣费）')
+    }
+  }
+
+  // 泛 volcengine：套餐内外的模型**混在同一个 provider 下**，必须靠模型白名单区分
+  for (const m of ['ark-code-latest', 'Ark-Code-Latest', 'doubao-seed-code', 'kimi-k2.5', 'glm-5.1', 'deepseek-v4-pro', 'minimax-m2.5']) {
+    ok(priceFor('volcengine', m, V41_TS).subscription === true, '火山白名单: ' + m + ' 计为订阅')
+  }
+  // 接入点 id（在线推理 = 按量）绝不能算成订阅
+  for (const m of ['ep-20260413045435-2shmq', 'doubao-seed-2.0-pro-ep-123', 'some-unlisted-model']) {
+    const p = priceFor('volcengine', m, V41_TS)
+    ok(p.subscription === false, '火山白名单: ' + m + ' 不误判为订阅')
+    ok(p.estimated === true, '火山白名单: ' + m + ' 走兜底估算')
+  }
+
+  // ark-code 前缀整族放行（方舟自动调度名会滚动升级，逐条登记必然过期）
+  for (const m of ['ark-code-latest', 'ark-code-2027']) {
+    ok(priceFor('volcengine', m, V41_TS).subscription === true, '火山前缀: ' + m + ' 整族放行')
+  }
+
+  // 非火山 provider 不受影响
+  ok(priceFor('deepseek', 'deepseek-flash', V41_TS).subscription === false, '门卫: deepseek 不受影响')
+  ok(priceFor('openai', 'gpt-5.6-luna', V41_TS).subscription === false, '门卫: openai 不受影响')
+
+  // 订阅制的费用影响：同一批 token，订阅等效价应显著低于 V4.1 Flash 按量价
+  const tk = { input: 100000, output: 6000, cacheRead: 20000, cacheWrite: 0 }
+  const volc = priceFor('byteblus-coding-plan-cn', 'doubao-seed-2-1-pro-260915', V41_TS)
+  const ds = priceFor('deepseek', 'deepseek-flash', V41_TS)
+  const volcCost = computeCost(volc.rates, volc.tiered, false, tk)
+  const dsCost = computeCost(ds.rates, ds.tiered, true, tk)
+  ok(volcCost > 0 && dsCost > 0, '订阅计费: 两侧均为正数')
+  ok(volc.tiered === false, '订阅计费: 订阅不分峰谷（tiered=false）')
+
+  // 服务名/端点常量（签名正确性的外观断言；签名细节在 volcengine-plan.test.js）
+  ok(typeof subscriptionPlanFor === 'function', '门卫: subscriptionPlanFor 已导出')
+  ok(VOLCENGINE_PLAN_PROVIDER_KEYS.indexOf('volcengine') >= 0, '门卫: provider 别名含 volcengine')
+  ok(VOLCENGINE_PLAN_RATES.input > 0, '门卫: 套餐单价表已导出')
 }
 
 // ---------- 7. index.js 仍可加载（含 pricing 导入） ----------

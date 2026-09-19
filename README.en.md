@@ -36,7 +36,7 @@
 | 🏷️ | **Official model-name alignment** | Billing recognises the official current name **`deepseek-flash`** (price-card note (1): "use the model name `deepseek-flash`"); older spellings such as `deepseek-v4.1-flash` normalize to the same rate, so an official rename can never silently drop usage into the fallback estimate |
 | 📊 | **Visual dashboard** | A new "Cost Statistics" page in Settings: overview cards, cost bar charts (by peak period / by model), per-model request & token charts — **all with hover tooltips** |
 | 🧭 | **Multi-machine aggregation (cloud sync)** | Point it at your own **self-hosted cloud service** (separate `dsh-cost-cloud` repo, zero runtime dependencies) to merge usage from several computers; the dashboard then offers a **This machine / This machine + cloud / Cloud only** switcher plus a **device × Agent matrix** (row totals = column totals = grand total). Only token counts, cost, timestamps and identifiers are uploaded, with optional session-id masking |
-| 📈 | **Subscription quota** | Kimi Coding Plan and similar subscriptions: weekly quota, 5-hour rolling window limit, pay-as-you-go-equivalent cost for reference |
+| 📈 | **Subscription quota** | Kimi Coding Plan and **Volcengine Ark Coding Plan**: quota progress bars, reset countdowns and pay-as-you-go-equivalent cost for reference. Volcengine is queried through the Ark **control-plane OpenAPI** (HMAC-signed), requiring an AccessKeyID + SecretAccessKey pair |
 | 💳 | **Balance lookup** | One-click DeepSeek account balance (total / topped-up / granted / status) |
 | 🤖 | **Agent tools** | Ask in any chat: "how much have I spent today?" — the agent answers via `cost_stats` / `cost_prices` |
 | 🔻 | **Status line** | A live line under the chat input: **session cost** (segmented pills: session / subscription plan / per-model), split by the models actually used in the session; multi-model collapses to top2 by default, click to expand. Subscription shows the plan name; no quota or call-count clutter |
@@ -245,6 +245,8 @@ POST /api/cost-tracker/sync-test    Test the cloud connection
 POST /api/cost-tracker/sync-config  Save cloud sync config
 POST /api/cost-tracker/cloud        Read-only cloud aggregation (route/days/excludeSelf/devices/sources)
 POST /api/cost-tracker/kimi-usage   Kimi subscription quota
+POST /api/cost-tracker/volcengine-usage  Volcengine Ark Coding Plan quota (5-hour / weekly / monthly windows)
+POST /api/cost-tracker/volcengine-config Save Volcengine AK/SK (reports only whether keys are configured, never the keys)
 POST /api/cost-tracker/balance      Account balance
 POST /api/cost-tracker/prices       Price table (versioned by pricing era)
 POST /api/cost-tracker/recompute    Re-price stored records by era (dry-run unless {"apply":true})
@@ -258,6 +260,18 @@ Example: `curl -X POST http://127.0.0.1:3080/api/cost-tracker/summary -d '{}'`
 ## Changelog
 
 > Highlights only — the full version-by-version history lives in [`CHANGELOG.md`](./CHANGELOG.md) (Chinese).
+
+### v1.8.14 (2026-09-26)
+
+**New: Volcengine Ark Coding Plan support (quota monitoring + equivalent cost)**
+
+- **Quota panel**: a new "Subscription usage · Volcengine Ark Coding Plan" panel in Settings pulls the **5-hour / weekly / monthly** windows from the Ark **control-plane OpenAPI** (`open.volcengineapi.com`, `Action=GetCodingPlanUsage`, HMAC-SHA256 signed), showing used percentage, absolute amounts (derived from `Cap`) and reset countdowns. Actions fall back in order `GetCodingPlanUsage → GetAFPUsage → GetUsageDetails → GetPersonalPlan`, so Agent Plan accounts automatically read from AFP;
+- **Equivalent cost**: calls covered by the plan now count toward "subscription equivalent cost" instead of being mislabelled "pay-as-you-go · estimated price";
+- **Fixed a subscription-gate defect (important)**: the gate used to match on provider name only, applying subscription rates to *every* model of that provider. Volcengine Ark mixes plan and non-plan models under one provider, so metered calls were mislabelled as subscription and their amounts vanished from "real spend". It is now gated on **provider + model allowlist**, and distinguishes **dedicated subscription endpoints** (baseURL pointing at `/api/coding/v3` — the whole provider counts as subscription) from a **generic `volcengine`** provider (only allowlisted models; endpoint ids `ep-*` are always metered). Kimi's existing behaviour is byte-for-byte unchanged;
+- **Fixed a credential-file defect (important)**: `.credentials.yaml` actually stores keys **indented** under the `refs:` section, while the parser only matched unindented top-level keys — so that fallback had silently never worked (masked whenever a host credential service was present). Indentation and `refs` scoping are now handled, the path follows `DSH_HOME`, and the hard-coded `~/.dsh` that broke redirected deployments is gone;
+- **Credential discovery chain**: plugin-config card → DSH credential store → `.credentials.yaml` (`VOLC_ACCESSKEY` / `VOLC_SECRETKEY` plus several variants) → environment variables. **Keys never appear in any response**; `volcengine-config` only reports whether keys are configured;
+- **Every failure is a neutral notice**: missing credentials, no subscription, insufficient permission (needs `ArkReadOnlyAccess` + `BillingCenterReadOnlyAccess`) and changed API shapes all degrade to a neutral notice without affecting recording, sync or other features. Users who only run DeepSeek or Kimi see a **completely unchanged** UI (the panel appears only when relevant);
+- Adds `volcengine.js` (signing / parsing / querying, pure and unit-testable) plus two test files covering fixed signature vectors that match Volcengine's official demo byte-for-byte, four response shapes, **0.5% not being scaled to 50%**, zero key leakage, cache TTL and soft-failure paths. Verified against the live API (`GetCodingPlanUsage` returning `Status: Running` and three windows).
 
 ### v1.8.13 (2026-09-25)
 
@@ -451,6 +465,23 @@ The plugin starts **silently by default**. Set the environment variable `DSH_COS
 **Q: What does "equivalent cost" mean for subscription models (kimi-coding)?**
 Subscriptions are not billed per token. The plugin estimates what those calls *would* cost at pay-as-you-go prices so you can judge whether your subscription pays off — **it is not a real charge**.
 
+**Q: How do I connect a Volcengine Ark Coding Plan? Which credential does it need?**
+Quota is read from the Ark **control-plane** OpenAPI (`open.volcengineapi.com`, HMAC-SHA256 signed), so it needs a **Volcengine access-key pair**:
+
+1. Volcengine console → **IAM → Users → Keys**, create an AccessKeyID / SecretAccessKey pair;
+2. Grant that sub-user **`ArkReadOnlyAccess`** and **`BillingCenterReadOnlyAccess`** (read-only is enough to query usage);
+3. Let the plugin obtain the pair (any one of these, in priority order):
+   - fill in **Volcengine AccessKeyID / SecretAccessKey** under **Settings → Plugins → Plugin config → Cost Tracker** (the secret is never echoed back); or
+   - put them in the `refs:` section of `~/.dsh/.credentials.yaml` under `VOLC_ACCESSKEY` / `VOLC_SECRETKEY` (variants such as `VOLCENGINE_ACCESS_KEY_ID` and `ARK_ACCESS_KEY_ID` also work); or
+   - export them as environment variables with the same names.
+
+> ⚠️ This is a **completely different credential** from the **ARK inference API key** (a UUID configured as the provider's `apiKey` / `apiKeyEnv`). The inference key cannot query quota and will produce 401/403.
+
+The panel shows the 5-hour / weekly / monthly windows with used percentage and reset countdown. Coding Plan usage is expressed as a **percentage** (observed in the 0.05%–0.4% range), so two decimals are kept to avoid displaying "0%". If the account is actually on an Agent Plan, the plugin automatically falls back to the `GetAFPUsage` action. Missing credentials, no subscription and insufficient permissions are all **neutral notices** that never affect recording, sync or other features.
+
+**Q: Why are some Volcengine Ark models billed as "subscription" and others as "pay-as-you-go"?**
+Plan and non-plan models can share one provider. Any provider whose **baseURL points at `ark.cn-beijing.volces.com/api/coding/v3`** is a dedicated subscription endpoint, so all of its calls count as subscription. Under a generic `volcengine` provider, only plan models (Doubao, GLM, Kimi, DeepSeek, MiniMax families and the `ark-code-*` names) count as subscription, while **endpoint ids (like `ep-2026xxxx`) are always pay-as-you-go** — so metered calls are never mislabelled as subscription and silently dropped from your real spend.
+
 **Q: The amounts don't exactly match my official bill?**
 Costs are estimated locally from a built-in price table and may differ slightly from the official bill (price updates, tiered pricing, etc.). Treat official billing as authoritative; the balance shown is fetched live from the official API.
 
@@ -470,8 +501,9 @@ Either way: if only the UI (`client.js`) changed, a **hard browser refresh** (Cm
 ```
 ├── index.js        Host half: usage capture, aggregation, HTTP API, agent tools
 ├── store.js        Storage layer: 180-day detail retention + permanent daily rollups + atomic writes (with lock retries; pure logic, unit-testable)
-├── pricing.js      Pricing & tokens: price tables, peak/off-peak billing, vision model, peak-phase math (pure logic, unit-testable)
-├── config.js       Config layer: defaults & normalization for the peak-price notice and cloud sync (pure logic, unit-testable)
+├── pricing.js      Pricing & tokens: price tables, peak/off-peak billing, vision model, peak-phase math, subscription gate (pure logic, unit-testable)
+├── config.js       Config layer: defaults & normalization for the peak-price notice, cloud sync, UI toggles and Volcengine credentials (pure logic, unit-testable)
+├── volcengine.js   Volcengine Ark quota: HMAC-SHA256 signing, response parsing, credential normalization (pure logic, unit-testable)
 ├── sync.js         Cloud sync engine: device identity, incremental watermark, idempotent batches, backoff
 ├── schema.js       Host settings schema (the plugin-config card fields)
 ├── view.js         Three-state view merge: normalizes This machine / + cloud / Cloud only (shared by browser and tests)
@@ -482,7 +514,7 @@ Either way: if only the UI (`client.js`) changed, a **hard browser refresh** (Cm
 ├── README.md       Chinese documentation
 ├── README.en.md    English documentation
 ├── CHANGELOG.md    Changelog (Chinese)
-├── test/           Unit tests (storage / pricing / config / recompute / render / cloud read; node test/*.test.js)
+├── test/           Unit tests (storage / pricing / volcengine / config / recompute / render / cloud read; node test/*.test.js)
 └── docs/           README screenshots and design notes
 ```
 

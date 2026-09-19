@@ -37,7 +37,7 @@
 | 📊 | **可视化仪表盘** | 设置页新增「花费统计」:概览卡片、消费柱状图(按峰谷/按模型)、分模型的请求次数与 Tokens 图表,**全部支持鼠标悬停查看明细** |
 | 🧭 | **多机汇总(云端同步)** | 可对接**自建云端服务**(独立仓库 `dsh-cost-cloud`,零运行时依赖):多台电脑的用量汇总到一处,看板顶部出现 **本机 / 本机+云端 / 仅云端** 三态开关,并支持**设备 × Agent 矩阵**(行合计 = 列合计 = 总计);上报内容仅 token 数、费用、时间戳与标识符,可选会话脱敏 |
 | 🔥 | **用量热力图** | 设置页新增「Token 用量统计」:类 Codex 的 **26 周日用量方格热图**,按天着色(输入 / 缓存 / 输出 / 费用),悬停看当日明细、今天高亮描边,顶部显示全时段累计;**跟随三态视图**——「本机+云端 / 仅云端」下自动并入云端按天用量(卡片标题右侧标注当前口径) |
-| 📈 | **订阅配额监控** | Kimi Coding Plan 等订阅套餐:本周配额、5 小时滚动窗口限额、等效按量费用参考 |
+| 📈 | **订阅配额监控** | Kimi Coding Plan、**火山方舟 Coding Plan** 等订阅套餐:配额进度条、重置倒计时、等效按量费用参考。火山方舟走管控面 OpenAPI(HMAC 签名),需 AccessKeyID + SecretAccessKey |
 | 💳 | **余额查询** | 一键查询 DeepSeek 官方账户余额(总余额 / 充值 / 赠送 / 状态) |
 | 🤖 | **Agent 工具** | 直接在对话里问:"我现在花了多少钱?"——Agent 会调用 `cost_stats` / `cost_prices` 等工具回答 |
 | 🔻 | **状态栏** | 聊天输入框下方实时显示:**本会话花费**(胶囊分段:本会话 / 订阅套餐 / 分模型),按会话实际用到的模型与订阅拆分,**多模型默认折叠只显示 top2,点击展开全部明细**;订阅显示具体套餐名,不再展示配额与调用次数 |
@@ -246,6 +246,8 @@ POST /api/cost-tracker/sync-test    测试云端连接
 POST /api/cost-tracker/sync-config  保存云端同步配置
 POST /api/cost-tracker/cloud        云端只读聚合(route/days/excludeSelf/devices/sources)
 POST /api/cost-tracker/kimi-usage   Kimi 订阅配额
+POST /api/cost-tracker/volcengine-usage  火山方舟 Coding Plan 配额(5 小时/周/月窗口)
+POST /api/cost-tracker/volcengine-config 保存火山方舟 AK/SK(只回显「是否已配置」,不回显密钥)
 POST /api/cost-tracker/balance      账户余额
 POST /api/cost-tracker/prices       单价表(按计费时代分版)
 POST /api/cost-tracker/recompute    按计费时代重算已入库记录(默认只试算,传 {"apply":true} 落盘)
@@ -259,6 +261,18 @@ POST /api/cost-tracker/export       导出 CSV
 ## 更新记录
 
 > 这里只列重要版本;逐版完整记录见 [`CHANGELOG.md`](./CHANGELOG.md)。
+
+### v1.8.14(2026-09-26)
+
+**新增：火山方舟 Coding Plan 订阅支持（配额监控 + 等效费用）**
+
+- **配额面板**：设置页新增「订阅套餐用量 · 火山方舟 Coding Plan」，经方舟**管控面 OpenAPI**（`open.volcengineapi.com`，`Action=GetCodingPlanUsage`，HMAC-SHA256 签名）拉取 **5 小时 / 周 / 月**三档窗口，显示已用百分比、绝对量（Cap 折算）与重置倒计时。Action 按 `GetCodingPlanUsage → GetAFPUsage → GetUsageDetails → GetPersonalPlan` 顺序兜底，Agent Plan 账号自动回落 AFP 取数；
+- **等效费用**：火山套餐内的调用计入「订阅等效按量费用」，不再被误标为「按量计费 · 价格为估算」；
+- **修掉订阅门卫缺陷（重要）**：原先只按 provider 名判定订阅，对该 provider 的**所有**模型一律套订阅价。火山方舟的套餐内 / 套餐外模型混在同一个 provider 下，这会把按量调用错记成订阅、使其金额从「真实花费」里消失。现改为「provider 命中 + 模型白名单」双重限定，并区分**专属订阅端点**（baseURL 指向 `/api/coding/v3`，整档计订阅）与**泛 `volcengine`**（仅白名单内模型计订阅，接入点 `ep-*` 一律按量）。Kimi 的既有行为逐字节不变；
+- **修掉凭据文件读取缺陷（重要）**：`.credentials.yaml` 实际把键**缩进**存放在 `refs:` 段下，而原解析器只匹配行首无缩进的键 —— 这一路兜底一直静默失效（有宿主凭据服务时被掩盖）。现已支持缩进与 `refs` 段定位，并跟随 `DSH_HOME`；顺带修掉硬编码 `~/.dsh` 导致重定向部署下永远读不到的问题；
+- **凭据发现链**：配置卡片 AK/SK → DSH 凭据库 → `.credentials.yaml`（`VOLC_ACCESSKEY` / `VOLC_SECRETKEY` 及多种变体名）→ 环境变量。**密钥永不出现在任何响应里**，`volcengine-config` 只回「是否已配置」；
+- **失败一律中性提示**：无凭据、无订阅、权限不足（需 `ArkReadOnlyAccess` + `BillingCenterReadOnlyAccess`）、接口结构变化都只回中性提示，不影响记账 / 同步 / 其它功能；只跑 DeepSeek 或 Kimi 的用户界面**完全不变**（面板按需出现）；
+- 新增 `volcengine.js`（签名 / 解析 / 查询，纯函数可独立测试）与两个测试文件：签名与火山官方 demo 逐字节一致的固定向量、四种响应形态、**0.5% 不被放大成 50%**、密钥零外泄、缓存 TTL、失败路径软降级。真机核验通过（`GetCodingPlanUsage` 返回 `Status: Running` 与三档窗口）。
 
 ### v1.8.13(2026-09-25)
 
@@ -454,6 +468,23 @@ POST /api/cost-tracker/export       导出 CSV
 **Q:订阅套餐(kimi-coding)的"等效费用"是什么意思?**
 订阅制不按量扣费。插件按内置单价估算出"如果这些调用走按量计费会花多少钱",仅供你评估订阅是否划算,**不是真实扣费**。
 
+**Q:火山方舟 Coding Plan 的配额怎么接?需要哪种凭据?**
+配额查询走的是方舟**管控面** OpenAPI(`open.volcengineapi.com`,HMAC-SHA256 签名),需要的是一对**火山引擎访问密钥**:
+
+1. 火山引擎控制台 → **IAM → 用户 → 密钥**,创建 AccessKeyID / SecretAccessKey;
+2. 给该子用户授予 **`ArkReadOnlyAccess`** 与 **`BillingCenterReadOnlyAccess`**(只读,足够查询用量);
+3. 让插件拿到这对密钥(任选其一,按优先级):
+   - **设置 → 插件 → 插件配置 → 花费统计** 里填 `火山引擎 AccessKeyID` / `SecretAccessKey`(密钥不回显);或
+   - 写进 `~/.dsh/.credentials.yaml` 的 `refs:` 段,键名 `VOLC_ACCESSKEY` / `VOLC_SECRETKEY`(也兼容 `VOLCENGINE_ACCESS_KEY_ID`、`ARK_ACCESS_KEY_ID` 等写法);或
+   - 设为同名环境变量。
+
+> ⚠️ 这与**推理用的 ARK API Key**(形如 UUID、配在 provider 的 `apiKey` / `apiKeyEnv`)是**两套完全不同的凭据**,不能混填。推理 Key 无法查询配额,会得到 401/403。
+
+面板显示 5 小时 / 周 / 月三档窗口的已用百分比与重置倒计时。Coding Plan 的用量口径是**百分比**(实测长期在 0.05%–0.4% 量级),所以数值保留两位小数,避免显示成 0%。若账号实际是 Agent Plan,插件会自动回落到 `GetAFPUsage` 接口取数。没有订阅、没有凭据、权限不足都属于**中性提示**,不影响记账、同步与其它功能。
+
+**Q:为什么火山方舟的模型有的算「订阅」、有的算「按量」?**
+同一个 provider 下套餐内外模型可能混在一起:凡是 **baseURL 指向 `ark.cn-beijing.volces.com/api/coding/v3`** 的 provider(专属订阅入口),其全部调用都计为订阅;而泛 `volcengine` provider 下,只有套餐内模型(豆包系、GLM 系、Kimi 系、DeepSeek 系、MiniMax 系及各档 `ark-code-*`)算订阅,**接入点 id(形如 `ep-2026xxxx`)一律按量**。这样按量调用不会被误记成订阅而让真实花费缩水。
+
 **Q:金额和官方账单对不上?**
 插件在本地按内置单价表估算,可能与官方实际计费存在细微差异(如官方价格调整、阶梯定价)。精确金额请以官方账单为准。余额以「余额查询」实时拉取的官方数据为准。
 
@@ -473,8 +504,9 @@ POST /api/cost-tracker/export       导出 CSV
 ```
 ├── index.js        Host 半端:用量采集、聚合、HTTP API、Agent 工具
 ├── store.js        存储层:明细保留 + 永久日汇总 + 原子落盘(含占用重试,纯逻辑可独立测试)
-├── pricing.js      定价与 Token 层:单价表、峰谷计价、视觉模型、峰值相位(纯逻辑,可独立测试)
-├── config.js       配置层:峰谷计价提示 + 云端同步的默认值与规范化(纯逻辑,可独立测试)
+├── pricing.js      定价与 Token 层:单价表、峰谷计价、视觉模型、峰值相位、订阅门卫(纯逻辑,可独立测试)
+├── config.js       配置层:峰谷计价提示 + 云端同步 + 界面显示 + 火山凭据的默认值与规范化(纯逻辑,可独立测试)
+├── volcengine.js   火山方舟配额查询:HMAC-SHA256 签名、响应解析、凭据归一(纯逻辑,可独立测试)
 ├── sync.js         云端同步引擎:设备身份、增量水位、幂等批次、退避重试
 ├── schema.js       宿主设置空间的 schema(插件配置卡片字段)
 ├── view.js         三态视图合并:本机 / 本机+云端 / 仅云端的口径归一化(浏览器与测试共用)
@@ -485,7 +517,7 @@ POST /api/cost-tracker/export       导出 CSV
 ├── README.md       中文说明文档
 ├── README.en.md    英文说明文档
 ├── CHANGELOG.md    更新记录(中文)
-├── test/           单元测试(storage / pricing / config / recompute / 渲染 / 云端读取,node test/*.test.js)
+├── test/           单元测试(storage / pricing / volcengine / config / recompute / 渲染 / 云端读取,node test/*.test.js)
 └── docs/           README 截图与设计文档
 ```
 

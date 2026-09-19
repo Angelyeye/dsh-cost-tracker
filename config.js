@@ -50,6 +50,15 @@
 //   真值语义与 peakEnabled 相反：null/undefined → true（显隐是从 v1.8.12 才有的新
 //   能力，老配置文件里没有这几个键，必须保持默认全部可见），只有显式 false 才隐藏。
 //   这样两个方向上都安全：老配置升级后界面不变，新配置关掉就是关掉。
+//
+// 字段（火山方舟配额，v1.8.14）：
+//   volcengineAccessKeyId      火山引擎 AccessKeyID（管控面 AK，非方舟推理 API Key）
+//   volcengineSecretAccessKey  火山引擎 SecretAccessKey（role=secret，不回显明文）
+//
+//   两者**留空即回落到凭据发现链**（DSH 凭据库 → .credentials.yaml 文件），
+//   因此老配置文件升级后为零改动、开箱可用。配额查询走方舟管控面 OpenAPI，
+//   需要 IAM 子用户具备 ArkReadOnlyAccess + BillingCenterReadOnlyAccess。
+//   注意与推理用的 ARK API Key 是**两套不同的凭据**，不要混填。
 // ============================================================
 
 /** 默认峰谷计价生效时间（UTC；两档方案已即时生效，门控恒通过） */
@@ -131,6 +140,18 @@ export function defaultUiConfig() {
   return out
 }
 
+/**
+ * 火山方舟配额凭据默认配置（**留空**）。
+ * 留空不是「缺失」，而是明确表示「走凭据发现链」——老配置文件里没有这两个键，
+ * 升级后读出来就是空串，行为与升级前完全一致（配额面板自动从凭据库取 AK/SK）。
+ */
+export function defaultVolcengineConfig() {
+  return {
+    volcengineAccessKeyId: '',
+    volcengineSecretAccessKey: '',
+  }
+}
+
 function bool(v, fallback) { return typeof v === 'boolean' ? v : fallback }
 function intIn(v, lo, hi, fallback) { return typeof v === 'number' && Number.isInteger(v) && v >= lo && v <= hi ? v : fallback }
 
@@ -202,9 +223,28 @@ export function normalizeUiConfig(raw) {
   return out
 }
 
+/**
+ * 规范化火山方舟配额凭据。
+ * 只做长度与类型收敛，**不校验格式**：AK/SK 的形态由火山引擎决定，
+ * 这里猜错反而会把合法凭据判为非法。空串 = 未配置 = 走凭据发现链。
+ */
+export function normalizeVolcengineConfig(raw) {
+  const def = defaultVolcengineConfig()
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return def
+  return {
+    volcengineAccessKeyId: typeof raw.volcengineAccessKeyId === 'string' ? raw.volcengineAccessKeyId.trim().slice(0, 256) : def.volcengineAccessKeyId,
+    volcengineSecretAccessKey: typeof raw.volcengineSecretAccessKey === 'string' ? raw.volcengineSecretAccessKey.trim().slice(0, 256) : def.volcengineSecretAccessKey,
+  }
+}
+
 /** 合并规范化：一份配置文件同时承载峰谷、云端同步与界面显示三组字段 */
 export function normalizePluginConfig(raw) {
-  return Object.assign(normalizePeakConfig(raw), normalizeCloudConfig(raw), normalizeUiConfig(raw))
+  return Object.assign(
+    normalizePeakConfig(raw),
+    normalizeCloudConfig(raw),
+    normalizeUiConfig(raw),
+    normalizeVolcengineConfig(raw),
+  )
 }
 
 /**

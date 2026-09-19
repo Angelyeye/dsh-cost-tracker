@@ -913,6 +913,65 @@ window.__ModuleLoader__.load({
 				e("div", { className: "cost-hint", style: { marginTop: "10px" } }, "订阅用量统计：" + stats + "（订阅已覆盖，等效费用仅供参考）"));
 		}
 
+		// 火山方舟 Coding Plan 配额面板。
+		// 与 Kimi 面板的关键差别：管控面**主口径是百分比**（Level + Percent + Cap），
+		// 实测 Percent 常落在 0.05–0.4 这种小数区间，且没有各模型的 used/limit 绝对值。
+		// 所以不能直接套 progressBar 的「整数 / 总数」文案，这里用同一套
+		// cost-bar-track / cost-bar-fill 样式自己画百分比条，视觉保持一致。
+		function pctBar(label, percent, resetsAt, now, used, quota) {
+			const pct = Math.max(0, Math.min(100, Number(percent) || 0));
+			const color = pct >= 90 ? RED : pct >= 70 ? AMBER : BLUE;
+			// 百分比按实际精度展示（0.05% 也要看得见，不能四舍五入成 0%）
+			const pctText = pct > 0 && pct < 1 ? pct.toFixed(2).replace(/0+$/, "").replace(/\.$/, "") : String(Math.round(pct * 100) / 100);
+			// 有 Cap 时补一句绝对量：百分比太小的时候更直观
+			const absText = (typeof used === "number" && typeof quota === "number" && quota > 0)
+				? (" · " + fmtInt(used) + " / " + fmtInt(quota)) : "";
+			return e("div", { style: { marginTop: "10px" } },
+				e("div", { className: "cost-row" },
+					e("span", { className: "cost-hint" }, label),
+					e("span", { className: "cost-spacer" }),
+					e("span", { style: { fontVariantNumeric: "tabular-nums" } },
+						"已用 " + pctText + "% · 剩余 " + (Math.round((100 - pct) * 100) / 100) + "%" + absText)),
+				e("div", { className: "cost-bar-track" },
+					e("div", { className: "cost-bar-fill", style: { width: Math.max(pct, pct > 0 ? 1 : 0) + "%", background: color } })),
+				resetsAt ? e("div", { className: "cost-hint", style: { marginTop: "4px" } }, countdown(resetsAt, now)) : null);
+		}
+
+		function volcenginePanel(volc, dash, now, onForce) {
+			const ok = volc && volc.ok;
+			let body;
+			if (!volc) {
+				body = e("div", { className: "cost-hint", style: { marginTop: "8px" } }, "配额查询中…");
+			} else if (!volc.ok) {
+				body = e("div", { style: { marginTop: "8px" } },
+					e("div", { className: "cost-err" }, "配额查询不可用：" + (volc.error || "未知错误")),
+					e("div", { className: "cost-hint", style: { marginTop: "4px" } },
+						"配额查询走方舟**管控面** OpenAPI，需要火山引擎 AccessKeyID / SecretAccessKey"
+						+ "（IAM 子用户授予 ArkReadOnlyAccess + BillingCenterReadOnlyAccess），"
+						+ "与推理用的 ARK API Key 是两套凭据。当前尝试的变量：" + (volc.keyEnv || "未知")
+						+ "（来源：" + (volc.keySource || "无") + "）。"));
+			} else {
+				const list = volc.windowList || [];
+				if (list.length === 0) {
+					body = e("div", { className: "cost-hint", style: { marginTop: "8px" } }, "接口未返回任何用量窗口（可能账号没有生效中的 Coding Plan）。");
+				} else {
+					body = e("div", null, list.map(w => e("div", { key: w.name }, pctBar(w.label, w.percent, w.resetsAt, now, w.used, w.quota))));
+				}
+			}
+			const stats = dash
+				? "累计请求 " + fmtInt(dash.subCalls) + " 次 · Tokens " + fmtInt(dash.subTokens) + " · 等效按量费用 ¥" + fmtMoney(dash.subEquivalent)
+				: "加载中…";
+			return e("div", { className: "cost-panel" },
+				e("div", { className: "cost-row" },
+					e("span", { className: "cost-panel-title" }, "订阅套餐用量 · 火山方舟 Coding Plan"),
+					ok && volc.action ? e("span", { className: "cost-badge" }, volc.action) : null,
+					e("span", { className: "cost-spacer" }),
+					e("button", { className: "cost-btn", onClick: onForce }, "刷新配额")),
+				body,
+				e("div", { className: "cost-hint", style: { marginTop: "10px" } },
+					"订阅用量统计：" + stats + "（订阅已覆盖，等效费用仅供参考）"));
+		}
+
 		function kv(k, v) {
 			return e("span", { style: { marginRight: "18px" } },
 				e("span", { className: "cost-hint" }, k + "："),
@@ -1669,6 +1728,7 @@ window.__ModuleLoader__.load({
 			const [dash, setDash] = useState(null);
 			const [dashErr, setDashErr] = useState("");
 			const [kimi, setKimi] = useState(null);
+			const [volc, setVolc] = useState(null);
 			const [balance, setBalance] = useState(null);
 			const [tab, setTab] = useState("period");
 			const [scheme, setSchemeState] = useState(() => {
@@ -1762,6 +1822,9 @@ window.__ModuleLoader__.load({
 			function loadKimi(force) {
 				apiCall("kimi-usage", { force: !!force }).then(v => setKimi(v)).catch(() => {});
 			}
+			function loadVolc(force) {
+				apiCall("volcengine-usage", { force: !!force }).then(v => setVolc(v)).catch(() => {});
+			}
 			function loadUsage() {
 				apiCall("usage", {}).then(v => {
 					if (v && v.ok) { setUsage(v); setUsageErr(""); }
@@ -1786,12 +1849,13 @@ window.__ModuleLoader__.load({
 					else setUsageErr(v && v.error ? String(v.error) : "数据加载失败");
 				}).catch(err => setUsageErr(String(err && err.message ? err.message : err)));
 				apiCall("kimi-usage", { force: false }).then(v => setKimi(v)).catch(() => {});
+				apiCall("volcengine-usage", { force: false }).then(v => setVolc(v)).catch(() => {});
 				loadCloudUsage(view);
 				apiCall("balance", {}).then(v => { setBalance(v); setBusy(false); }).catch(() => setBusy(false));
 			}
 
 			useEffect(() => { loadDash(days); }, [days]);
-			useEffect(() => { loadKimi(false); loadBalance(""); loadUsage(); loadSync(); }, []);
+			useEffect(() => { loadKimi(false); loadVolc(false); loadBalance(""); loadUsage(); loadSync(); }, []);
 			// 视图切换：local+cloud 需要额外拉「排除本机」的云端聚合、矩阵与按天用量明细
 			useEffect(() => { loadCloud(days, view); loadCloudMatrix(days); loadCloudUsage(view); }, [view, days]);
 			useEffect(() => {
@@ -1831,6 +1895,11 @@ window.__ModuleLoader__.load({
 				pending: sync ? sync.pending : 0,
 			};
 
+			// 火山方舟面板只在「用得上」时出现：存在火山订阅调用（宿主判定并在
+			// summary 里回传 volcengineActive），或已有窗口数据 / 已尝试过凭据。
+			// 只跑 DeepSeek 或 Kimi 的用户界面保持不变，不会被一个无关面板撑长。
+			const showVolc = !!(volc || (viewDash && viewDash.volcengineActive === true));
+
 			return e("div", { className: "cost-wrap" },
 				e("div", { className: "cost-h1" }, pluginIcon(18), "花费统计"),
 				filterRow(days, setDays, onExport, onRefresh, msg, busy, dash ? dash.peakWindows : "周一至周五 9:00-12:00 · 14:00-18:00（周末全天闲时）", viewCtl),
@@ -1864,6 +1933,7 @@ window.__ModuleLoader__.load({
 							: usageErr ? e("div", { className: "cost-err" }, "加载失败：" + usageErr)
 							: e("div", { className: "cost-hint" }, "加载中…"))),
 				subPanel(kimi, viewDash, now, () => loadKimi(true)),
+				showVolc ? volcenginePanel(volc, viewDash, now, () => loadVolc(true)) : null,
 				balancePanel(balance, manualKey, setManualKey, k => loadBalance(k)),
 				viewDash ? modelSections(viewDash) : null,
 				viewDash ? recentPanel(viewDash) : null,

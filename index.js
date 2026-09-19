@@ -10,17 +10,21 @@ import { readFileSync, writeFileSync, mkdirSync, renameSync, existsSync, realpat
 import { join, dirname } from 'node:path'
 import { homedir } from 'node:os'
 import { createStore, collectTotals, DETAIL_DAYS, MAX_AXIS_DAYS } from './store.js'
-import { PRICE_ERAS, V41_EFFECTIVE_AT, V41_PRO_ROUTE_AT, exactModelsAt, eraAt, SUBSCRIPTION_RATES, PROVIDER_RATES, GENERIC_RATES, PEAK_WINDOWS, PEAK_HOUR_WINDOWS, isPeak, peakPhaseAt, priceFor, computeCost, normalizeTokens } from './pricing.js'
+import { PRICE_ERAS, V41_EFFECTIVE_AT, V41_PRO_ROUTE_AT, exactModelsAt, eraAt, SUBSCRIPTION_RATES, PROVIDER_RATES, GENERIC_RATES, PEAK_WINDOWS, PEAK_HOUR_WINDOWS, isPeak, peakPhaseAt, priceFor, computeCost, normalizeTokens, subscriptionPlanFor, volcenginePlanModels, VOLCENGINE_PLAN_PROVIDER_KEYS, VOLCENGINE_PLAN_RATES } from './pricing.js'
 import {
   normalizePeakConfig, defaultPeakConfig, peakEffective,
   normalizeCloudConfig, defaultCloudConfig, normalizePluginConfig,
   normalizeUiConfig, defaultUiConfig, UI_SURFACES,
+  normalizeVolcengineConfig, defaultVolcengineConfig,
 } from './config.js'
+import {
+  queryVolcenginePlan, VOLCENGINE_KEY_ENVS, VOLCENGINE_SECRET_ENVS, VOLC_WINDOW_LABELS,
+} from './volcengine.js'
 import { createSyncEngine, setPluginVersion, SOURCE as SYNC_SOURCE, SYNC_VERSION, loadIdentity } from './sync.js'
 import { Schema } from './schema.js'
 
 /** 插件版本（写入上报信封，便于云端排查版本差异） */
-const PLUGIN_VERSION = '1.8.13'
+const PLUGIN_VERSION = '1.8.14'
 setPluginVersion(PLUGIN_VERSION)
 
 /** 「设置 → 插件 → 插件配置」里的卡片字段（与 settings 命名空间一致） */
@@ -40,6 +44,9 @@ const SyncSchema = Schema.object({
   uiDockEnabled: Schema.boolean().default(undefined).description('显示输入框上方的花费胶囊'),
   uiPeakEnabled: Schema.boolean().default(undefined).description('显示侧边栏峰谷时段条'),
   uiDashboardEnabled: Schema.boolean().default(undefined).description('显示设置页「花费统计」看板'),
+  // 火山方舟配额（v1.8.14）：留空即回落凭据发现链，老配置零改动可用
+  volcengineAccessKeyId: Schema.string().default(undefined).description('火山引擎 AccessKeyID（留空则用凭据库 / 环境变量）'),
+  volcengineSecretAccessKey: Schema.string().role('secret').default(undefined).description('火山引擎 SecretAccessKey（留空则用凭据库 / 环境变量）'),
 })
 
 // ============================================================
@@ -160,6 +167,11 @@ export default {
     // ---------- state ----------
     // 注意：records/rollups 在 persistence 段由 store 初始化（details/rollups 引用）
     let kimiCache = null
+    // 火山方舟配额缓存（与 kimiCache 同形：{ fetchedAt, data }，120s TTL）
+    let volcengineCache = null
+    // 最近一次实际使用的 provider（归一化后）。用于判断「用户当下正在用哪家订阅」，
+    // 从而只预热该家的配额缓存，不为无关厂商发网络请求。
+    let lastProviderSeen = ''
 
     // ---------- small helpers ----------
     function pad2(n) { return n < 10 ? '0' + n : '' + n }
@@ -168,6 +180,16 @@ export default {
     function r2(x) { return Math.round(x * 100) / 100 }
     function r4(x) { return Math.round(x * 10000) / 10000 }
     function normProvider(p) { return toStr(p).toLowerCase().replace(/-official$/, '') }
+    /**
+     * 是否属于火山方舟（含用户自定的 Coding Plan provider 别名）。
+     * 用于「该不该预热/展示火山配额面板」这一判断——只看 provider 名即可，
+     * 与计费侧的模型级订阅判定（subscriptionPlanFor）是两件事。
+     */
+    function isVolcengineProvider(np) {
+      const n = toStr(np).toLowerCase()
+      if (VOLCENGINE_PLAN_PROVIDER_KEYS.indexOf(n) >= 0) return true
+      return /volcengine|volces|ark-?coding|byteblus|byteplus/.test(n)
+    }
     function dayKey(ts) {
       const d = new Date(ts + 28800000)
       return d.getUTCFullYear() + '-' + pad2(d.getUTCMonth() + 1) + '-' + pad2(d.getUTCDate())
@@ -223,6 +245,7 @@ export default {
     let peakConfig = defaultPeakConfig()
     let cloudConfig = defaultCloudConfig()
     let uiConfig = defaultUiConfig()
+    let volcengineConfig = defaultVolcengineConfig()
     let configLoadWarned = false
 
     function loadConfig() {
@@ -232,6 +255,7 @@ export default {
         peakConfig = normalizePeakConfig(parsed)
         cloudConfig = normalizeCloudConfig(parsed)
         uiConfig = normalizeUiConfig(parsed)
+        volcengineConfig = normalizeVolcengineConfig(parsed)
       } catch (e) {
         if (!configLoadWarned) { console.error('cost tracker config load failed, using defaults', e); configLoadWarned = true }
       }
@@ -241,7 +265,7 @@ export default {
       try {
         mkdirSync(dirname(CONFIG_FILE), { recursive: true })
         const tmp = CONFIG_FILE + '.tmp'
-        writeFileSync(tmp, JSON.stringify(Object.assign({}, peakConfig, cloudConfig, uiConfig)), 'utf8')
+        writeFileSync(tmp, JSON.stringify(Object.assign({}, peakConfig, cloudConfig, uiConfig, volcengineConfig)), 'utf8')
         renameSync(tmp, CONFIG_FILE)
         return true
       } catch (e) {
@@ -269,6 +293,13 @@ export default {
       return uiConfig
     }
 
+    /** 火山方舟配额凭据：空串 = 未配置 = 走凭据发现链（凭据库 / 环境变量） */
+    function setVolcengineConfig(raw) {
+      volcengineConfig = normalizeVolcengineConfig(Object.assign({}, volcengineConfig, raw))
+      saveConfig()
+      return volcengineConfig
+    }
+
     // ---------- settings 命名空间（可选服务） ----------
     // 字段全部 .default(undefined)：只有用户在卡片里显式保存才写入用户层，
     // 从而不覆盖我们自己配置文件里的既有值。
@@ -282,11 +313,14 @@ export default {
       const patch = {}
       for (const k of Object.keys(next)) if (next[k] !== undefined) patch[k] = next[k]
       if (!Object.keys(patch).length) return
-      // 卡片里既有云端同步字段也有界面显示字段，分给各自的规范化函数（互不覆盖）
+      // 卡片里既有云端同步字段、界面显示字段，也有火山方舟凭据字段，
+      // 分给各自的规范化函数（互不覆盖）。
       const cloudPatch = {}
       const uiPatch = {}
+      const volcPatch = {}
       for (const [k, v] of Object.entries(patch)) {
         if (UI_SURFACES.some((s) => s.key === k)) uiPatch[k] = v
+        else if (k === 'volcengineAccessKeyId' || k === 'volcengineSecretAccessKey') volcPatch[k] = v
         else cloudPatch[k] = v
       }
       let changed = false
@@ -299,6 +333,13 @@ export default {
         const before = JSON.stringify(uiConfig)
         uiConfig = normalizeUiConfig(Object.assign({}, uiConfig, uiPatch))
         if (JSON.stringify(uiConfig) !== before) changed = true
+      }
+      if (Object.keys(volcPatch).length) {
+        const before = JSON.stringify(volcengineConfig)
+        volcengineConfig = normalizeVolcengineConfig(Object.assign({}, volcengineConfig, volcPatch))
+        if (JSON.stringify(volcengineConfig) !== before) changed = true
+        // 凭据变更后作废缓存，用户改完 Key 立刻能拿到新结果，不必等 TTL 到期
+        volcengineCache = null
       }
       if (changed) saveConfig()
     }
@@ -390,6 +431,8 @@ export default {
       const model = toStr(options && options.model)
       if (!provider && !model) return
       const np = normProvider(provider)
+      // 记下最近一次实际使用的 provider：summary 据此判断该预热哪家的配额缓存
+      if (np) lastProviderSeen = np
       // 按「调用发生的时刻」选单价版本（跨 2026-09-10 12:00 / 2026-09-14 12:00 自动切换，无需重启）。
       const price = priceFor(np, model, ts)
       // 峰谷计费开关：随配置峰谷启用 + 生效时间门控；未启用时按非峰谷档（平价）计费。
@@ -445,15 +488,43 @@ export default {
     }
 
     // ---------- key resolution ----------
+    /** 凭据文件路径：与数据/store 同源，跟随 DSH_HOME（此前硬编码 ~/.dsh，
+     *  在 DSH_HOME 被重定向的部署——含本仓库的沙箱测试——下永远读不到）。 */
+    function credFilePath() {
+      return join(process.env.DSH_HOME || join(homedir(), '.dsh'), '.credentials.yaml')
+    }
+
+    /**
+     * 从 .credentials.yaml 读取某个环境变量对应的值。
+     *
+     * 真实文件是以 `refs:` 段**缩进**存放的：
+     *     refs:
+     *       VOLC_ACCESSKEY: AKxxxx
+     * 早先的正则只匹配行首无缩进的键，于是所有键都读不出来 —— 这一路兜底
+     * 一直静默失效（有宿主凭据服务时被掩盖，没有时就直接报「未找到 Key」）。
+     * 现在允许缩进，并优先在 `refs:` 段内匹配；同时保留对「无缩进的旧版
+     * 平铺文件」的兼容。
+     */
     function readCredFile(envName) {
       try {
-        const p = join(homedir(), '.dsh', '.credentials.yaml')
-        const t = readFileSync(p, 'utf8')
+        const t = readFileSync(credFilePath(), 'utf8')
         const lines = t.split(/\r?\n/)
+        let inRefs = false
+        let fallback = ''
         for (const line of lines) {
-          const m = line.match(/^([A-Za-z0-9_]+):\s*(.+)\s*$/)
-          if (m && m[1] === envName) return m[2]
+          if (/^\S/.test(line)) {
+            // 顶层键：进入/离开 refs 段（records 等其它段不应被误读）
+            inRefs = /^refs\s*:/.test(line)
+            if (/^[A-Za-z0-9_]+\s*:/.test(line)) continue
+          }
+          const m = line.match(/^\s*([A-Za-z0-9_]+)\s*:\s*(.+?)\s*$/)
+          if (!m || m[1] !== envName) continue
+          const value = m[2].replace(/^["']|["']$/g, '')
+          if (!value) continue
+          if (inRefs) return value      // refs 段内命中：最可信，立即返回
+          if (!fallback) fallback = value // 段外的同名键：留作兜底
         }
+        return fallback
       } catch (e) {}
       return ''
     }
@@ -564,6 +635,119 @@ export default {
       return data
     }
 
+    // ---------- volcengine (火山方舟) coding plan quota ----------
+    // 与 kimi 的差别：方舟配额走管控面 OpenAPI，需 AccessKeyID + SecretAccessKey
+    // 成对做 HMAC 签名（不是 Bearer），签名与解析在 volcengine.js 里（纯函数可单测）。
+
+    /** 环境变量名候选：用户自定 provider 的 apiKeyEnv 优先，其后是 SDK 约定名 */
+    function volcengineEnvCandidates() {
+      const out = []
+      const settings = ctx.get('settings')
+      if (settings) {
+        try {
+          const v = settings.get('llm-pi-ai')
+          const providers = (v && v.providers) || {}
+          for (const [id, p] of Object.entries(providers)) {
+            if (!p) continue
+            const base = String(p.baseURL || '')
+            const looksArkCoding = /ark\.cn-beijing\.volces\.com\/api\/coding/i.test(base)
+            const looksVolc = /volcengine/i.test(id) || /volces\.com/i.test(base)
+            if (!looksArkCoding && !looksVolc) continue
+            if (p.apiKeyEnv) out.push(String(p.apiKeyEnv))
+          }
+        } catch (e) {}
+      }
+      return out
+    }
+
+    /** 在候选名单里逐个查凭据库 + .credentials.yaml，返回首个命中 */
+    async function resolveAnyEnv(names) {
+      for (const n of names) {
+        if (!n) continue
+        const v = await resolveApiKey(n)
+        if (v.value) return { value: v.value, source: v.source + ':' + n, env: n }
+      }
+      return { value: '', source: 'none', env: names[0] || '' }
+    }
+
+    function emptyVolcengine(error, keySource, keyEnv) {
+      return {
+        ok: false, error,
+        windows: {}, windowList: [],
+        planType: '', action: '', updateTime: 0,
+        fetchedAt: Date.now(), keySource, keyEnv,
+      }
+    }
+
+    /** 把 volcengine.js 的 windows 归一成客户端要好用的形状（带 label，便于直接渲染） */
+    function volcengineWindowList(windows) {
+      const order = ['fiveHour', 'weekly', 'monthly', 'daily']
+      const list = []
+      for (const name of order) {
+        const w = windows[name]
+        if (!w) continue
+        list.push({ name, label: VOLC_WINDOW_LABELS[name] || name, percent: w.percent, resetsAt: w.resetsAt, quota: w.quota, used: w.used })
+      }
+      // 未识别的窗口名附在末尾（接口结构变化时不静默丢弃）
+      for (const name of Object.keys(windows)) {
+        if (order.indexOf(name) >= 0) continue
+        const w = windows[name]
+        list.push({ name, label: VOLC_WINDOW_LABELS[name] || name, percent: w.percent, resetsAt: w.resetsAt, quota: w.quota, used: w.used })
+      }
+      return list
+    }
+
+    /**
+     * 查询火山方舟 Coding Plan 配额。
+     * 凭据发现链：配置卡片字段 → 凭据库 / .credentials.yaml → 环境变量约定名。
+     * 全部失败一律软失败（ok:false + 中文原因），绝不抛到路由层。
+     * **返回值只含 keySource/keyEnv，绝不回显 AK/SK 本身。**
+     */
+    async function volcengineUsage(force) {
+      const now = Date.now()
+      if (!force && volcengineCache && now - volcengineCache.fetchedAt < 120000) return volcengineCache.data
+      const idEnvs = volcengineEnvCandidates().concat(VOLCENGINE_KEY_ENVS)
+      const secretEnvs = volcengineEnvCandidates().concat(VOLCENGINE_SECRET_ENVS)
+      let data
+      try {
+        let id = String(volcengineConfig.volcengineAccessKeyId || '')
+        let secret = String(volcengineConfig.volcengineSecretAccessKey || '')
+        let keySource = id ? 'config' : 'none'
+        let keyEnv = idEnvs[0] || 'VOLC_ACCESSKEY'
+        if (!id || !secret) {
+          const rid = await resolveAnyEnv(idEnvs)
+          const rsec = await resolveAnyEnv(secretEnvs)
+          if (!id && rid.value) { id = rid.value; keySource = rid.source; keyEnv = rid.env }
+          if (!secret && rsec.value) secret = rsec.value
+        }
+        if (!id || !secret) {
+          data = emptyVolcengine(
+            '未找到火山引擎访问密钥（需 AccessKeyID + SecretAccessKey）。配额查询走方舟管控面，'
+            + '与推理用的 ARK API Key 是两套凭据；请配置 ' + keyEnv + ' / VOLC_SECRETKEY，'
+            + '或在插件配置卡片里填写。',
+            keySource, keyEnv,
+          )
+        } else {
+          const r = await queryVolcenginePlan({ accessKeyId: id, secretAccessKey: secret })
+          const windows = r.windows || {}
+          data = {
+            ok: true, error: '',
+            windows,
+            windowList: volcengineWindowList(windows),
+            planType: '',
+            action: toStr(r.action),
+            updateTime: 0,
+            fetchedAt: Date.now(),
+            keySource, keyEnv,
+          }
+        }
+      } catch (e) {
+        data = emptyVolcengine(toStr(e && e.message ? e.message : e), 'none', idEnvs[0] || 'VOLC_ACCESSKEY')
+      }
+      volcengineCache = { fetchedAt: now, data }
+      return data
+    }
+
     // ---------- deepseek balance ----------
     async function balance(args) {
       const manual = args && typeof args.apiKey === 'string' ? args.apiKey.trim() : ''
@@ -642,6 +826,12 @@ export default {
         v41EffectiveAt: V41_EFFECTIVE_AT,
         v41ProRouteAt: V41_PRO_ROUTE_AT,
         subscription: SUBSCRIPTION_RATES,
+        // 火山方舟 Coding Plan 订阅：套餐内模型清单（等效参考价，非真实扣费）
+        volcenginePlan: {
+          providers: VOLCENGINE_PLAN_PROVIDER_KEYS,
+          models: Object.keys(volcenginePlanModels()),
+          rates: VOLCENGINE_PLAN_RATES,
+        },
         providers: PROVIDER_RATES,
         generic: GENERIC_RATES,
       }
@@ -839,12 +1029,20 @@ export default {
         } catch (e) {}
       }
       const np = normProvider(provider)
-      const subscription = !!SUBSCRIPTION_RATES[np]
+      // 订阅判定必须带模型：同一 provider 下可能既有套餐内模型也有按量模型
+      // （火山方舟即如此），只看 provider 会把按量调用错记成订阅。
+      const subscription = !!subscriptionPlanFor(np, model)
+      const isVolc = isVolcengineProvider(np)
       let kimiWeeklyRemaining = null
       // 只要当前选择是订阅，或本会话实际用了订阅，就刷新 kimi 周配额
       if (subscription || sessionSub > 0) {
         if (!kimiCache || now - kimiCache.fetchedAt >= 120000) kimiUsage(false).catch(() => {})
         if (kimiCache && kimiCache.data && kimiCache.data.ok) kimiWeeklyRemaining = kimiCache.data.weekly.remaining
+      }
+      // 火山的预热条件与 kimi 同源：当前选中的是火山订阅，或最近一次调用就走火山。
+      // 面板自己也会主动拉取（volcengine-usage），这里只是让它在「正在用」时自动出数。
+      if (isVolc || isVolcengineProvider(lastProviderSeen)) {
+        if (!volcengineCache || now - volcengineCache.fetchedAt >= 120000) volcengineUsage(false).catch(() => {})
       }
       return {
         sessionCost: r4(sessionCost), sessionCalls,
@@ -859,6 +1057,7 @@ export default {
         peak: peakEffective(peakConfig, now) ? isPeak(now) : false,
         subscription,
         kimiWeeklyRemaining,
+        volcengineActive: isVolc,
       }
     }
 
@@ -866,6 +1065,7 @@ export default {
       const n = store.counts().calls
       store.clear()
       kimiCache = null
+      volcengineCache = null
       persistNow()
       return { ok: true, cleared: n }
     }
@@ -1194,6 +1394,7 @@ export default {
       summary: (args) => buildSummary(args),
       dashboard: (args) => buildDashboard(args),
       'kimi-usage': (args) => kimiUsage(!!(args && args.force)),
+      'volcengine-usage': (args) => volcengineUsage(!!(args && args.force)),
       balance: (args) => balance(args),
       export: () => exportCsv(),
       prices: () => prices(),
@@ -1203,6 +1404,11 @@ export default {
       'peak-config': (args) => setPeakConfig(args),
       // 界面显示三开关（设置卡片的「界面显示」分组）：patch 里只带这几个键，写回后原样回显
       'ui-config': (args) => Object.assign({ ok: true }, setUiConfig(args || {})),
+      // 火山方舟配额凭据：只回显是否已配置，**绝不回显 SecretAccessKey 明文**
+      'volcengine-config': (args) => {
+        setVolcengineConfig(args || {})
+        return Object.assign({ ok: true, volcengineHasKeys: !!(volcengineConfig.volcengineAccessKeyId && volcengineConfig.volcengineSecretAccessKey) })
+      },
       // 同步状态里一并带上界面显示开关：配置卡片只需一次往返就能初始化表单
       sync: () => Object.assign({}, syncEngine.status(), uiConfig),
       'sync-now': async (args) => {

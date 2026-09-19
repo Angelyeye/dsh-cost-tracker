@@ -2,6 +2,61 @@
 
 本文件用中文记录 dsh-cost-tracker 的版本变更。
 
+## v1.8.14(2026-09-26)
+
+**新增：火山方舟 Coding Plan 订阅支持（配额监控 + 等效费用）；并修掉两个此前静默存在的缺陷**
+
+### 一、新增：火山方舟 Coding Plan 配额面板
+
+- **设置页新增「订阅套餐用量 · 火山方舟 Coding Plan」面板**，与既有 Kimi 面板并列，显示 **5 小时 / 周 / 月** 三档窗口的已用百分比、绝对量与重置倒计时，附「刷新配额」按钮。
+- **查询走方舟管控面 OpenAPI**，不是推理端点：
+  - 端点固定 `https://open.volcengineapi.com/`，`Service=ark`、`Region=cn-beijing`、`Version=2024-01-01`；
+  - 认证是 **HMAC-SHA256 签名**（`Credential=AK/日期/区域/服务/request`、`SignedHeaders=host;x-content-sha256;x-date`），**不是 Bearer** —— 这是与 Kimi 那条路径最大的差别；
+  - Action 按 `GetCodingPlanUsage → GetAFPUsage → GetUsageDetails → GetPersonalPlan` 顺序兜底。`GetCodingPlanUsage` 是官方 CodingPlan 用量接口，**无参即可返回三档窗口**；`GetAFPUsage` 实为 AgentPlan 接口，账号是 Agent Plan 时自动从它取数；
+  - 单个 Action 的 401/403 只表示「该 Action 不可用」（多 Action 变体权限语义不同），继续尝试下一个；200 但解析失败时**优先透出服务端业务信封**（`ResponseMetadata.Error.Code/Message`），因为它比末尾变体的 404 更有诊断价值。
+- **凭据发现链**：插件配置卡片（`volcengineAccessKeyId` / `volcengineSecretAccessKey`）→ DSH 凭据库 → `.credentials.yaml` → 环境变量（`VOLC_ACCESSKEY` / `VOLC_SECRETKEY`，兼容 `VOLCENGINE_ACCESS_KEY_ID`、`ARK_ACCESS_KEY_ID` 等变体；也会从指向方舟 coding 端点的 provider 的 `apiKeyEnv` 反查）。
+  - 需要 IAM 子用户具备 **`ArkReadOnlyAccess` + `BillingCenterReadOnlyAccess`**。这与推理用的 **ARK API Key（UUID）是两套凭据**，混填只会得到 401/403。
+  - **密钥零外泄**：`volcengine-usage` / `volcengine-config` / `sync` 的响应里**永远不含 AK/SK**，只回 `keySource`（`config` / `credentials:…` / `file`）与候选变量名；卡片里的 Secret 字段标了 `role('secret')`。
+- **失败一律软降级为中性提示**：无凭据、无订阅、权限不足、接口结构变化、网络异常都只回 `{ok:false, error:'中文原因'}`，HTTP 层仍是 200，**不抛异常、不影响其它路由**。
+- **按需出现**：面板只在「存在火山订阅调用（宿主在 `summary` 里回传 `volcengineActive`）或已有窗口数据」时渲染。只跑 DeepSeek / Kimi 的用户界面**完全不变**。
+- **百分比精度**：实测 `Percent` 是 0-100 的百分数但数值极小（`0.3938…` / `0.0997…` / `0.0498…`，即 0.39% / 0.1% / 0.05%），故保留**两位小数** —— 只留一位会把月度 0.05% 显示成「0%」，看上去像没统计到。同时**不套用「≤1 视为小数」的规则**（那会把 0.5% 放大成 50%）。`Cap`（实测恒为 100）用于折算绝对量。
+
+### 二、修掉订阅门卫缺陷：按量调用曾被错记成订阅（重要）
+
+- **缺陷**：`priceFor()` 原先只按 **provider 名**判定订阅，对该 provider 的**所有模型**一律套订阅价。
+- **为什么此前没暴露**：Kimi 的 provider 下每个模型都走订阅，所以「只看 provider」恰好成立。
+- **为什么火山会踩**：同一个 provider 下**套餐内与套餐外的模型混在一起** —— 订阅调用被错记为 `subscription: true` 后，金额会从「真实花费」里消失（计入订阅等效而不是按量），且原始记录已被打标，**无法自动回滚**。这是典型的「静默少算」。
+- **现在**：`subscriptionPlanFor(np, model)` 改为「provider 命中 + 模型白名单」双重限定，并区分两类 provider：
+  | provider | 判定 |
+  | --- | --- |
+  | baseURL 指向 `ark.cn-beijing.volces.com/api/coding/v3` 的专属订阅入口（`byteblus-coding-plan-cn`、`byteplus-coding-plan-cn`、`volcengine-coding` 等） | **整档计订阅**，不必追模型日期后缀 |
+  | 泛 `volcengine` | **仅白名单内模型计订阅**（豆包系 / GLM 系 / Kimi 系 / DeepSeek / MiniMax，以及 `ark-code-*` 前缀整族）；**接入点 id（`ep-2026xxxx`）一律按量** |
+  | `kimi` / `kimi-coding` | `SUBSCRIPTION_MODELS` 登记为 `null` = 整档订阅，**行为逐字节不变** |
+- **前缀刻意收窄**：只放行 `ark-code-*`（方舟自动调度名会滚动升级）。按 `deepseek` / `glm` 这类宽前缀整族放行会把套餐外的按量模型一并算成订阅 —— 那正是本门卫要防的方向；宁可漏配（可显式补清单）也不能错配。
+- **等效单价口径**：套餐内各模型牌价差异很大，而套餐只有一个固定月费、官方并未给出「套餐内某次调用的等效单价」。故取**单一代表价**（3.0 / 12.0 / 缓存 0.6），与既有 Kimi 订阅（同样一个价位代表整档）口径一致，**仅用于横向比较订阅是否划算，不是真实扣费**；可核实到的第三方报价多为聚合站美元估价，与官方人民币牌价不可直接对照，按本仓库「不编造价格」的约定不收录。
+
+### 三、修掉凭据文件读取缺陷：`.credentials.yaml` 兜底一直静默失效（重要）
+
+- **缺陷**：`readCredFile()` 的正则只匹配**行首无缩进**的键，而真实文件是把键**缩进**存放在 `refs:` 段下的：
+  ```yaml
+  version: 1
+  refs:
+    VOLC_ACCESSKEY: AKxxxx        # ← 缩进两格，旧正则匹配不到
+    VOLC_SECRETKEY: xxxx
+  records:
+    ...
+  ```
+  于是所有键都读不出来，这一路兜底**一直静默失效**（装了宿主凭据服务时被掩盖，没有时就直接报「未找到 Key」）。该缺陷同时影响原本的 Kimi / DeepSeek Key 兜底路径。
+- **现在**：识别缩进、定位 `refs:` 段（避免误读 `records:` 段里的同名键），并保留对「无缩进的旧版平铺文件」的兼容（段内未命中时回落到段外同名键）。
+- **顺带修掉路径硬编码**：原路径写死 `~/.dsh/.credentials.yaml`，`DSH_HOME` 被重定向的部署（含本仓库的沙箱测试）永远读不到；现改为跟随 `DSH_HOME`。
+
+### 四、测试
+
+- 新增 `test/volcengine-plan.test.js`（113 条）：**与火山官方 demo（`volc-openapi-demos/signature/nodejs/sign.js`）逐字节一致的固定签名向量**、查询串排序与严格 RFC3986 转义、四种响应形态（官方 `QuotaUsage[Level/Percent]`、`UsageDetails`、arkcli `items→periods`、AFP 扁平窗口）、**0.5% 不被放大成 50%**、负数百分比判非法而非钳成 0、`ResetTime=-1` 归一为「无重置」、凭据残缺判 null 且不发请求、403 换 Action、业务信封优先于末尾 404。
+- 新增 `test/volcengine-host.test.js`（36 条）：宿主面端到端（老配置 + 凭据文件 → 已签名请求 → 可渲染窗口）、**密钥零外泄**（响应 / sync / 卡片写入三处）、配置卡片凭据优先、真机响应形状（0.05% 不被抹成 0%）、五类失败路径软降级、120s 缓存 TTL 与 `force` 绕过。
+- `test/pricing.test.js` 新增「订阅门卫 + 火山 Coding Plan」一节（覆盖两个方向：订阅**必须**识别、同 provider 的按量调用**必须不**识别），并钉住 Kimi 既有行为不变。
+- `scripts/verify-volcengine-live.mjs`：一次性真机核验脚本（只读接口、不打印密钥）。**已实测通过**：`GetCodingPlanUsage` 返回 `Status: "Running"` 与 session / weekly / monthly 三档真实窗口。
+
 ## v1.8.13(2026-09-25)
 
 **新增：可以关掉插件在前端的显示（三个落点各自独立）**
