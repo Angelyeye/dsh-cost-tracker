@@ -33,7 +33,7 @@
     "./package.json": "./package.json"
   },
   "scripts": {
-    "test": "node test/storage.test.js && node test/pricing.test.js && node test/volcengine-plan.test.js && node test/volcengine-host.test.js && node test/config.test.js && node test/recompute.test.js && node test/credstore.test.js && node test/vendor-catalog.test.js && node test/price-sync.test.js && node test/import.test.js && node test/client-registration.test.js && node test/ui-display.test.js && node test/client-render.test.js && node test/cloud-read.test.js && node --no-warnings test/cloud-view-e2e.test.js && node test/sync.test.js && node test/view.test.js",
+    "test": "node test/storage.test.js && node test/pricing.test.js && node test/volcengine-plan.test.js && node test/volcengine-host.test.js && node test/config.test.js && node test/recompute.test.js && node test/credstore.test.js && node test/vendor-catalog.test.js && node test/price-sync.test.js && node test/import.test.js && node test/client-registration.test.js && node test/ui-display.test.js && node test/client-render.test.js && node test/cloud-read.test.js && node --no-warnings test/cloud-view-e2e.test.js && node test/sync.test.js && node test/view.test.js"
   },
   "keywords": [
     "dsh-plugin",
