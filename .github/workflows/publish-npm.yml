@@ -95,6 +95,12 @@ jobs:
           echo "node $(node --version) / npm $(npm --version)"
           UC="$(npm config get userconfig 2>/dev/null)"
           if [ -f "$UC" ]; then echo "userconfig $UC 存在"; sed -E 's/(_authToken=).*/\1<redacted>/' "$UC"; else echo "userconfig $UC 不存在（无令牌残留）"; fi
+          # 2026-09-20 排障：npm 只要在环境里看到任何 npm 认证变量（哪怕是占位串），
+          # 就会认为「已配令牌」而**跳过 OIDC**，最终以未认证身份发布 → ENEEDAUTH。
+          # 这里只打印变量名（值一律不打印），便于确认是否有残留。
+          echo '--- npm/认证相关环境变量（仅名字）---'
+          env | grep -iE '^(node_auth|npm_|npm_config)' | sed -E 's/=.*/=<set>/' || echo '(无)'
+          npm config list -l 2>/dev/null | grep -iE '(_auth|registry|provenance)' || true
           curl -sS -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
             "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=npm:registry.npmjs.org" \
             -o /tmp/oidc.json -w 'OIDC 交换 HTTP %{http_code}\n'
@@ -104,6 +110,9 @@ jobs:
         if: ${{ inputs.dry_run }}
         run: npm publish --access public --dry-run
 
+      # ⚠️ 关键：用 `env -u` **彻底移除**认证变量（不是置空）——空串同样会让 npm
+      # 走令牌认证、跳过 OIDC；`--provenance` 则强制 npm 去换 OIDC 令牌并签名，
+      # 出问题时也会给出明确原因，而不是静默退回未认证发布。
       - name: Publish
         if: ${{ !inputs.dry_run }}
-        run: npm publish --access public
+        run: env -u NODE_AUTH_TOKEN -u NODE_AUTH -u NPM_TOKEN -u NPM_AUTH_TOKEN npm publish --access public --provenance
