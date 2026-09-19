@@ -18,6 +18,9 @@
 //   peakAlertTarget    提醒类型：both（峰和谷）/ peak（进入峰时）/ offpeak（进入谷时）
 //   peakAlertPosition  弹窗位置：corner（右下角）/ center（屏幕中心）
 //   peakAlertWebNotify 同步发送浏览器系统通知
+//   peakHolidays       中国法定节假日列表（官方把节假日全天计入空闲时段）。
+//                      空串 = 用内置表；'none'/'off' = 停用（只按周末判定）；
+//                      也可写 "2027-01-01 2027-02-05" 这类自定列表（逗号/空白分隔）。
 //   peakEffectiveAt    峰谷计价生效时间（ISO 字符串，展示用）
 //
 // 字段（云端同步，v1.8.0）：
@@ -94,6 +97,7 @@ export function defaultPeakConfig() {
     peakAlertTarget: 'both',
     peakAlertPosition: 'corner',
     peakAlertWebNotify: false,
+    peakHolidays: '',
     peakEffectiveAt: DEFAULT_PEAK_EFFECTIVE_AT,
   }
 }
@@ -191,6 +195,9 @@ export function normalizePeakConfig(raw) {
     peakAlertTarget: (raw.peakAlertTarget === 'peak' || raw.peakAlertTarget === 'offpeak') ? raw.peakAlertTarget : def.peakAlertTarget,
     peakAlertPosition: raw.peakAlertPosition === 'center' ? 'center' : 'corner',
     peakAlertWebNotify: bool(raw.peakAlertWebNotify, def.peakAlertWebNotify),
+    // 节假日列表按**原文**保存（由 pricing.setPeakHolidays 解释空串/哨兵/列表），
+    // 配置卡回显即所见即所得，不做静默改写。
+    peakHolidays: typeof raw.peakHolidays === 'string' ? raw.peakHolidays.trim() : def.peakHolidays,
     peakEffectiveAt: typeof raw.peakEffectiveAt === 'string' && raw.peakEffectiveAt.length > 0 ? raw.peakEffectiveAt : def.peakEffectiveAt,
   }
   return out

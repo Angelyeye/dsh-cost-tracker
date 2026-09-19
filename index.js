@@ -10,7 +10,7 @@ import { readFileSync, writeFileSync, mkdirSync, renameSync, existsSync, realpat
 import { join, dirname } from 'node:path'
 import { homedir } from 'node:os'
 import { createStore, collectTotals, DETAIL_DAYS, MAX_AXIS_DAYS } from './store.js'
-import { PRICE_ERAS, V41_EFFECTIVE_AT, V41_PRO_ROUTE_AT, exactModelsAt, eraAt, SUBSCRIPTION_RATES, PROVIDER_RATES, GENERIC_RATES, PEAK_WINDOWS, PEAK_HOUR_WINDOWS, isPeak, peakPhaseAt, priceFor, computeCost, normalizeTokens, subscriptionPlanFor, volcenginePlanModels, VOLCENGINE_PLAN_PROVIDER_KEYS, VOLCENGINE_PLAN_RATES, setSyncedEras, getSyncedEras, setPriceOverrides, getPriceOverrides } from './pricing.js'
+import { PRICE_ERAS, V41_EFFECTIVE_AT, exactModelsAt, eraAt, SUBSCRIPTION_RATES, PROVIDER_RATES, GENERIC_RATES, PEAK_WINDOWS, PEAK_HOUR_WINDOWS, isPeak, peakPhaseAt, priceFor, computeCost, normalizeTokens, subscriptionPlanFor, volcenginePlanModels, VOLCENGINE_PLAN_PROVIDER_KEYS, VOLCENGINE_PLAN_RATES, setSyncedEras, getSyncedEras, setPriceOverrides, getPriceOverrides, setPeakHolidays, getPeakHolidays } from './pricing.js'
 import {
   normalizePeakConfig, defaultPeakConfig, peakEffective,
   normalizeCloudConfig, defaultCloudConfig, normalizePluginConfig,
@@ -33,7 +33,7 @@ import { createCredSeam, migrateLegacySecrets, safeFetch, CRED_REFS, hostnameOf 
 import { listSessionLogs, planAndBuildImports, loadManifest, IMPORT_SOURCE } from './import.js'
 
 /** 插件版本（写入上报信封，便于云端排查版本差异） */
-const PLUGIN_VERSION = '1.9.1'
+const PLUGIN_VERSION = '1.9.2'
 setPluginVersion(PLUGIN_VERSION)
 
 /** 「设置 → 插件 → 插件配置」里的卡片字段（与 settings 命名空间一致）。
@@ -63,6 +63,7 @@ const SyncSchema = Schema.object({
   peakAlertTarget: Schema.string().default(undefined).description('提醒类型：both / peak / offpeak'),
   peakAlertPosition: Schema.string().default(undefined).description('弹窗位置：corner / center'),
   peakAlertWebNotify: Schema.boolean().default(undefined).description('同步发送浏览器系统通知'),
+  peakHolidays: Schema.string().default(undefined).description('中国法定节假日列表（空=内置表；none=停用；否则 "YYYY-MM-DD" 逗号/空白分隔）'),
   // 双轨计费 + 价格目录（v1.9.0）
   showTotalWithPlan: Schema.boolean().default(undefined).description('金额含 Plan 等值总额（关闭只算按量）'),
   priceMatch: Schema.string().default(undefined).description('目录匹配模式：fuzzy / exact'),
@@ -304,6 +305,8 @@ export default {
       } catch (e) {
         if (!configLoadWarned) { console.error('cost tracker config load failed, using defaults', e); configLoadWarned = true }
       }
+      // 峰谷口径依赖节假日表：配置载入后立刻注入定价层（否则首个调用会按内置表判定）
+      applyPeakRuntime()
     }
 
     function saveConfig() {
@@ -319,8 +322,18 @@ export default {
       }
     }
 
+    /**
+     * 把峰谷配置里的法定节假日列表注入定价层。
+     * 官方口径把「中国法定节假日」全天计入空闲时段，因此 isPeak / peakPhaseAt 必须
+     * 拿到用户配置——记账（recordUsage 判峰谷）、时段条相位、切换提醒共用同一份。
+     */
+    function applyPeakRuntime() {
+      setPeakHolidays(peakConfig.peakHolidays)
+    }
+
     function setPeakConfig(raw) {
       peakConfig = normalizePeakConfig(Object.assign({}, peakConfig, raw))
+      applyPeakRuntime()
       saveConfig()
       return peakConfig
     }
@@ -470,7 +483,7 @@ export default {
       applyGroup(() => cloudConfig, (p) => { cloudConfig = normalizeCloudConfig(Object.assign({}, cloudConfig, p)) }, cloudPatch)
       applyGroup(() => uiConfig, (p) => { uiConfig = normalizeUiConfig(Object.assign({}, uiConfig, p)) }, uiPatch)
       applyGroup(() => volcengineConfig, (p) => { volcengineConfig = normalizeVolcengineConfig(Object.assign({}, volcengineConfig, p)) }, volcPatch)
-      applyGroup(() => peakConfig, (p) => { peakConfig = normalizePeakConfig(Object.assign({}, peakConfig, p)) }, peakPatch)
+      applyGroup(() => peakConfig, (p) => { peakConfig = normalizePeakConfig(Object.assign({}, peakConfig, p)); applyPeakRuntime() }, peakPatch)
       applyGroup(() => billingConfig, (p) => { billingConfig = normalizeBillingConfig(Object.assign({}, billingConfig, p)); applyPricingRuntime() }, billingPatch)
       applyGroup(() => importConfig, (p) => { importConfig = normalizeImportConfig(Object.assign({}, importConfig, p)) }, importPatch)
       applyGroup(() => priceSyncConfig, (p) => { priceSyncConfig = normalizePriceSyncConfig(Object.assign({}, priceSyncConfig, p)) }, priceSyncPatch)
@@ -528,6 +541,8 @@ export default {
         phase,
         peakWindows: PEAK_WINDOWS,
         peakHours: PEAK_HOUR_WINDOWS,
+        // 法定节假日（官方把节假日全天计入空闲时段）：回显来源与条数，供配置卡展示
+        holidays: getPeakHolidays(peakConfig.peakHolidays),
         effectiveAt: peakConfig.peakEffectiveAt,
         // 前端显隐开关（只影响渲染；与峰谷计价本身无关，因此不参与 enabled/effective 判定）
         ui: Object.assign({}, uiConfig),
@@ -1099,7 +1114,8 @@ export default {
         // 全部价格时代（含生效时刻与路由规则），供工具/接口展示
         eras: PRICE_ERAS.map((e) => ({ id: e.id, label: e.label, since: e.since, models: e.models, routes: e.routes || {} })),
         v41EffectiveAt: V41_EFFECTIVE_AT,
-        v41ProRouteAt: V41_PRO_ROUTE_AT,
+        // 法定节假日（影响峰谷判定；官方口径：节假日全天闲时）
+        peakHolidays: getPeakHolidays(peakConfig.peakHolidays),
         subscription: SUBSCRIPTION_RATES,
         // 火山方舟 Coding Plan 订阅：套餐内模型清单（等效参考价，非真实扣费）
         volcenginePlan: {
@@ -2035,7 +2051,13 @@ export default {
           }
           lines.push('', '当前生效：' + v.eraLabel + '（era=' + v.era + '）')
           lines.push('模型名口径：官方现役名为 deepseek-flash（被路由的请求一律以此名入账）；deepseek-v4.1-flash 等写法归一化后命中同一档。')
-          lines.push('V4-Pro 路由生效：' + when(v.v41ProRouteAt) + '（此前 deepseek-v4-pro 仍按 V4-Pro 自有牌价计费）。')
+          lines.push('deepseek-v4-pro 维持 V4-Pro 自有牌价 9/27/0.30（官方 2026-09-14 撤销了「路由到 V4.1 Flash」的下线计划），不做路由。')
+          if (v.peakHolidays) {
+            lines.push('法定节假日（全天闲时）：' + (v.peakHolidays.disabled
+              ? '已停用（仅按周末判定）'
+              : (v.peakHolidays.count || 0) + ' 天' + (v.peakHolidays.builtin ? '（内置表）' : '（自定义）')
+                + (v.peakHolidays.invalid && v.peakHolidays.invalid.length ? '，忽略无法识别：' + v.peakHolidays.invalid.join(' ') : '')))
+          }
           lines.push('视觉模型 deepseek-v4-flash-vision-exp：图片按官方规则换算 token（每张上限 384），以接口用量计费（已含在 inputTokens 内）。')
           lines.push('kimi-coding（订阅等效，估算）：输入 6.5 / 缓存命中（含缓存写入）1.1 / 输出 27.0')
           lines.push('缓存写入(cache write)按缓存命中价计费，与官方规则一致。其他 provider 兜底为估算平价（openai 10/30/5，anthropic 15/75/1.5，gemini 2.5/10/0.625，未知 2/8/0.5）；ollama/local 为 0。')
@@ -2117,7 +2139,7 @@ export default {
 
     ctx.tools.register({
       name: 'cost_peak',
-      description: '查询当前 DeepSeek 峰谷计价档位与下次切换倒计时（北京时间：高峰时段为周一至周五 9:00-12:00、14:00-18:00，其余为闲时，周末全天闲时）。',
+      description: '查询当前 DeepSeek 峰谷计价档位与下次切换倒计时（北京时间：高峰时段为周一至周五 9:00-12:00、14:00-18:00，且不含中国法定节假日；其余时段含周末与法定节假日全天均为闲时）。',
       parameters: {
         type: 'object',
         properties: {},
@@ -2127,7 +2149,8 @@ export default {
         schema: { type: 'object', additionalProperties: true },
         render: (args, v) => {
           const p = v.phase
-          const phaseText = !p ? '未知' : p.weekend ? '周末全天闲时（全谷价）' : p.inPeak ? '高峰时段（按峰时价）' : '闲时时段（按谷时价）'
+          const offLabel = p && p.allDayOff ? (p.holiday ? '法定节假日全天闲时（全谷价）' : '周末全天闲时（全谷价）') : ''
+          const phaseText = !p ? '未知' : p.allDayOff ? offLabel : p.inPeak ? '高峰时段（按峰时价）' : '闲时时段（按谷时价）'
           const nextText = p ? new Date(p.nextAtMs + 28800000).toISOString().replace('T', ' ').slice(0, 16).replace(/-/g, '/') + ' 转' + (p.nextIntoPeak ? '峰' : '谷') : '未知'
           return [{ type: 'text', text: '峰谷计价：' + (v.enabled ? '已启用' : '已停用') + '（' + v.peakWindows + '）\n当前档位：' + phaseText + '\n下次切换：' + nextText + (v.effective ? '' : '（峰谷未生效，按平价计费）') }]
         },

@@ -92,10 +92,12 @@ const uiPayload = (name) => {
   if (name === 'peak') return {
     ok: true, enabled: true, effective: true, notice: true, style: 'compact',
     alert: { enabled: false, ahead: 2, target: 'both', position: 'corner', webNotify: false },
-    phase: { inPeak: false, weekend: false, nextAtMs: Date.now() + 3600000, nextIntoPeak: true, label: '平价时段' },
-    config: { peakStyle: 'compact', peakShowTickLabels: true, peakCompactStack: false, peakAlertWebNotify: false },
-    peakWindows: '周一至周五 9:00-12:00 · 14:00-18:00（周末全天闲时）',
+    phase: peakPhaseOverride || { inPeak: false, weekend: false, nextAtMs: Date.now() + 3600000, nextIntoPeak: true, label: '平价时段' },
+    config: { peakStyle: 'compact', peakShowTickLabels: true, peakCompactStack: false, peakAlertWebNotify: false, peakHolidays: '' },
+    peakWindows: '周一至周五 9:00-12:00 · 14:00-18:00（周末与法定节假日全天闲时）',
     peakHours: [{ start: 9, end: 12 }, { start: 14, end: 18 }],
+    // 法定节假日回显（官方口径：节假日全天闲时）
+    holidays: { dates: ['2026-10-01', '2026-10-02', '2026-10-03'], mode: 'builtin', builtin: true, disabled: false, count: 33, invalid: [] },
     effectiveAt: '2026-08-01T00:00:00Z',
     ui: Object.assign({}, uiFlags),
     now: Date.now(),
@@ -104,6 +106,8 @@ const uiPayload = (name) => {
   return null
 }
 let dashPayload = DASH
+// 峰谷相位按用例覆写（默认：工作日闲时；节假日用例覆写为 holiday/allDayOff）
+let peakPhaseOverride = null
 // 「Token 用量统计」热力图：本机按天明细（宿主 usage 路由 → buildUsageHeat）
 const LOCAL_USAGE = {
   ok: true,
@@ -226,7 +230,7 @@ function render(component, props) {
     const { type, props: p, children } = node
     if (typeof type === 'function') {
       const name = type.name || 'anon'
-      state.nodes.push({ name, props: p || {}, path })
+      state.nodes.push({ name, props: p || {}, children, path })
       const prevSlots = currentSlots, prevIndex = hookIndex
       if (!hookSlots.has(type)) hookSlots.set(type, [])
       currentSlots = hookSlots.get(type); hookIndex = 0
@@ -240,13 +244,21 @@ function render(component, props) {
       walk(out, `${path}>${name}`)
       return
     }
-    state.nodes.push({ name: String(type), props: p || {}, path })
+    state.nodes.push({ name: String(type), props: p || {}, children, path })
     walk(children, path)
   }
   try { walk(component(props), 'root') } catch (e) { state.errors.push({ comp: 'root', path: '', message: e && e.message }) }
   return state
 }
 const describeErrors = (errors) => errors.map((e) => `${e.comp}@${e.path}: ${e.message}`).join(' | ')
+
+/** 取节点子树里的全部文本（用于按按钮文案定位可点击节点） */
+function flatText(node) {
+  if (node === null || node === undefined || typeof node === 'boolean') return ''
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map(flatText).join('')
+  return flatText(node.children)
+}
 
 /**
  * 带副作用的一轮挂载：渲染 → 执行 useEffect（触发 apiCall）→ 等微任务落地 → 再渲染。
@@ -340,6 +352,37 @@ if (typeof mod.card !== 'function') {
         keys.join('|') === 'uiDockEnabled|uiPeakEnabled|uiDashboardEnabled', JSON.stringify(keys))
       check('提交内容就是被点开关的新值（false）',
         uiBoxes.every((b) => Object.values(b.call.args)[0] === false), JSON.stringify(uiBoxes.map((b) => b.call.args)))
+    }
+
+    // ---- 法定节假日（v1.9.2）：官方口径把节假日全天计入闲时 ----
+    check('「峰谷计价与提示」分组渲染出法定节假日输入框', second.text.includes('法定节假日（全天闲时）'),
+      JSON.stringify(second.text.replace(/\s+/g, ' ').slice(-320)))
+    check('分组标题摘要回显节假日条数与来源', second.text.includes('节假日 33 天'),
+      JSON.stringify(second.text.replace(/\s+/g, ' ').slice(0, 220)))
+    check('提供「恢复内置」与「停用」两个预设按钮', second.text.includes('恢复内置') && second.text.includes('停用'))
+    check('说明点明「不含法定节假日才算高峰」与调休口径',
+      second.text.includes('不含法定节假日') && second.text.includes('调休补班'))
+    const stopBtn = second.nodes.find((n) => n.name === 'button' && flatText(n).indexOf('停用') >= 0)
+    if (stopBtn) {
+      // 「停用」只改草稿，「保存」才提交。这里用**同步渲染**取新一轮闭包：
+      // renderAsync 会重跑 useEffect（loadPeak 会用服务端值覆盖草稿），而真实用户点
+      // 「停用」后 React 只重渲染、不重跑挂载 effect —— 同步 render 才是等价语义。
+      stopBtn.props.onClick()
+      const fresh = render(mod.card, {})
+      const idx = fresh.nodes.findIndex((n) => n.name === 'button' && flatText(n).indexOf('停用') >= 0)
+      const saveBtn = fresh.nodes.slice(idx).find((n) => n.name === 'button' && flatText(n).trim() === '保存')
+      check('同组内能找到「保存」按钮', !!saveBtn)
+      if (saveBtn) {
+        const probe = mod.apiLog.length
+        saveBtn.props.onClick()
+        for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r))
+        const call = mod.apiLog.slice(probe).filter((c) => c.name === 'peak-config').pop()
+        check('「停用」后保存提交 peakHolidays = none',
+          !!call && call.args && call.args.peakHolidays === 'none',
+          JSON.stringify(call ? call.args && call.args.peakHolidays : mod.apiLog.slice(probe).map((c) => c.name)))
+      }
+    } else {
+      check('找到「停用」按钮', false, '渲染树中未找到')
     }
   }
 }
@@ -561,6 +604,43 @@ console.log('[9] 界面显示清单：client.js 与 config.js 一致')
   check('服务端默认全部可见（defaultUiConfig 全 true）',
     UI_SURFACES.every((s) => defaultUiConfig()[s.key] === true),
     JSON.stringify(defaultUiConfig()))
+}
+
+// ---------- [10] 法定节假日的相位文案（官方：节假日全天闲时） ----------
+// 事故背景：峰谷相位原先只有 weekend / inPeak / off 三态，节假日落在工作日时只能显示
+// 「平价时段」，看不出「今天其实是节假日全谷」。这里钉住三件事：
+//   ① 后端给出 holiday/allDayOff 时，UI 必须说「节假日全谷」；
+//   ② 周末仍说「周末全谷」（不得被节假日文案顶掉）；
+//   ③ 老后端缺 allDayOff 字段时回落到 weekend 判定（向后兼容）。
+console.log('[10] 法定节假日相位文案')
+{
+  const nowMs = Date.now()
+  const phaseFor = (extra) => Object.assign({ inPeak: false, weekend: false, nextAtMs: nowMs + 3600000, nextIntoPeak: true }, extra)
+
+  peakPhaseOverride = phaseFor({ holiday: true, allDayOff: true })
+  hookSlots.clear()
+  const holMod = makeModule({ view: REAL_VIEW, syncView: 'local' })
+  const holSide = await renderAsync(holMod.surfaces['sidebar.footer.action'], {}, 3)
+  check('节假日相位渲染无异常', holSide.errors.length === 0, describeErrors(holSide.errors))
+  check('节假日显示「节假日全谷」', holSide.text.includes('节假日全谷'),
+    JSON.stringify(holSide.text.replace(/\s+/g, ' ').slice(0, 120)))
+  check('节假日不再被误称为「周末」', !holSide.text.includes('周末全谷'),
+    JSON.stringify(holSide.text.replace(/\s+/g, ' ').slice(0, 120)))
+
+  peakPhaseOverride = phaseFor({ weekend: true, holiday: false, allDayOff: true })
+  hookSlots.clear()
+  const wkSide = await renderAsync(holMod.surfaces['sidebar.footer.action'], {}, 3)
+  check('周末仍显示「周末全谷」', wkSide.text.includes('周末全谷'),
+    JSON.stringify(wkSide.text.replace(/\s+/g, ' ').slice(0, 120)))
+
+  // 向后兼容：老后端只给 weekend、没有 allDayOff
+  peakPhaseOverride = phaseFor({ weekend: true })
+  hookSlots.clear()
+  const legacySide = await renderAsync(holMod.surfaces['sidebar.footer.action'], {}, 3)
+  check('缺 allDayOff 字段时按 weekend 回落', legacySide.text.includes('周末全谷'),
+    JSON.stringify(legacySide.text.replace(/\s+/g, ' ').slice(0, 120)))
+
+  peakPhaseOverride = null
 }
 
 console.log('')

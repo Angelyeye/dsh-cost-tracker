@@ -10,12 +10,13 @@
 // 价格切换后测试结果随运行时刻漂移。
 // ============================================================
 import {
-  EXACT_MODELS, PRICE_ERAS, V41_EFFECTIVE_AT, V41_PRO_ROUTE_AT, V41_FLASH_MODEL,
+  EXACT_MODELS, PRICE_ERAS, V41_EFFECTIVE_AT, V41_FLASH_MODEL,
   PROVIDER_RATES, SUBSCRIPTION_RATES, GENERIC_RATES,
   PEAK_WINDOWS, VISION_MODEL, VISION_IMAGE_MAX_TOKENS,
-  isPeak, peakPhaseAt, priceFor, computeCost, normalizeTokens,
+  CN_HOLIDAYS, isPeak, peakPhaseAt, priceFor, computeCost, normalizeTokens,
   eraAt, exactModelsAt, resolveModelInEra, normalizeModelName,
   subscriptionPlanFor, VOLCENGINE_PLAN_PROVIDER_KEYS, VOLCENGINE_PLAN_RATES,
+  setPeakHolidays, getPeakHolidays, holidayKeyAt, isCnHoliday, normalizeHolidayList,
 } from '../pricing.js'
 
 let failures = 0
@@ -35,11 +36,12 @@ function bj(y, mo, d, h, mi) { return Date.UTC(y, mo - 1, d, h - 8, mi) }
 // 价格时代取样点：旧价（2026-08-21 周五 10:00 高峰） / 新价（2026-09-11 周五 10:00 高峰）
 const LEGACY_TS = bj(2026, 8, 21, 10, 0)
 const V41_TS = bj(2026, 9, 11, 10, 0)
-// V4-Pro 路由生效后的取样点（2026-09-15 周二 10:00 高峰）
+// 新价时代的后期取样点（2026-09-15 周二 10:00 高峰）——用于验证 V4-Pro 不路由
 const V41_PRO_TS = bj(2026, 9, 15, 10, 0)
-// 切换瞬间：2026-09-10 12:00（北京，Flash 调价）/ 2026-09-14 12:00（北京，V4-Pro 路由）
+// 切换瞬间：2026-09-10 12:00（北京时间，V4.1 Flash 调价生效）
 const SWITCH_TS = V41_EFFECTIVE_AT
-const PRO_SWITCH_TS = V41_PRO_ROUTE_AT
+// 曾被误当作「V4-Pro 路由时刻」的边界：北京时间 2026-09-14 12:00（官方其后撤销了下线计划）
+const PRO_PLAN_REVOKED_TS = Date.UTC(2026, 8, 14, 4, 0, 0)
 
 // ---------- 1. 视觉模型精确单价 ----------
 {
@@ -97,6 +99,63 @@ const PRO_SWITCH_TS = V41_PRO_ROUTE_AT
   ok(p !== null && p.weekend === true && p.nextAtMs === bj(2026, 8, 24, 9, 0), '相位: 周日 15:00 周末全谷价')
   // 非法输入 → null
   ok(peakPhaseAt(NaN) === null, '相位: 非法时刻返回 null')
+}
+
+// ---------- 2c. 法定节假日（官方口径：节假日全天计入空闲时段） ----------
+// 官方价目页脚注 (2)：「北京时间周一至周五（**不含中国法定节假日**）9:00-12:00、
+// 14:00-18:00 为高峰时段；其余时段，包括周末及中国法定节假日全天均为空闲时段。」
+// 内置表来源：国办发明电〔2025〕7 号（2026 年放假安排）。
+{
+  ok(CN_HOLIDAYS.length >= 30, '节假日: 内置表含 2026 全年放假日（≥30 天）')
+  ok(CN_HOLIDAYS.indexOf('2026-10-01') >= 0 && CN_HOLIDAYS.indexOf('2026-02-17') >= 0, '节假日: 含国庆与春节')
+  ok(CN_HOLIDAYS.indexOf('2026-10-08') < 0, '节假日: 节后首日（10-08）不是假日')
+
+  // holidayKeyAt：按北京日历日切分（UTC 边界附近不漂移）
+  ok(holidayKeyAt(bj(2026, 10, 1, 0, 0)) === '2026-10-01', '节假日: 北京 00:00 属当日')
+  ok(holidayKeyAt(bj(2026, 10, 1, 23, 59)) === '2026-10-01', '节假日: 北京 23:59 仍属当日')
+  ok(holidayKeyAt(Date.UTC(2026, 8, 30, 16, 0)) === '2026-10-01', '节假日: UTC 09-30T16:00 = 北京 10-01 00:00')
+  ok(isCnHoliday(bj(2026, 10, 1, 10, 0)) === true, '节假日: 10-01 认定为法定节假日')
+  ok(isCnHoliday(bj(2026, 10, 8, 10, 0)) === false, '节假日: 10-08 非节假日')
+
+  // 节假日落在工作日：峰段也必须按闲时
+  ok(isPeak(bj(2026, 9, 24, 10, 0)) === true, '节假日: 节前平日 09-24 周四 10:00 = 高峰')
+  ok(isPeak(bj(2026, 9, 25, 10, 0)) === false, '节假日: 中秋 09-25 周五 10:00 = 闲时')
+  ok(isPeak(bj(2026, 10, 1, 10, 0)) === false, '节假日: 国庆 10-01 周四 10:00 = 闲时')
+  ok(isPeak(bj(2026, 10, 5, 15, 0)) === false, '节假日: 国庆 10-05 周一 15:00 = 闲时')
+  ok(isPeak(bj(2026, 10, 8, 10, 0)) === true, '节假日: 节后 10-08 周四 10:00 = 高峰')
+  ok(isPeak(bj(2026, 2, 16, 10, 0)) === false, '节假日: 春节 02-16 周一 10:00 = 闲时')
+  ok(isPeak(bj(2026, 6, 19, 14, 30)) === false, '节假日: 端午 06-19 周五 14:30 = 闲时')
+  // 调休补班的周六/周日不计高峰（定价规则只看「周一至周五」）
+  ok(isPeak(bj(2026, 5, 9, 10, 0)) === false, '节假日: 调休上班的周六 05-09 10:00 = 闲时')
+
+  // 节假日相位：全天谷价 + 下一切换点为节后首个工作日峰起点 + 连休起点
+  let p = peakPhaseAt(bj(2026, 10, 5, 10, 0))
+  ok(p !== null && p.allDayOff === true && p.holiday === true && p.weekend === false && p.inPeak === false, '节假日相位: 10-05 国庆中 = 全谷价（holiday）')
+  ok(p.nextAtMs === bj(2026, 10, 8, 9, 0) && p.nextIntoPeak === true, '节假日相位: 下一切换 = 节后 10-08 09:00 转峰')
+  ok(p.prevAtMs === bj(2026, 10, 1, 0, 0), '节假日相位: 连休起点 = 10-01 00:00')
+  // 超长连休（春节 9 天）也能跨过去找到下一切换点
+  p = peakPhaseAt(bj(2026, 2, 16, 10, 0))
+  ok(p !== null && p.nextAtMs === bj(2026, 2, 24, 9, 0), '节假日相位: 春节 02-16 → 下一切换 = 02-24 09:00')
+  // 假期最后一天的傍晚起算，同样指向节后首个工作日
+  p = peakPhaseAt(bj(2026, 10, 7, 19, 0))
+  ok(p !== null && p.allDayOff === true && p.nextAtMs === bj(2026, 10, 8, 9, 0), '节假日相位: 假期最后一天傍晚 → 10-08 09:00')
+
+  // 覆盖语义：空串 = 内置；'none' = 停用；自定义列表 = 整体替换
+  ok(getPeakHolidays().mode === 'builtin' && getPeakHolidays().builtin === true, '节假日配置: 默认用内置表')
+  let r = setPeakHolidays('none')
+  ok(r.mode === 'disabled' && r.count === 0, '节假日配置: none = 停用')
+  ok(isPeak(bj(2026, 10, 1, 10, 0)) === true, '节假日配置: 停用后国庆又按高峰计')
+  r = setPeakHolidays('2026-12-31, 2027/1/1 2027-1-2 乱七八糟 2027-13-01')
+  ok(r.mode === 'custom' && r.count === 3, '节假日配置: 自定义列表归一化（3 条有效）')
+  ok(r.dates[0] === '2026-12-31' && r.dates[1] === '2027-01-01' && r.dates[2] === '2027-01-02', '节假日配置: 排序 + 补零 + 斜杠写法归一')
+  ok(r.invalid.length === 2 && r.invalid[0] === '乱七八糟', '节假日配置: 如实报告被忽略的条目')
+  ok(isPeak(bj(2026, 10, 1, 10, 0)) === true, '节假日配置: 自定义列表整体替换（国庆不再是假日）')
+  ok(isPeak(bj(2027, 1, 1, 10, 0)) === false, '节假日配置: 自定义的 2027-01-01 生效')
+  r = setPeakHolidays('')
+  ok(r.mode === 'builtin' && r.count === CN_HOLIDAYS.length, '节假日配置: 空串恢复内置表')
+  ok(isPeak(bj(2026, 10, 1, 10, 0)) === false, '节假日配置: 恢复后国庆重新按闲时计')
+  ok(normalizeHolidayList(['2026-1-5', '2026-01-05', 'bad']).length === 1, '节假日配置: 数组去重')
+  setPeakHolidays('') // 收尾：恢复默认，避免影响后续断言
 }
 
 // ---------- 3. 真实 API 用量计费（视觉调用实测 usage） ----------
@@ -157,7 +216,7 @@ const PRO_SWITCH_TS = V41_PRO_ROUTE_AT
   // 本地模型 0 元
   const lo = priceFor('ollama', 'llama3')
   approx(computeCost(lo.rates, false, true, { input: 99999, output: 99999, cacheRead: 0, cacheWrite: 0 }), 0, '回归: 本地模型计 0')
-  ok(PEAK_WINDOWS === '周一至周五 9:00-12:00 · 14:00-18:00（周末全天闲时）', '回归: 峰谷窗口文案')
+  ok(PEAK_WINDOWS === '周一至周五 9:00-12:00 · 14:00-18:00（周末与法定节假日全天闲时）', '回归: 峰谷窗口文案')
   ok(SUBSCRIPTION_RATES['kimi-coding'] !== undefined && SUBSCRIPTION_RATES.kimi !== undefined, '回归: 订阅表存在（两个键）')
 }
 
@@ -190,15 +249,17 @@ const PRO_SWITCH_TS = V41_PRO_ROUTE_AT
 {
   // 切换时刻：北京时间 2026-09-10 12:00 = 2026-09-10T04:00:00Z
   ok(V41_EFFECTIVE_AT === Date.UTC(2026, 9 - 1, 10, 4, 0, 0), '时代: V41 生效时刻 = 2026-09-10 12:00 北京')
-  // V4-Pro 路由时刻：北京时间 2026-09-14 12:00（官方通告口径，晚于 Flash 调价 4 天）
-  ok(V41_PRO_ROUTE_AT === Date.UTC(2026, 9 - 1, 14, 4, 0, 0), '时代: V4-Pro 路由时刻 = 2026-09-14 12:00 北京')
-  ok(V41_PRO_ROUTE_AT > V41_EFFECTIVE_AT, '时代: V4-Pro 路由晚于 Flash 调价（不可合并为同一时代）')
-  ok(PRICE_ERAS.length === 3, '时代: 共三版价格（legacy / v41 / v41pro）')
+  // v1.9.2：官方撤销 V4-Pro 下线计划后，09-14 12:00 不再有任何口径变化 —— 时代只剩两版
+  ok(PRICE_ERAS.length === 2, '时代: 共两版价格（legacy / v41）')
+  ok(PRICE_ERAS[0].id === 'legacy' && PRICE_ERAS[1].id === 'v41', '时代: 顺序为 legacy → v41')
 
-  // eraAt：切换前一夜仍是 legacy，切换瞬间起为 v41
+  // eraAt：切换前一夜仍是 legacy，切换瞬间起为 v41（09-14 前后同属 v41）
   ok(eraAt(SWITCH_TS - 1).id === 'legacy', '时代: 11:59:59.999 仍为旧价')
   ok(eraAt(SWITCH_TS).id === 'v41', '时代: 12:00:00.000 起为新价')
   ok(eraAt(V41_TS).id === 'v41', '时代: 切换后为新价')
+  ok(eraAt(V41_PRO_TS).id === 'v41', '时代: 09-14 之后仍为 v41（无第三时代）')
+  ok(eraAt(PRO_PLAN_REVOKED_TS - 1).id === 'v41', '时代: 09-14 12:00 前一毫秒 = v41')
+  ok(eraAt(PRO_PLAN_REVOKED_TS).id === 'v41', '时代: 09-14 12:00 整点 = v41（撤销后无边界）')
   ok(exactModelsAt(SWITCH_TS - 1) === EXACT_MODELS, '时代: 切换前精确表 = 旧表')
   ok(exactModelsAt(SWITCH_TS)[V41_FLASH_MODEL].input === 2.0, '时代: 切换后精确表 = V4.1 Flash 表')
 
@@ -224,34 +285,52 @@ const PRO_SWITCH_TS = V41_PRO_ROUTE_AT
   approx(computeCost(off.rates, true, false, tt), computeCost(off.rates, true, true, tt) / 2, 'V4.1: 空闲时段半价')
 }
 
-// ---------- 6e. 模型路由（V4-Pro → V4.1 Flash；生效时刻 2026-09-14 12:00） ----------
+// ---------- 6e. V4-Pro 维持自有牌价（官方 2026-09-14 撤销下线计划，**不做路由**） ----------
+// 依据：官方更新日志「为响应广大用户的需求，我们决定在 2026 年 9 月 14 日之后继续提供
+// DeepSeek V4 Pro 的 API 调用服务，计费方式保持不变」，且现行价目页仍为 V4-Pro 单列价格
+// （9.0/27.0/0.30）与独立并发（500，Flash 为 2500）；脚注只把旧 Flash 名路由到 deepseek-flash。
+// v1.9.0/1.9.1 曾按 09-10 新闻稿预告实现 pro → Flash 路由，会把 pro 调用按 Flash 价计（低估）。
 {
-  // 旧时代：V4-Pro 独立计价，不路由
+  // 旧时代：V4-Pro 独立计价
   const proOld = priceFor('deepseek', 'deepseek-v4-pro', LEGACY_TS)
-  ok(proOld.model === 'deepseek-v4-pro' && proOld.era === 'legacy', '路由: 旧时代 V4-Pro 不路由')
-  approx(proOld.rates.input, 9.0, '路由: 旧时代 V4-Pro 按自身价 9.0')
+  ok(proOld.model === 'deepseek-v4-pro' && proOld.era === 'legacy', 'V4-Pro: 旧时代不路由（自有名入账）')
+  approx(proOld.rates.input, 9.0, 'V4-Pro: 旧时代输入价 9.0')
 
-  // 9-10 12:00 ～ 9-14 12:00：Flash 已调价，但 V4-Pro 尚未路由，仍按自有牌价 9/27/0.30
-  const proBefore = priceFor('deepseek', 'deepseek-v4-pro', V41_TS)
-  ok(proBefore.model === 'deepseek-v4-pro', '路由: 9-14 12:00 前 V4-Pro 不路由（仍按自有名入账）')
-  ok(proBefore.estimated === false && proBefore.era === 'v41', '路由: 未路由期仍在精确档（era=v41）')
-  approx(proBefore.rates.input, 9.0, '路由: 未路由期 V4-Pro 输入价 9.0（不可提前按 Flash 折算）')
-  approx(proBefore.rates.output, 27.0, '路由: 未路由期 V4-Pro 输出价 27.0')
-  approx(proBefore.rates.cacheRead, 0.30, '路由: 未路由期 V4-Pro 命中价 0.30')
+  // 新价时代的各个时点（含曾被误当边界的 09-14 12:00 前后）：一律维持自有牌价
+  const points = [
+    ['09-11 10:00', V41_TS],
+    ['09-14 11:59:59.999', PRO_PLAN_REVOKED_TS - 1],
+    ['09-14 12:00:00.000', PRO_PLAN_REVOKED_TS],
+    ['09-15 10:00', V41_PRO_TS],
+  ]
+  for (const [label, ts] of points) {
+    const p = priceFor('deepseek', 'deepseek-v4-pro', ts)
+    ok(p.model === 'deepseek-v4-pro', 'V4-Pro: ' + label + ' 不路由（仍以自有名入账）')
+    ok(p.estimated === false && p.era === 'v41', 'V4-Pro: ' + label + ' 命中精确档（era=v41）')
+    approx(p.rates.input, 9.0, 'V4-Pro: ' + label + ' 输入价 9.0')
+    approx(p.rates.output, 27.0, 'V4-Pro: ' + label + ' 输出价 27.0')
+    approx(p.rates.cacheRead, 0.30, 'V4-Pro: ' + label + ' 命中价 0.30')
+  }
 
-  // 边界：路由时刻前一毫秒仍按自有牌价，整点起路由到 Flash 档
-  ok(priceFor('deepseek', 'deepseek-v4-pro', PRO_SWITCH_TS - 1).model === 'deepseek-v4-pro', '路由: 11:59:59.999 仍未路由')
-  ok(priceFor('deepseek', 'deepseek-v4-pro', PRO_SWITCH_TS).model === V41_FLASH_MODEL, '路由: 12:00:00.000 起路由到 ' + V41_FLASH_MODEL)
+  // 结构断言：任何时代都不得给 deepseek-v4-pro 配路由（防回归）
+  for (const era of PRICE_ERAS) {
+    ok(!(era.routes || {})['deepseek-v4-pro'], 'V4-Pro: 时代 ' + era.id + ' 无反向路由')
+    ok(!!(era.models || {})['deepseek-v4-pro'], 'V4-Pro: 时代 ' + era.id + ' 保留自有牌价')
+  }
 
-  // 路由生效后：V4-Pro 请求路由到 V4.1 Flash，并按 V4.1 Flash 单价计费
+  // 计费效果：同一批 token，pro 自有价必须显著高于 Flash 价（值 4.5× / 3.375×），
+  // 若哪天又被路由回 Flash，这条会立刻失败。
+  const tk = { input: 100000, output: 6000, cacheRead: 20000, cacheWrite: 0 }
   const pro = priceFor('deepseek', 'deepseek-v4-pro', V41_PRO_TS)
-  ok(pro.model === V41_FLASH_MODEL, '路由: 路由后 V4-Pro 按 V4.1 Flash 入账')
-  ok(pro.era === 'v41pro', '路由: 路由后 era = v41pro')
-  approx(pro.rates.input, 2.0, '路由: V4-Pro → V4.1 Flash 输入价 2.0')
-  approx(pro.rates.output, 8.0, '路由: V4-Pro → V4.1 Flash 输出价 8.0')
-  approx(pro.rates.cacheRead, 0.04, '路由: V4-Pro → V4.1 Flash 命中价 0.04')
+  const flash = priceFor('deepseek', 'deepseek-flash', V41_PRO_TS)
+  const proCost = computeCost(pro.rates, true, true, tk)
+  const flashCost = computeCost(flash.rates, true, true, tk)
+  // 100000×9 + 6000×27 + 20000×0.30 = 1,068,000 /1e6
+  approx(proCost, 1.068, 'V4-Pro: 10万+6千+2万 高峰 = ¥1.068（自有牌价）')
+  approx(flashCost, 0.2488, 'V4-Pro: 同量按 Flash 价 = ¥0.2488（对比用）')
+  ok(proCost > flashCost * 4, 'V4-Pro: 自有价显著高于 Flash 价（不再低估）')
 
-  // 旧 V4-Flash 系（含视觉版）自 9-10 12:00 起即被 V4.1 Flash 取代（官方脚注 (1)）
+  // 旧 V4-Flash 系（含视觉版）自 9-10 12:00 起仍被 V4.1 Flash 取代（官方脚注 (1) 未变）
   for (const m of ['deepseek-v4-flash', VISION_MODEL]) {
     const p = priceFor('deepseek', m, V41_TS)
     ok(p.model === V41_FLASH_MODEL, '路由: ' + m + ' → V4.1 Flash 入账')
@@ -261,18 +340,6 @@ const PRO_SWITCH_TS = V41_PRO_ROUTE_AT
   // 路由只作用于对应模型名，不误伤其它模型
   const unknown = priceFor('deepseek', 'deepseek-v4-pro-max', V41_TS)
   ok(unknown.estimated === true && unknown.model === 'deepseek-v4-pro-max', '路由: 相似名不误命中（走兜底估算）')
-
-  // 计费效果：路由后同一调用费用下降约 30%
-  const tk = { input: 100000, output: 6000, cacheRead: 20000, cacheWrite: 0 }
-  const before = computeCost(proOld.rates, true, true, tk)
-  const mid = computeCost(proBefore.rates, true, true, tk)
-  const after = computeCost(pro.rates, true, true, tk)
-  // 旧 V4-Pro 价：100000×9 + 6000×27 + 20000×0.30 = 1,068,000 /1e6
-  approx(before, 1.068, '路由: V4-Pro 旧价 10万+6千+2万 高峰 = ¥1.068')
-  approx(mid, 1.068, '路由: 9-14 12:00 前同量仍为 ¥1.068（金额零漂移）')
-  // 路由后按 V4.1 Flash：100000×2 + 6000×8 + 20000×0.04 = 248,800 /1e6
-  approx(after, 0.2488, '路由: 同量按 V4.1 Flash 新价 = ¥0.2488')
-  ok(after < before, '路由: 新价低于旧 V4-Pro 价（约 -76.7%）')
 
   // 同为 Flash 档的前后对比：旧 flash 3/9/0.10 → 新 2/8/0.04
   const flashNew = priceFor('deepseek', 'deepseek-v4-flash', V41_TS)

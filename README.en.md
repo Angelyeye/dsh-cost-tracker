@@ -29,7 +29,7 @@
 | | Feature | Description |
 | --- | --- | --- |
 | 💰 | **Cost tracking** | Every API call is recorded automatically: input / output / cache-hit / cache-write tokens and cost (cache write billed at the cache-hit price), aggregated by day and by model |
-| ⏰ | **Peak/off-peak pricing** | Built-in price table; peak windows (Mon–Fri 9:00–12:00, 14:00–18:00 Beijing time) vs half-price off-peak handled automatically; **weekends are fully off-peak**; local models (e.g. ollama) count as 0; the table is **versioned by pricing era** and switches automatically to V4.1 Flash rates at 2026-09-10 12:00 Beijing time (peak 2.0 / 0.04 / 8.0), routing the legacy V4-Flash family to V4.1 Flash billing per the official rules; **V4-Pro is routed from 2026-09-14 12:00 only** (before that it keeps its own rates 9.0 / 27.0 / 0.30) |
+| ⏰ | **Peak/off-peak pricing** | Built-in price table; peak windows (Mon–Fri 9:00–12:00, 14:00–18:00 Beijing time, **excluding Chinese statutory holidays**) vs half-price off-peak handled automatically; **weekends and statutory holidays are fully off-peak** (33 holiday days for 2026, overridable/disableable in the config card; make-up workday weekends stay off-peak); local models (e.g. ollama) count as 0; the table is **versioned by pricing era** (`legacy` / `v41`) and switches automatically to V4.1 Flash rates at 2026-09-10 12:00 Beijing time (peak 2.0 / 0.04 / 8.0), routing the legacy V4-Flash family to V4.1 Flash billing per the official footnote; **`deepseek-v4-pro` keeps its own rates 9.0 / 27.0 / 0.30 and is never routed** (the official retirement plan was revoked on 2026-09-14) |
 | 🔔 | **Peak-price notice** | A "Peak/off-peak pricing & notice" panel in Settings: current tier + countdown strip, style switch (**compact single-row · 24h-proportional** / **ring dial · phase dot**), an optional **two-row compact** stacked layout for the compact style (bar-above-text / text-above-bar), a "Show time" toggle, popup alert + browser notification before a tier switch, lead time, popup position (bottom-right/center), alert type; a persistent strip in the sidebar footer (adapts to rail/collapsed). Mirrors `dsh-cost-meter` |
 | 📌 | **Six overview cards** | Six cards at the top of Settings: Today / This month / Total spend / API requests / Tokens / **Account balance**. The three spend cards **exclude subscription equivalent cost** (shown as an annotation instead) |
 | 👁️ | **Vision model** | Supports `deepseek-v4-flash-vision-exp`: priced as flash in the legacy era, billed at V4.1 Flash rates from 2026-09-10 12:00 (that legacy id is retired; requests are served by V4.1 Flash); images are converted to tokens per the official rule (≤384 tokens each, billed per API usage) |
@@ -327,6 +327,27 @@ Example: `curl -X POST http://127.0.0.1:3080/api/cost-tracker/summary -d '{}'`
 ## Changelog
 
 > Highlights only — the full version-by-version history lives in [`CHANGELOG.md`](./CHANGELOG.md) (Chinese).
+
+### v1.9.2 (2026-09-20)
+
+**Pricing correction: V4-Pro is no longer routed to Flash (official retirement plan revoked) + statutory holidays are now off-peak**
+
+- **Correction**: the live official pricing page still lists `deepseek-v4-pro` **with its own row**
+  (peak 9 / 27 / 0.30, half price off-peak, concurrency 500), and the official changelog now reads
+  "we **decided** to **continue** serving DeepSeek V4 Pro after 2026-09-14, **with billing unchanged**".
+  The built-in table had implemented the *announced plan* from the 09-10 news post ("after 09-14 12:00 all
+  `deepseek-v4-pro` requests are routed to V4.1 Flash and billed at Flash rates") as era `v41pro`,
+  which billed pro calls at Flash rates (input 2 / output 8 instead of 9 / 27) — an
+  **understatement of roughly 3.4–4.5×**. That era and its route are removed; V4-Pro always uses its
+  own rates (`PRICE_ERAS` is back to `legacy` / `v41`). Zero impact on this machine's ledger
+  (0 of 4393 replayed calls used `deepseek-v4-pro`). **Caveat**: pro records ingested while the route
+  was active have their model name rewritten to `deepseek-flash`, so a re-price cannot recover them —
+  only replaying session logs can.
+- **New**: official rules treat **Chinese statutory holidays** as fully off-peak (previously only weekends
+  were excluded, so a holiday weekday was billed 1× too high). 33 built-in days for 2026
+  ([State Council notice](https://www.gov.cn/zhengce/zhengceku/202511/content_7047091.htm)); the config card
+  gains `peakHolidays` (empty = built-in, `none` = disable, or a custom list); **make-up workday weekends
+  stay off-peak**; the phase wording now distinguishes "weekend all off-peak" from "holiday all off-peak".
 
 ### v1.9.1 (2026-09-20)
 

@@ -180,6 +180,8 @@ window.__ModuleLoader__.load({
 .cost-ps.peak .cost-ps-chip { color: #ff9800; }
 .cost-ps.off .cost-ps-chip { color: var(--dsw-alias-state-business-primary, #4176e6); }
 .cost-ps.weekend .cost-ps-chip { color: #34a853; }
+/* 法定节假日：与周末同为「全天谷价」，同一绿色系 */
+.cost-ps.holiday .cost-ps-chip { color: #34a853; }
 .cost-ps-foot { font-size: 11px; color: var(--dsw-alias-label-tertiary, #9ca3af); white-space: nowrap; }
 /* 环形表盘（classic 改造）：24h 中空圆环，蓝=平价、橙=高峰、绿=周末 */
 .cost-ps-ring { flex-direction: column; align-items: center; justify-content: center; gap: 4px; }
@@ -191,6 +193,7 @@ window.__ModuleLoader__.load({
 .cost-ps-rail.peak .cost-ps-word { color: #ff9800; }
 .cost-ps-rail.off .cost-ps-word { color: var(--dsw-alias-state-business-primary, #4176e6); }
 .cost-ps-rail.weekend .cost-ps-word { color: #34a853; }
+.cost-ps-rail.holiday .cost-ps-word { color: #34a853; }
 /* 侧边栏底部(sidebar.footer.action)多插件 UI 兼容：
    DSH 渲染器把该槽锚点设为 display:contents(见 dsh-client-ui-renderer ANCHOR_STYLE)，
    多个插件内容会被并进同一行(如与 linxin666/dsh-web-ui-all 冲突)；改为纵向堆叠即可共存。
@@ -1270,15 +1273,24 @@ window.__ModuleLoader__.load({
 		}
 
 		// ---------- 峰谷计价提示 ----------
-		// 相位助记（与 dsh-cost-meter 一致）：weekend → 「周末全谷」；inPeak → 「峰时」；否则「平价」。
+		// 相位助记（与 dsh-cost-meter 一致）：allDayOff → 「周末/节假日全谷」；inPeak → 「峰时」；否则「平价」。
+		// allDayOff 由后端给出（weekend ∪ 法定节假日）；对老后端缺该字段时回落到 weekend。
+		function offAllDay(p) {
+			return !!(p && (p.allDayOff === true || (p.allDayOff === undefined && p.weekend === true)));
+		}
 		function peakWord(p) {
 			if (!p) return "";
-			if (p.weekend) return "周末全谷";
+			if (offAllDay(p)) return p.holiday ? "节假日全谷" : "周末全谷";
 			return p.inPeak ? "峰时" : "平价";
 		}
 		function peakWordClass(p) {
 			if (!p) return "";
-			return p.weekend ? " weekend" : p.inPeak ? " peak" : " off";
+			if (offAllDay(p)) return p.holiday ? " holiday" : " weekend";
+			return p.inPeak ? " peak" : " off";
+		}
+		/** 全天谷价日的档位文案（周末 / 法定节假日分开说，避免把节假日误称「周末」） */
+		function offPhaseLabel(p) {
+			return p && p.holiday ? "法定节假日全谷价" : "周末全谷价";
 		}
 		// 倒计时文本：向上取整到分钟。与 dsh-cost-meter 一致：{time}后进入高峰/平价。
 		function peakCountdown(p, now) {
@@ -1297,7 +1309,7 @@ window.__ModuleLoader__.load({
 		// 当前相位在轨道上的标记位置：峰=25%、平价=75%；周末中点=50%。
 		function peakMarkerLeft(p) {
 			if (!p) return "50%";
-			if (p.weekend) return "50%";
+			if (offAllDay(p)) return "50%";
 			return p.inPeak ? "25%" : "75%";
 		}
 		// 24h 环形表盘（classic 改造）：中空圆环。底环蓝=平价铺满 24h，高峰窗口叠加橙色弧段，
@@ -1322,8 +1334,8 @@ window.__ModuleLoader__.load({
 				// 平价底环（蓝）
 				e("circle", { cx: CX, cy: CY, r: R, fill: "none", stroke: offC, "stroke-width": SW }),
 			];
-			// 高峰弧（橙）；周末则不画任何峰时弧段
-			if (!p.weekend) {
+			// 高峰弧（橙）；周末 / 法定节假日则不画任何峰时弧段
+			if (!offAllDay(p)) {
 				for (const w of windows) {
 					const a = deg(w.start), b = deg(w.end);
 					const s = polar(a, R), e2 = polar(b, R);
@@ -1338,9 +1350,9 @@ window.__ModuleLoader__.load({
 					children.push(e("text", { x: pt[0], y: pt[1], "text-anchor": "middle", "dominant-baseline": "middle", "font-size": "8.5", fill: dim }, (h < 10 ? "0" : "") + h + ":00"));
 				}
 			}
-			// 当前相位颜色（峰橙 / 平蓝 / 周末绿）—— 同时用于标记点与圆心文案
-			const color = p.weekend ? weekC : p.inPeak ? peakC : offC;
-			const word = p.weekend ? "周末全谷" : p.inPeak ? "高峰时段" : "平价时段";
+			// 当前相位颜色（峰橙 / 平蓝 / 周末·节假日绿）—— 同时用于标记点与圆心文案
+			const color = offAllDay(p) ? weekC : p.inPeak ? peakC : offC;
+			const word = offAllDay(p) ? (p.holiday ? "节假日全谷" : "周末全谷") : p.inPeak ? "高峰时段" : "平价时段";
 			// 当前时刻标记：相位色点（环上，随相位变色 + 白色描边）
 			const m = peakBeijingMinute(now);
 			const tip = polar(m / 1440 * 360, R);
@@ -1379,7 +1391,7 @@ window.__ModuleLoader__.load({
 				e("div", { className: "cost-ps-seg cost-ps-offseg", style: { left: "0%", width: "100%" } }),
 			];
 			// 高峰段（橙）按窗口在 24h 中的比例定位
-			if (!p.weekend) {
+			if (!offAllDay(p)) {
 				for (const w of win) {
 					segs.push(e("div", { className: "cost-ps-seg cost-ps-peakseg", style: { left: (w.start / 24 * 100) + "%", width: ((w.end - w.start) / 24 * 100) + "%" } }));
 				}
@@ -1532,7 +1544,7 @@ window.__ModuleLoader__.load({
 				["时段条样式", cfg.peakStyle === "classic" ? "环形表盘（24h）" : "简洁（单行紧凑）"],
 				["切换提醒", cfg.peakAlertEnabled !== false ? ("提前 " + (cfg.peakAlertAhead == null ? 2 : cfg.peakAlertAhead) + " 分钟 · " + (cfg.peakAlertTarget === "peak" ? "进入峰时" : cfg.peakAlertTarget === "offpeak" ? "进入谷时" : "峰和谷")) : "已关闭"],
 				["系统通知", cfg.peakAlertWebNotify === true ? "已开启" : "未开启"],
-				["当前档位", snap && snap.phase ? (snap.phase.weekend ? "周末全谷价" : snap.phase.inPeak ? "高峰时段" : "平价时段") : "…"],
+				["当前档位", snap && snap.phase ? (offAllDay(snap.phase) ? offPhaseLabel(snap.phase) : snap.phase.inPeak ? "高峰时段" : "平价时段") : "…"],
 			];
 			return e("div", { className: "cost-panel" },
 				e("div", { className: "cost-row" },
@@ -1546,8 +1558,8 @@ window.__ModuleLoader__.load({
 						e("span", { className: "k", style: { minWidth: "90px" } }, r[0]),
 						e("span", { className: "v" }, r[1])))),
 				e("div", { className: "cost-hint", style: { marginTop: "6px" } },
-					"峰时段（北京时间）：" + (snap ? snap.peakWindows : "周一至周五 9:00-12:00 · 14:00-18:00（周末全天闲时）") +
-					"。当前：" + (snap && snap.phase ? (snap.phase.weekend ? "周末全谷价" : snap.phase.inPeak ? "高峰时段" : "平价时段") : "…")),
+					"峰时段（北京时间）：" + (snap ? snap.peakWindows : "周一至周五 9:00-12:00 · 14:00-18:00（周末与法定节假日全天闲时）") +
+					"。当前：" + (snap && snap.phase ? (offAllDay(snap.phase) ? offPhaseLabel(snap.phase) : snap.phase.inPeak ? "高峰时段" : "平价时段") : "…")),
 				noticeOn ? e("div", { style: { marginTop: "8px" } }, e(PeakStrip, { snap, style: cfg.peakStyle || "compact", wide: true, now, ringSize: 150 }))
 					: e("p", { className: "cost-hint", style: { marginTop: "8px" } }, "提示已隐藏：需启用峰谷计价并开启「峰时高价时段显著提示」。"),
 				e(SyncReadonlyCard, { sync: props.sync }));
@@ -1728,6 +1740,7 @@ window.__ModuleLoader__.load({
 							alert: { enabled: v.peakAlertEnabled, ahead: v.peakAlertAhead, target: v.peakAlertTarget, position: v.peakAlertPosition, webNotify: v.peakAlertWebNotify },
 						}));
 						say("peak", "已保存");
+						loadPeak();
 					} else say("peak", "保存失败");
 				}).catch(err => { setBusy(""); say("peak", "保存失败：" + String(err && err.message ? err.message : err)); });
 			}
@@ -1911,11 +1924,18 @@ window.__ModuleLoader__.load({
 
 			// ---------- ② 峰谷计价与提示 ----------
 			const pd = peakDraft || {};
+			// 法定节假日（官方把节假日全天计入闲时）：回显当前生效来源与条数
+			const hol = (peakSnap && peakSnap.holidays) || null;
+			const holHint = !hol ? "法定节假日：…"
+				: hol.disabled ? "法定节假日：已停用（只按周末判定高峰）"
+					: "法定节假日：" + hol.count + " 天" + (hol.builtin ? "（内置表）" : "（自定义）")
+						+ (hol.count ? " · 例：" + hol.dates.slice(0, 3).join(" ") + (hol.count > 3 ? " …" : "") : "")
+						+ (hol.invalid && hol.invalid.length ? " · 已忽略无法识别：" + hol.invalid.join(" ") : "");
 			// 预览用快照：把草稿覆盖到服务端快照上，从而「改完即可预览、点保存才落盘」
 			const peakPreviewSnap = peakSnap ? Object.assign({}, peakSnap, { config: pd }) : null;
 			const noticeOn = peakSnap && peakSnap.notice !== false && pd.peakNotice !== false;
 			const peakBody = e("div", null,
-				e("div", { className: "cost-hint" }, "官方只有两档：高峰（工作日 9:00-12:00 / 14:00-18:00）与闲时（高峰 × 0.5，含周末全天）。此处只影响界面提示与档位判定：改价请用「计价与价格目录 → 官方价格同步」。"),
+				e("div", { className: "cost-hint" }, "官方只有两档：高峰（工作日 9:00-12:00 / 14:00-18:00，不含法定节假日）与闲时（高峰 × 0.5，含周末与法定节假日全天）。此处只影响界面提示与档位判定：改价请用「计价与价格目录 → 官方价格同步」。"),
 				e("div", { style: { marginTop: "8px", display: "grid", gap: "6px" } },
 					e("label", { className: "cost-row", style: { gap: "8px" } },
 						e("input", { type: "checkbox", checked: pd.peakEnabled !== false, onChange: ev => setPeak("peakEnabled", ev.target.checked) }),
@@ -1923,6 +1943,19 @@ window.__ModuleLoader__.load({
 					e("label", { className: "cost-row", style: { gap: "8px" } },
 						e("input", { type: "checkbox", checked: pd.peakNotice !== false, onChange: ev => setPeak("peakNotice", ev.target.checked) }),
 						e("span", null, "峰时高价时段显著提示（时段条显示）")),
+					e("div", { className: "cost-row", style: { gap: "8px", flexWrap: "wrap" } },
+						e("span", null, "法定节假日（全天闲时）"),
+						e("input", {
+							className: "cost-input",
+							style: { flex: "1 1 280px", minWidth: "220px" },
+							type: "text",
+							placeholder: "留空 = 内置表；填 none = 停用；或写 2027-01-01 2027-02-05 …",
+							value: pd.peakHolidays == null ? "" : String(pd.peakHolidays),
+							onChange: ev => setPeak("peakHolidays", ev.target.value),
+						}),
+						e("button", { className: "cost-btn", onClick: () => setPeak("peakHolidays", "") }, "恢复内置"),
+						e("button", { className: "cost-btn", onClick: () => setPeak("peakHolidays", "none") }, "停用")),
+					e("div", { className: "cost-hint" }, holHint + "（官方口径：周一至周五不含法定节假日才算高峰；调休补班的周末不计高峰）"),
 					e("div", { className: "cost-row", style: { gap: "8px" } },
 						e("span", null, "时段条样式"),
 						e("select", { className: "cost-select", value: pd.peakStyle === "classic" ? "classic" : "compact", onChange: ev => setPeak("peakStyle", ev.target.value) },
@@ -1966,8 +1999,8 @@ window.__ModuleLoader__.load({
 						e("button", { className: "cost-btn cost-btn-primary", onClick: savePeak, disabled: busy === "peak" }, "保存"),
 						msg.peak ? e("span", { className: "cost-hint" }, msg.peak) : null),
 					e("div", { className: "cost-hint", style: { marginTop: "6px" } },
-						"峰时段（北京时间）：" + (peakSnap ? peakSnap.peakWindows : "周一至周五 9:00-12:00 · 14:00-18:00（周末全天闲时）") +
-						"。当前：" + (peakPreviewSnap && peakPreviewSnap.phase ? (peakPreviewSnap.phase.weekend ? "周末全谷价" : peakPreviewSnap.phase.inPeak ? "高峰时段" : "平价时段") : "…")),
+						"峰时段（北京时间）：" + (peakSnap ? peakSnap.peakWindows : "周一至周五 9:00-12:00 · 14:00-18:00（周末与法定节假日全天闲时）") +
+						"。当前：" + (peakPreviewSnap && peakPreviewSnap.phase ? (offAllDay(peakPreviewSnap.phase) ? offPhaseLabel(peakPreviewSnap.phase) : peakPreviewSnap.phase.inPeak ? "高峰时段" : "平价时段") : "…")),
 					noticeOn ? e("div", { style: { marginTop: "8px" } }, e(PeakStrip, { snap: peakPreviewSnap, style: pd.peakStyle || "compact", wide: true, now, ringSize: 150 }))
 						: e("p", { className: "cost-hint", style: { marginTop: "8px" } }, "提示已隐藏：需启用峰谷计价并开启「峰时高价时段显著提示」。")));
 
@@ -2164,7 +2197,7 @@ window.__ModuleLoader__.load({
 				topStrip,
 				!st ? e("div", { className: "cost-hint", style: { margin: "4px 0 8px" } }, "加载状态…") : null,
 				cfgSection(Object.assign({ key: "s1" }, secProps("cloud", "多机汇总（云端同步）", st && st.enabled ? ("已开启 · " + (st.deviceName || "未命名设备")) : "未开启")), cloudBody),
-				cfgSection(Object.assign({ key: "s2" }, secProps("peak", "峰谷计价与提示", (pd.peakEnabled !== false ? "已启用" : "已停用") + " · " + (pd.peakStyle === "classic" ? "环形表盘" : "简洁样式"))), peakBody),
+				cfgSection(Object.assign({ key: "s2" }, secProps("peak", "峰谷计价与提示", (pd.peakEnabled !== false ? "已启用" : "已停用") + " · " + (pd.peakStyle === "classic" ? "环形表盘" : "简洁样式") + (hol ? (hol.disabled ? " · 节假日停用" : " · 节假日 " + hol.count + " 天") : ""))), peakBody),
 				cfgSection(Object.assign({ key: "s3" }, secProps("sub", "订阅套餐与配额", (volcHasSecret ? "火山凭据已配" : "火山凭据未配") + " · 归类覆盖 " + bill.planRows.length + " 条")), subBody),
 				cfgSection(Object.assign({ key: "s4" }, secProps("bill", "计价与价格目录", (bill.showTotalWithPlan ? "含 Plan 总额" : "仅按量") + " · 覆盖价 " + bill.priceRows.length + " 条 · " + (cat ? (cat.providers || []).length + " 家目录" : "无目录"))), billBody),
 				cfgSection(Object.assign({ key: "s5" }, secProps("imp", "历史导入", (impDraft.autoImport !== false ? "开机自动" : "手动") + " · 已导入 " + fmtInt((imp && imp.totalImported) || 0) + " 条")), impBody),
@@ -2576,7 +2609,7 @@ window.__ModuleLoader__.load({
 
 			return e("div", { className: "cost-wrap" },
 				e("div", { className: "cost-h1" }, pluginIcon(18), "花费统计"),
-				filterRow(days, setDays, onExport, onRefresh, msg, busy, dash ? dash.peakWindows : "周一至周五 9:00-12:00 · 14:00-18:00（周末全天闲时）", viewCtl, openVolc, planTotal, setPlanTotal),
+				filterRow(days, setDays, onExport, onRefresh, msg, busy, dash ? dash.peakWindows : "周一至周五 9:00-12:00 · 14:00-18:00（周末与法定节假日全天闲时）", viewCtl, openVolc, planTotal, setPlanTotal),
 				!cloudAvailable
 					? e("div", { className: "cost-hint", style: { marginTop: "4px" } },
 						"仅显示本机数据。在多台电脑/多个 Agent 之间汇总：到「设置 → 插件 → 插件配置 → 花费统计」填写云端服务地址与令牌。")

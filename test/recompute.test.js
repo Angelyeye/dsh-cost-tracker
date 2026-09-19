@@ -12,8 +12,8 @@ import { join } from 'node:path'
 // 北京时间辅助
 function bj(y, mo, d, h, mi) { return Date.UTC(y, mo - 1, d, h - 8, mi) }
 const LEGACY_TS = bj(2026, 9, 10, 11, 0)   // Flash 调价前（高峰，V4-Pro 旧牌价）
-const MID_TS = bj(2026, 9, 10, 12, 30)     // Flash 调价后、V4-Pro 路由前（闲时）
-const ROUTE_TS = bj(2026, 9, 15, 15, 0)    // V4-Pro 路由后（高峰）
+const MID_TS = bj(2026, 9, 10, 12, 30)     // Flash 调价后（闲时，V4-Pro 仍自有牌价）
+const ROUTE_TS = bj(2026, 9, 15, 15, 0)    // v1.9.0/1.9.1 曾当作「路由后」（高峰）——现为 V4-Pro 自有牌价
 const FLASH_TS = bj(2026, 9, 15, 12, 30)   // 现役名 deepseek-flash（闲时，误标估算）
 
 let failures = 0
@@ -81,14 +81,15 @@ ok(dry.ok === true && dry.applied === false, '试算: 未落盘')
 ok(dry.since === 0, '试算: 默认全时段扫描（since=0，不漏更早时代）')
 ok(dry.era === null, '试算: 全时段扫描时 era 为 null（不误报单一时代）')
 ok(dry.scanned === 5, '试算: 全时段扫描覆盖全部 5 条记录')
-ok(dry.changed === 3, '试算: 3 条需修正（路由后 V4-Pro + 视觉版 + 误标估算的 deepseek-flash）')
+ok(dry.changed === 2, '试算: 2 条需修正（视觉版 + 误标估算的 deepseek-flash）')
 ok(dry.estimatedFlips === 1, '试算: 1 条仅订正「估算」标记')
 ok(readFileSync(storeFile, 'utf8') === before, '试算: 磁盘内容未被改动')
-// 全时段试算：合计含未改动的两条（旧价 ¥1.068 与 ¥0.534），可改动的三条合计 ¥0.622
-const UNCHANGED = OLD_PRO_PEAK_BEFORE + OLD_PRO_OFF
-approx(dry.oldCost, 1.7972 + UNCHANGED, '试算: 原合计 ¥3.3992（含两条不需改动）')
-approx(dry.newCost, 0.622 + UNCHANGED, '试算: 新合计 ¥2.224（金额变化仅 ¥-1.1752）')
-approx(dry.delta, -1.1752, '试算: 差额 ¥-1.1752（全部来自视觉版与误标估算记录）')
+// 全时段试算：三条 V4-Pro 记录按自有牌价重算后**金额不变**（1.068 / 0.534 / 1.068），
+// 可改动的两条是视觉版（0.356 → 0.2488）与误标估算的 flash（0.3732 → 0.1244）。
+const UNCHANGED = OLD_PRO_PEAK_BEFORE + OLD_PRO_OFF + OLD_PRO_PEAK_BEFORE
+approx(dry.oldCost, OLD_VISION_PEAK + WRONG_FLASH_OFF + UNCHANGED, '试算: 原合计 ¥3.3992（含三条不需改动的 V4-Pro）')
+approx(dry.newCost, 0.2488 + V41_FLASH_OFF + UNCHANGED, '试算: 新合计 ¥3.0432（仅两条 Flash 档记录下调）')
+approx(dry.delta, -0.356, '试算: 差额 ¥-0.356（全部来自视觉版与误标估算记录）')
 ok(dry.byModel.length >= 2, '试算: 按模型给出明细')
 
 // ---------- 2. 落盘 ----------
@@ -108,12 +109,12 @@ approx(mid.cost, OLD_PRO_OFF, '落盘: V4-Pro 路由前费用不变（¥0.534，
 ok(mid.model === 'deepseek-v4-pro', '落盘: V4-Pro 路由前模型名不变')
 ok(mid.period === 'off-peak', '落盘: V4-Pro 路由前档位不变')
 
-// 路由时刻的两条记录改写后模型名相同，按原始入库顺序区分（索引 2 = V4-Pro，索引 3 = 视觉版）
+// 09-15 两条记录：V4-Pro 维持自有牌价（金额与模型名都不再被改写），视觉版仍路由到 Flash
 const routed = after.filter(r => r.ts === ROUTE_TS)
-ok(routed.length === 2, '落盘: 路由时刻的两条记录都在')
+ok(routed.length === 2, '落盘: 同一时刻的两条记录都在')
 const post1 = routed[0]
-approx(post1.cost, 0.2488, '落盘: 路由后 V4-Pro 改按 Flash 计费（¥0.2488）')
-ok(post1.model === 'deepseek-flash', '落盘: 路由后模型名改写为官方现役名 deepseek-flash')
+approx(post1.cost, OLD_PRO_PEAK_BEFORE, '落盘: V4-Pro 维持自有牌价（¥1.068，不再按 Flash 折算）')
+ok(post1.model === 'deepseek-v4-pro', '落盘: V4-Pro 模型名保持自有名（官方已撤销下线计划）')
 ok(post1.period === 'peak', '落盘: 档位仍为高峰')
 
 const post2 = routed[1]
@@ -139,21 +140,23 @@ ok(wider.era === 'legacy', 'since: 起点落在旧价时代时 era = legacy')
 
 // ---------- 5. cost_prices 已按时代渲染 ----------
 const pv = await registered.get('cost_prices').execute({})
-ok(Array.isArray(pv.eras) && pv.eras.length === 3, 'prices: 返回三个价格时代（legacy / v41 / v41pro）')
-const { eraAt, exactModelsAt, V41_PRO_ROUTE_AT } = await import('../pricing.js')
+ok(Array.isArray(pv.eras) && pv.eras.length === 2, 'prices: 返回两个价格时代（legacy / v41）')
+const { eraAt, exactModelsAt, V41_EFFECTIVE_AT } = await import('../pricing.js')
 const nowEra = eraAt(Date.now())
 ok(pv.era === nowEra.id, 'prices: 当前生效时代与时钟一致（' + nowEra.id + '）')
 ok(pv.exact === exactModelsAt(Date.now()), 'prices: exact 为当前时代的单价表')
-ok(pv.v41ProRouteAt === V41_PRO_ROUTE_AT, 'prices: 暴露 V4-Pro 路由时刻')
-ok(pv.eras[2].routes['deepseek-v4-pro'] === 'deepseek-flash', 'prices: 暴露 V4-Pro 路由规则（→ deepseek-flash）')
-ok(pv.eras[1].routes['deepseek-v4-pro'] === undefined, 'prices: v41 时代不含 V4-Pro 路由（路由自 v41pro 起）')
+ok(pv.v41EffectiveAt === V41_EFFECTIVE_AT, 'prices: 暴露 V4.1 Flash 调价时刻')
+// v1.9.2：官方撤销 V4-Pro 下线计划 → 不再有 pro 反向路由，任何时代都不得出现
+ok(pv.eras.every((e) => !(e.routes || {})['deepseek-v4-pro']), 'prices: 任何时代都不含 V4-Pro 反向路由')
+ok(pv.eras[1].models['deepseek-v4-pro'].input === 9.0, 'prices: v41 时代保留 V4-Pro 自有牌价 9.0')
 const text = registered.get('cost_prices').output.render({}, pv)[0].text
 ok(text.indexOf('deepseek-flash') > -1, 'prices: 渲染文本包含官方现役名 deepseek-flash')
-ok(text.indexOf('路由：deepseek-v4-pro') > -1, 'prices: 渲染文本包含路由说明')
+ok(text.indexOf('deepseek-v4-pro 维持 V4-Pro 自有牌价') > -1, 'prices: 渲染文本说明 V4-Pro 不路由')
+ok(text.indexOf('路由：deepseek-v4-pro') < 0, 'prices: 渲染文本不再出现 V4-Pro 路由说明')
+ok(text.indexOf('法定节假日') > -1, 'prices: 渲染文本说明法定节假日口径')
 ok(text.indexOf('2026-08 价') > -1 && text.indexOf('V4.1 Flash 价') > -1, 'prices: 渲染文本列出价格时代')
 ok(text.indexOf('era=') > -1, 'prices: 渲染文本标出当前 era')
 ok(text.indexOf('当前生效：') > -1, 'prices: 渲染文本标出当前生效版本')
-ok(text.indexOf('V4-Pro 路由生效') > -1, 'prices: 渲染文本标出 V4-Pro 路由时刻')
 ok(text.indexOf('0.04') > -1 && text.indexOf('（未命中）2') > -1 && text.indexOf('输出 8') > -1, 'prices: 渲染文本包含 V4.1 Flash 新价')
 
 rmSync(home, { recursive: true, force: true })
