@@ -180,6 +180,61 @@ export function mergeDash(local, cloud) {
 }
 
 // ------------------------------------------------------------
+// 「Token 用量统计」热力图的跨视图合并
+//
+// 形状与宿主 buildUsageHeat() 的返回值一致：
+//   { ok, days: [{date, input, output, cacheRead, cacheWrite, calls, cost, tokens}],
+//     total: {tokens, input, cache, output, calls, cost} }
+//
+// 两条口径约定（否则合并后屏内自相矛盾）：
+//   · 按天 tokens 一律重算为 input+output+cacheRead+cacheWrite —— 本地 buildUsageHeat
+//     就是这个口径；云端 byDay 的 tokens 含 reasoning，直接相加会与本地不同源。
+//   · total 用两份数据的**全时段** total 相加，而不是对 days 求和：本地 days 只保留最近
+//     27 周，云端 days 覆盖全部历史，只有各自的 total 才是真正的「累计」。
+// ------------------------------------------------------------
+export function mergeUsageHeat(local, cloud) {
+	if (!cloud || !Array.isArray(cloud.days)) return local || null;
+	if (!local || !Array.isArray(local.days)) return cloud;
+	const per = new Map();
+	const add = (d) => {
+		if (!d || !d.date) return;
+		const cur = per.get(d.date) || { date: d.date, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, calls: 0, cost: 0, tokens: 0 };
+		cur.input += d.input || 0;
+		cur.output += d.output || 0;
+		cur.cacheRead += d.cacheRead || 0;
+		cur.cacheWrite += d.cacheWrite || 0;
+		cur.calls += d.calls || 0;
+		cur.cost += d.cost || 0;
+		cur.tokens = cur.input + cur.output + cur.cacheRead + cur.cacheWrite;
+		per.set(d.date, cur);
+	};
+	for (const d of local.days) add(d);
+	for (const d of cloud.days) add(d);
+	const days = Array.from(per.values())
+		.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
+		.map((d) => Object.assign({}, d, { cost: r4(d.cost) }));
+	const lt = local.total || {};
+	const ct = cloud.total || {};
+	const n = (v) => Number(v) || 0;
+	return {
+		ok: true,
+		source: "merged",
+		days,
+		total: {
+			tokens: n(lt.tokens) + n(ct.tokens),
+			input: n(lt.input) + n(ct.input),
+			cache: n(lt.cache) + n(ct.cache),
+			output: n(lt.output) + n(ct.output),
+			calls: n(lt.calls) + n(ct.calls),
+			cost: r4(n(lt.cost) + n(ct.cost)),
+		},
+		asOf: cloud.asOf || 0,
+	};
+}
+
+function r4(x) { return Math.round((Number(x) || 0) * 10000) / 10000; }
+
+// ------------------------------------------------------------
 // 浏览器 bundle 注册（client.js 通过 require("./view") 取用）
 // ------------------------------------------------------------
 /* istanbul ignore next */
@@ -187,7 +242,7 @@ if (typeof window !== "undefined" && window.__ModuleLoader__ && typeof window.__
 	window.__ModuleLoader__.load({
 		id: "@angelyeye/dsh-cost-tracker/view",
 		factory: () => ({
-			BOARD_VIEWS, BOARD_DIMS, zeroSlice, addSlice, r2, normalizeCloudDash, mergeDash, cloudSlices,
+			BOARD_VIEWS, BOARD_DIMS, zeroSlice, addSlice, r2, normalizeCloudDash, mergeDash, cloudSlices, mergeUsageHeat,
 		}),
 	});
 }

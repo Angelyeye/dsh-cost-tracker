@@ -45,6 +45,20 @@ check('设备维度清单同样走 /api/v1/devices',
 check('不再用设备令牌去读管理接口 /api/admin',
   !/cloudConfig\.cloudUrl\s*\+\s*'\/api\/admin\//.test(index),
   '管理接口只认管理员会话 cookie，设备令牌读它必然 401')
+// ---- 「Token 用量统计」热力图的云端按天明细（v1.8.12） ----
+// 热力图此前恒为本机（数据源是宿主的 usage → buildUsageHeat，纯本地），
+// 于是「本机+云端」下热力图说 98M、上方卡片说 955M，屏内自相矛盾。
+check('热力图云端明细走 plugin-view（只有它有 byDay 的 token 类型拆分）',
+  /query\.route === 'usage'/.test(index) && /endpoint = 'plugin-view'/.test(index))
+check('热力图固定 range=all（全时段累计口径，与页面区间选择无关）',
+  /qs\.set\('range', 'all'\)/.test(index) && /qs\.delete\('days'\)/.test(index))
+check('union 并集对 overview（卡片）与 usage（热力图）同时生效',
+  /unionParts && \(query\.route === 'overview' \|\| query\.route === 'usage'\)/.test(index))
+check('云端按天数据归一成热力图形状且 tokens 按本地口径重算',
+  /function cloudUsageHeat/.test(index) && /input \+ output \+ cacheRead \+ cacheWrite/.test(index))
+check('cost_stats 兼容 overview.summary 与 plugin-view 顶层两种形状',
+  /const s = \(c && c\.summary\) \? c\.summary : \(c \|\| \{\}\)/.test(index),
+  '1.8.11 只读 c.summary，云端返回 plugin-view 时必然抛 realCost 取值异常')
 
 console.log('[2] 云端版本过旧的提示')
 check('404 时给出可操作的升级提示', /云端版本过旧/.test(index) && /CLOUD_TOO_OLD/.test(index))

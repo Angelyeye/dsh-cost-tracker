@@ -2,6 +2,37 @@
 
 本文件用中文记录 dsh-cost-tracker 的版本变更。
 
+## v1.8.12(2026-09-19)
+
+**修复：①「Token 用量统计」热力图不跟随三态视图（本机+云端下屏内自相矛盾）② `cost_stats scope=cloud|both` 崩溃**
+
+- **① 热力图此前恒为本机**：它的数据源是宿主的 `usage` 路由 → `buildUsageHeat()`，只遍历本地
+  store 的 records/rollups，**没有任何云端输入**；而同一屏的卡片走 `viewDash`（本机+云端合并）。
+  于是切到「本机+云端」时，热力图说「累计 98.4M · 536 次调用」（纯本机），上方卡片说 955M ——
+  同一屏两套口径，用户第一反应就是"统计显示有问题"。
+  - 宿主新增 `route=usage` 取数：走云端 `/api/v1/plugin-view`（**只有它的 byDay 带 token 类型
+    拆分**）、固定 `range=all`（热力图是全时段累计口径，与页面区间选择无关）、
+    「本机+云端」沿用与卡片相同的 `union` 并集（其他整机 ∪ 本机其它 agent），
+    并归一成与本地 `buildUsageHeat` 同形的 `{days:[{date,input,output,cacheRead,cacheWrite,...}], total}`。
+  - 归一化时两处口径对齐：**tokens 一律按 `input+output+cacheRead+cacheWrite` 重算**（云端
+    byDay 的 tokens 含 `reasoning`，直接相加会比两侧之和大一截）；**丢掉云端连续日期轴里的
+    补零日**（本地只返回有数据的日期，热力图自己会按 26 周补格）。
+  - 客户端新增 `mergeUsageHeat`（`view.js` 与 bundle 内联实现各一份，与 `mergeDash` 同款约定），
+    热力图改为消费 `viewUsage`：本机 / 本机+云端 / 仅云端；云端明细取不到时退回本机，
+    并在卡片标题右侧标注口径（「本机 + 云端（不重复计数）」/「仅云端」），避免再出现无标注的纯本机数字。
+  - **云端前置依赖**：`dsh-cost-cloud ≥ v1.3.2`（`plugin-view` 的 `byDay` 才带
+    input/output/cacheRead/cacheWrite）。旧云端下热力图自动退回本机，卡片与其它面板不受影响。
+- **② `cost_stats scope=cloud|both` 必崩**：`Cannot read properties of undefined (reading 'realCost')`。
+  根因是云端响应形状漂移 —— `/api/v1/overview` 的金额摊在 `summary.{realCost,subEquivalent,…}`，
+  而宿主在云端支持 `devicePluginView` 时会**优先用 `/api/v1/plugin-view`**，后者**没有 `summary`**
+  （字段直接摊在顶层）。工具只读了 `c.summary`，于是 README 明确文档化的 `scope=both` 一直不可用。
+  现两种形状都兼容。
+- **测试**：`view.test.js` 新增第 11 节（合并的相加不变量、tokens 重算、容错分支）；
+  `cloud-read.test.js` 新增 4 条路径契约（usage 走 plugin-view、固定 range=all、
+  union 对 overview/usage 同时生效、cost_stats 兼容两种形状）；`client-render.test.js`
+  新增第 7 节（三态下热力图的累计与按天数字，含"云端独有日期必须进入热力图"）；
+  `cloud-view-e2e.test.js` 新增真实云端 payload → `cloudUsageHeat` → `mergeUsageHeat` 的端到端不重不漏断言。
+
 ## v1.8.11(2026-09-17)
 
 **新增：启动时检测「另一个 dsh 实例正在用同一份记录文件」并直接点名**

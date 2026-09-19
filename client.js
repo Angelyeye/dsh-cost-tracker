@@ -660,6 +660,49 @@ window.__ModuleLoader__.load({
 				asOf: cloud.asOf || 0,
 			});
 		}
+		// 「Token 用量统计」热力图的跨视图合并（与 view.js 的 mergeUsageHeat 逐行等价，
+		// 浏览器里 require("./view") 取不到时必须自带一份，否则云端用量永远并不进来）
+		function vR4(x) { return Math.round((Number(x) || 0) * 10000) / 10000; }
+		function vMergeUsageHeat(local, cloud) {
+			if (!cloud || !Array.isArray(cloud.days)) return local || null;
+			if (!local || !Array.isArray(local.days)) return cloud;
+			const per = new Map();
+			const add = (d) => {
+				if (!d || !d.date) return;
+				const cur = per.get(d.date) || { date: d.date, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, calls: 0, cost: 0, tokens: 0 };
+				cur.input += d.input || 0;
+				cur.output += d.output || 0;
+				cur.cacheRead += d.cacheRead || 0;
+				cur.cacheWrite += d.cacheWrite || 0;
+				cur.calls += d.calls || 0;
+				cur.cost += d.cost || 0;
+				// tokens 一律按本地口径重算：云端 byDay 的 tokens 含 reasoning，直接相加会不同源
+				cur.tokens = cur.input + cur.output + cur.cacheRead + cur.cacheWrite;
+				per.set(d.date, cur);
+			};
+			for (const d of local.days) add(d);
+			for (const d of cloud.days) add(d);
+			const days = Array.from(per.values())
+				.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
+				.map((d) => Object.assign({}, d, { cost: vR4(d.cost) }));
+			const lt = local.total || {};
+			const ct = cloud.total || {};
+			const n = (v) => Number(v) || 0;
+			return {
+				ok: true,
+				source: "merged",
+				days,
+				total: {
+					tokens: n(lt.tokens) + n(ct.tokens),
+					input: n(lt.input) + n(ct.input),
+					cache: n(lt.cache) + n(ct.cache),
+					output: n(lt.output) + n(ct.output),
+					calls: n(lt.calls) + n(ct.calls),
+					cost: vR4(n(lt.cost) + n(ct.cost)),
+				},
+				asOf: cloud.asOf || 0,
+			};
+		}
 		const VIEW = requireLocal("./view", {
 			BOARD_VIEWS: [
 				{ id: "local", label: "本机" },
@@ -678,11 +721,13 @@ window.__ModuleLoader__.load({
 			r2: vR2,
 			normalizeCloudDash: vNormalizeCloudDash,
 			mergeDash: vMergeDash,
+			mergeUsageHeat: vMergeUsageHeat,
 		});
 		const BOARD_VIEWS = VIEW.BOARD_VIEWS;
 		const BOARD_DIMS = VIEW.BOARD_DIMS;
 		const normalizeCloudDash = VIEW.normalizeCloudDash;
 		const mergeDash = VIEW.mergeDash;
+		const mergeUsageHeat = VIEW.mergeUsageHeat || vMergeUsageHeat;
 
 		function filterRow(days, setDays, onExport, onRefresh, msg, busy, peakWindows, viewCtl) {
 			const views = viewCtl && viewCtl.available ? BOARD_VIEWS : [BOARD_VIEWS[0]];
@@ -1523,6 +1568,8 @@ window.__ModuleLoader__.load({
 			const [cloudDash, setCloudDash] = useState(null);
 			const [cloudErr, setCloudErr] = useState("");
 			const [cloudMatrix, setCloudMatrix] = useState(null);
+			const [cloudUsage, setCloudUsage] = useState(null);
+			const [cloudUsageErr, setCloudUsageErr] = useState("");
 			const [view, setViewState] = useState(() => {
 				try { return localStorage.getItem("dsh-cost-tracker-view") || "local" } catch (e) { return "local" }
 			});
@@ -1577,6 +1624,20 @@ window.__ModuleLoader__.load({
 					if (v && v.ok !== false) setCloudMatrix(v); else setCloudMatrix(null);
 				}).catch(() => setCloudMatrix(null));
 			}
+			/**
+			 * 云端「按天用量明细」（热力图数据源）。
+			 *  · view=local+cloud → cloud-rest：其他整机 ∪ 本机其它 agent（与卡片同一并集口径）
+			 *  · view=cloud       → 全网
+			 * 宿主把它归一成与本地 buildUsageHeat 同形的 {days:[{date,input,output,cacheRead,cacheWrite,...}], total}，
+			 * 客户端再按视图合并，热力图与上方卡片口径才能一致（此前热力图恒为本机，屏内自相矛盾）。
+			 */
+			function loadCloudUsage(mode) {
+				if (!mode || mode === "local") { setCloudUsage(null); setCloudUsageErr(""); return; }
+				apiCall("cloud", { route: "usage", view: mode === "local+cloud" ? "cloud-rest" : "cloud" }).then(v => {
+					if (v && v.ok !== false && Array.isArray(v.days)) { setCloudUsage(v); setCloudUsageErr(""); }
+					else { setCloudUsage(null); setCloudUsageErr((v && v.error) || "云端用量明细不可用"); }
+				}).catch(err => { setCloudUsage(null); setCloudUsageErr(String(err && err.message ? err.message : err)); });
+			}
 			function loadKimi(force) {
 				apiCall("kimi-usage", { force: !!force }).then(v => setKimi(v)).catch(() => {});
 			}
@@ -1604,13 +1665,14 @@ window.__ModuleLoader__.load({
 					else setUsageErr(v && v.error ? String(v.error) : "数据加载失败");
 				}).catch(err => setUsageErr(String(err && err.message ? err.message : err)));
 				apiCall("kimi-usage", { force: false }).then(v => setKimi(v)).catch(() => {});
+				loadCloudUsage(view);
 				apiCall("balance", {}).then(v => { setBalance(v); setBusy(false); }).catch(() => setBusy(false));
 			}
 
 			useEffect(() => { loadDash(days); }, [days]);
 			useEffect(() => { loadKimi(false); loadBalance(""); loadUsage(); loadSync(); }, []);
-			// 视图切换：local+cloud 需要额外拉「排除本机」的云端聚合与矩阵
-			useEffect(() => { loadCloud(days, view); loadCloudMatrix(days); }, [view, days]);
+			// 视图切换：local+cloud 需要额外拉「排除本机」的云端聚合、矩阵与按天用量明细
+			useEffect(() => { loadCloud(days, view); loadCloudMatrix(days); loadCloudUsage(view); }, [view, days]);
 			useEffect(() => {
 				const id = setInterval(() => setNow(Date.now()), 30000);
 				return () => clearInterval(id);
@@ -1623,6 +1685,18 @@ window.__ModuleLoader__.load({
 				: view === "cloud"
 					? cloudNorm
 					: (cloudNorm ? mergeDash(dash, cloudNorm) : dash);
+			// 热力图同样跟随三态视图：本机 / 本机+云端 / 仅云端。
+			// 云端明细取不到时退回本机，并在标题右侧注明口径，避免与上方卡片数字打架。
+			const viewUsage = view === "local"
+				? usage
+				: view === "cloud"
+					? cloudUsage
+					: (usage && cloudUsage ? mergeUsageHeat(usage, cloudUsage) : (cloudUsage || usage));
+			const usageScope = view === "local"
+				? "本机"
+				: view === "cloud"
+					? ("仅云端" + (cloudUsageErr ? "（" + cloudUsageErr + "）" : ""))
+					: (cloudUsage ? "本机 + 云端（不重复计数）" : "本机（云端明细加载中或不可用）");
 			const cloudAvailable = !!(sync && sync.enabled && sync.hasToken);
 			const viewCtl = {
 				view, setView, dimension, setDimension,
@@ -1646,7 +1720,7 @@ window.__ModuleLoader__.load({
 				sync && sync.enabled && sync.pending > 0 && view !== "local"
 					? e("div", { className: "cost-cloudnote" },
 						"本机还有 " + sync.pending + " 条尚未同步，云端数字会偏小 —— ",
-						e("button", { className: "cost-btn", onClick: () => { apiCall("sync-now", {}).then(() => { loadSync(); loadCloud(days, view); loadCloudMatrix(days); }); } }, "立即同步"))
+						e("button", { className: "cost-btn", onClick: () => { apiCall("sync-now", {}).then(() => { loadSync(); loadCloud(days, view); loadCloudMatrix(days); loadCloudUsage(view); }); } }, "立即同步"))
 					: null,
 				cloudErr && view !== "local"
 					? e("div", { className: "cost-err", style: { marginTop: "6px" } }, "云端数据不可用（已显示本机数据）：" + cloudErr)
@@ -1660,9 +1734,12 @@ window.__ModuleLoader__.load({
 				view !== "local" && dimension !== "total" && viewDash ? dimensionPanel(viewDash, dimension, cloudMatrix, loadingCloud => loadingCloud) : null,
 				viewDash ? mainPanel(viewDash, tab, setTab, scheme, setScheme) : null,
 				e("div", { className: "cost-panel" },
-					e("div", { className: "cost-row" }, e("span", { className: "cost-panel-title" }, "Token 用量统计")),
+					e("div", { className: "cost-row" },
+						e("span", { className: "cost-panel-title" }, "Token 用量统计"),
+						e("span", { className: "cost-spacer" }),
+						e("span", { className: "cost-hint" }, usageScope)),
 					e("div", { style: { marginTop: "8px" } },
-						usage ? e(UsageHeatmap, { data: usage })
+						viewUsage ? e(UsageHeatmap, { data: viewUsage })
 							: usageErr ? e("div", { className: "cost-err" }, "加载失败：" + usageErr)
 							: e("div", { className: "cost-hint" }, "加载中…"))),
 				subPanel(kimi, viewDash, now, () => loadKimi(true)),

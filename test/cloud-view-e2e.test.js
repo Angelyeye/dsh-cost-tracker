@@ -6,7 +6,8 @@
 // 不能让发布流水线因为缺一个可选仓库而失败。
 import assert from 'node:assert/strict'
 
-import { normalizeCloudDash } from '../view.js'
+import { normalizeCloudDash, mergeUsageHeat } from '../view.js'
+import { cloudUsageHeat } from '../index.js'
 
 let cloud = null
 let helpers = null
@@ -93,6 +94,67 @@ if (!cloud) {
       assert.equal(body.all.calls, 1, 'union 不得重复计数，实际 ' + body.all.calls + ' 次')
       assert.ok(Math.abs(body.summary.realCost - 0.5) < 1e-9, 'union summary.realCost=' + body.summary.realCost)
       assert.ok(Math.abs(body.summary.realCalls - 1) < 1e-9, 'union summary.realCalls=' + body.summary.realCalls)
+    } finally {
+      await new Promise((r) => server.close(r))
+      try { rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }) } catch (e) {}
+    }
+  })
+
+  test('云端按天明细 → cloudUsageHeat → mergeUsageHeat：「本机+云端」热力图不重不漏', async () => {
+    const dir = tmpDir()
+    const config = testConfig(dir, {
+      DSH_SYNC_TOKEN: 'shared-bootstrap-token-0123456789', ALLOW_DEVICE_SELF_REGISTER: '1',
+      HOST: '127.0.0.1', PORT: '0',
+    })
+    const { server, app, url } = await listen(config, { log: () => {} })
+    try {
+      const tokenA = addDevice(app, 'machine-A', '本机')
+      const tokenB = addDevice(app, 'machine-B', '另一台')
+      // 本机与另一台都在 9-12；另一台另有一天 9-14（本机没有 → 必须从云端补进热力图）
+      ingestDirect(app, {
+        token: tokenA, deviceId: 'machine-A', source: 'dsh',
+        records: [rec({ ts: T0, cost: 1.5, sessionId: 'a1' })],
+      })
+      ingestDirect(app, {
+        token: tokenB, deviceId: 'machine-B', source: 'dsh',
+        records: [rec({ ts: T0 + 3600000, cost: 0.5, sessionId: 'b1' }), rec({ ts: T0 + 2 * 86400000, cost: 0.25, sessionId: 'b2' })],
+      })
+
+      const union = JSON.stringify([{ excludeDevice: 'machine-A' }, { devices: 'machine-A', excludeSource: 'dsh' }])
+      const res = await fetch(url + '/api/v1/plugin-view?range=all&union=' + encodeURIComponent(union), {
+        headers: { authorization: 'Bearer ' + tokenA },
+      })
+      const body = await res.json()
+      assert.equal(body.ok, true)
+      // 云端 v1.3.2 起 byDay 才带 token 类型拆分；缺了它热力图只能拿到 tokens 总数
+      const cloudDay = body.byDay.find((d) => d.tokens > 0)
+      assert.ok(cloudDay, 'byDay 必须带按天明细')
+      for (const k of ['input', 'output', 'cacheRead', 'cacheWrite']) {
+        assert.ok(k in cloudDay, 'byDay 必须含 ' + k + '（热力图悬停明细 + 按视图合并）')
+      }
+
+      const cloudHeat = cloudUsageHeat(body, 'cloud-rest')
+      // 只有 machine-B 的两条记录（排除 machine-A）
+      assert.equal(cloudHeat.total.calls, 2, '并集口径只含另一台的 2 次调用，实际 ' + cloudHeat.total.calls)
+      assert.equal(cloudHeat.days.length, 2, '另一台有两天数据')
+      assert.ok(cloudHeat.days.every((d) => d.tokens === d.input + d.output + d.cacheRead + d.cacheWrite),
+        'tokens 必须按本地口径重算（云端 tokens 含 reasoning）')
+
+      // 本机热力图（宿主 buildUsageHeat 形状）：只有 9-12 一天
+      const localHeat = {
+        ok: true,
+        days: [{ date: '2026-09-12', input: 1000, output: 500, cacheRead: 2000, cacheWrite: 0, calls: 1, cost: 1.5, tokens: 3500 }],
+        total: { tokens: 3500, input: 1000, cache: 2000, output: 500, calls: 1, cost: 1.5 },
+      }
+      const merged = mergeUsageHeat(localHeat, cloudHeat)
+      const dates = merged.days.map((d) => d.date)
+      assert.ok(dates.includes('2026-09-12') && dates.includes('2026-09-14'),
+        '合并后既有本机的 9-12、也有云端独有的 9-14，实际 ' + dates.join(','))
+      const d12 = merged.days.find((d) => d.date === '2026-09-12')
+      assert.equal(d12.calls, 2, '9-12 两侧调用相加（本机 1 + 另一台 1）')
+      assert.equal(d12.tokens, 3500 + 3500, '9-12 两侧 tokens 相加')
+      assert.equal(merged.total.tokens, 3500 + 7000, '累计 = 本机 + 云端全时段')
+      assert.equal(merged.total.calls, 1 + 2, '累计调用 = 本机 + 云端，不重不漏')
     } finally {
       await new Promise((r) => server.close(r))
       try { rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }) } catch (e) {}

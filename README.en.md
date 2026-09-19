@@ -159,7 +159,7 @@ rm -rf ~/.dsh/profiles/node_modules/dsh-cost-tracker
 - **Cost chart**: segment by peak period or by model; hover for daily breakdowns;
 - **Color schemes**: in "by model" view, three swatches next to the title switch between 橙→黄 / 蓝→紫 / 蓝→浅蓝 palettes. Models are ranked by total spend and colored in a sequential gradient (rank 1 = darkest at the bottom, getting lighter upwards; no cycling, no collisions). The choice is remembered in the browser (localStorage);
 - **Per-model sections**: one request-count chart and one token-composition chart (input / cache write / output / cache hit) per model;
-- **Usage heatmap**: a Codex-style 26-week daily-usage grid; shade by the day's token count relative to the maximum; hover any cell for that day's breakdown (input / cache / output / cost), today outlined;
+- **Usage heatmap**: a Codex-style 26-week daily-usage grid; shade by the day's token count relative to the maximum; hover any cell for that day's breakdown (input / cache / output / cost), today outlined; **the scope follows the three-state switch**: "local" counts this machine only, "local + cloud" merges the cloud's per-day usage (same union scope as the cards above, no double counting), "cloud only" shows the cloud alone, with the active scope labelled next to the title. Cloud per-day detail requires `dsh-cost-cloud ≥ v1.3.2`; on an older cloud it falls back to the local scope;
 - **Peak/off-peak pricing & notice**: pick the tier strip style (**compact single-row — a 24h-proportional bar with a white real-time line** / **ring dial — a 24h hollow dial with a phase-colored dot**), optionally switch the compact strip to a **two-row compact** stacked layout (bar-above-text or text-above-bar), toggle the "Show time" tick labels (00:00–21:00), set the popup-alert lead time (1–30 min), alert type (both / entering peak / entering off-peak), popup position (bottom-right / center), and optional browser system notification; everything auto-saves. A persistent strip in the sidebar footer shows the current tier and countdown to the next switch;
 - **CSV export**: exports detail records (last 180 days) plus daily rollup rows (`purpose=rollup`).
 
@@ -242,6 +242,14 @@ Example: `curl -X POST http://127.0.0.1:3080/api/cost-tracker/summary -d '{}'`
 ## Changelog
 
 > Highlights only — the full version-by-version history lives in [`CHANGELOG.md`](./CHANGELOG.md) (Chinese).
+
+### v1.8.12 (2026-09-19)
+
+**Fixed: the heatmap ignored the three-state switch (self-contradicting screen in "local + cloud"), and `cost_stats scope=cloud|both` crashed**
+
+- The "Token Usage" heatmap only ever read the local store, so in "local + cloud" it still showed a local-only total (field report: heatmap 98.4M / 536 calls on the same screen as cards reading 955M). It now fetches per view: the host asks the cloud's `plugin-view` for per-day detail **with the token-type breakdown** (`range=all` all-time scope; "local + cloud" reuses the same `union` as the cards), and the client merges it with `mergeUsageHeat`. When cloud detail is unavailable it falls back to local and labels the scope next to the title. **Requires `dsh-cost-cloud ≥ v1.3.2`.**
+- Fixed the `Cannot read properties of undefined (reading 'realCost')` crash in `cost_stats scope=cloud|both`: cloud responses come in two shapes (`overview.summary` vs. `plugin-view` top level) and only the former was read.
+- Added regression guards: `view.test.js` section 11, four path contracts in `cloud-read.test.js`, `client-render.test.js` section 7, and an end-to-end merge assertion in `cloud-view-e2e.test.js` against the real cloud.
 
 ### v1.8.11 (2026-09-17)
 

@@ -6,7 +6,7 @@
 //   mergeDash(本地, 云端_排除本机) === 全网合计，且本机恰好计一次。
 // 另外覆盖云端字段缺失、日期并集、订阅口径、排序与容错。
 // ============================================================
-import { BOARD_VIEWS, BOARD_DIMS, normalizeCloudDash, mergeDash, addSlice, zeroSlice } from '../view.js'
+import { BOARD_VIEWS, BOARD_DIMS, normalizeCloudDash, mergeDash, mergeUsageHeat, addSlice, zeroSlice } from '../view.js'
 
 let failures = 0
 const passed = []
@@ -194,6 +194,53 @@ function cloudDash() {
   eq(a.subTokens, 6, 'addSlice 保留原值')
   eq(zeroSlice().real, 0, 'zeroSlice 全 0')
   eq(addSlice(null, null).real, 0, 'addSlice 容忍 null')
+}
+
+// ---------- 11. 用量热力图跨视图合并（mergeUsageHeat） ----------
+// 不变量：「本机+云端」的按天数字 = 本机 + 云端_排除本机，且 token 类型拆分口径一致。
+{
+  const localHeat = () => ({
+    ok: true, source: 'local',
+    days: [
+      { date: '2026-09-12', input: 1000, output: 500, cacheRead: 2000, cacheWrite: 0, calls: 3, cost: 1.5, tokens: 3500 },
+      { date: '2026-09-19', input: 100, output: 50, cacheRead: 0, cacheWrite: 10, calls: 1, cost: 0.2, tokens: 160 },
+    ],
+    total: { tokens: 3660, input: 1100, cache: 2010, output: 550, calls: 4, cost: 1.7 },
+  })
+  // 云端 byDay 的 tokens **含 reasoning**（这里是 9999），合并时必须按本地口径重算
+  const cloudHeat = () => ({
+    ok: true, source: 'cloud', asOf: 123,
+    days: [
+      { date: '2026-09-12', input: 300, output: 200, cacheRead: 400, cacheWrite: 0, calls: 2, cost: 0.9, tokens: 9999 },
+      { date: '2026-09-15', input: 7000, output: 1000, cacheRead: 0, cacheWrite: 0, calls: 5, cost: 3.3, tokens: 8000 },
+    ],
+    total: { tokens: 8000, input: 7300, cache: 400, output: 1200, calls: 7, cost: 4.2 },
+  })
+
+  const m = mergeUsageHeat(localHeat(), cloudHeat())
+  eq(m.days.length, 3, '日期按并集合并（09-12 / 09-15 / 09-19）')
+  eq(m.days.map((d) => d.date).join(','), '2026-09-12,2026-09-15,2026-09-19', '按日期升序')
+  const d12 = m.days[0]
+  eq(d12.input, 1300, '同一天两侧输入相加')
+  eq(d12.cacheRead, 2400, '同一天两侧缓存相加')
+  eq(d12.calls, 5, '同一天两侧调用相加')
+  near(d12.cost, 2.4, '同一天两侧费用相加')
+  eq(d12.tokens, 1300 + 700 + 2400 + 0, 'tokens 按本地口径重算（不含 reasoning）')
+  const d15 = m.days[1]
+  eq(d15.tokens, 8000, '云端独有日期原样保留')
+  eq(d15.calls, 5, '云端独有日期的调用数保留')
+  // total 取两侧**全时段** total 相加（不是对 days 求和：本地 days 只留最近 27 周）
+  eq(m.total.tokens, 3660 + 8000, 'total.tokens = 两侧全时段累计相加')
+  eq(m.total.calls, 4 + 7, 'total.calls 相加')
+  eq(m.total.cache, 2010 + 400, 'total.cache = 两侧缓存相加')
+  eq(m.asOf, 123, 'asOf 取云端')
+
+  // 容错：任一侧缺失/形状不对时不得炸，也不能把数据吞掉
+  const L = localHeat(), C = cloudHeat()
+  eq(mergeUsageHeat(L, null), L, '云端缺失 → 原样返回本机（引用相等）')
+  eq(mergeUsageHeat(null, C), C, '本机缺失 → 原样返回云端')
+  eq(mergeUsageHeat(L, { ok: true }), L, '云端缺 days 数组 → 退回本机')
+  eq(mergeUsageHeat(null, null), null, '两侧都缺 → null')
 }
 
 if (failures) {

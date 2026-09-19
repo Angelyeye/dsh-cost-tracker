@@ -19,7 +19,7 @@ import { createSyncEngine, setPluginVersion, SOURCE as SYNC_SOURCE, SYNC_VERSION
 import { Schema } from './schema.js'
 
 /** 插件版本（写入上报信封，便于云端排查版本差异） */
-const PLUGIN_VERSION = '1.8.11'
+const PLUGIN_VERSION = '1.8.12'
 setPluginVersion(PLUGIN_VERSION)
 
 /** 「设置 → 插件 → 插件配置」里的卡片字段（与 settings 命名空间一致） */
@@ -56,6 +56,48 @@ function startupLog(msg) {
 // 任何一步失败都静默跳过（侧边栏回退齿轮，面板内图标不受影响）。
 // ============================================================
 const NAV_ICON_BRANCH = 'if (id === "cost-dashboard") return (0, react_jsx_runtime.jsxs)("svg", { className: SettingsRoot_module_css_default.navIcon, width: 16, height: 16, viewBox: "0 0 16 16", fill: "none", xmlns: "http://www.w3.org/2000/svg", children: [(0, react_jsx_runtime.jsx)("rect", { x: 1.5, y: 8.6, width: 3.1, height: 5.9, rx: 0.9, fill: "currentColor" }), (0, react_jsx_runtime.jsx)("rect", { x: 5.9, y: 5.2, width: 3.1, height: 9.3, rx: 0.9, fill: "currentColor" }), (0, react_jsx_runtime.jsxs)("g", { fill: "none", stroke: "currentColor", strokeWidth: 1.3, strokeLinecap: "round", strokeLinejoin: "round", children: [(0, react_jsx_runtime.jsx)("path", { d: "M10.7 4.9 L12.3 7.2 L13.9 4.9" }), (0, react_jsx_runtime.jsx)("path", { d: "M12.3 7.2 L12.3 10.9" }), (0, react_jsx_runtime.jsx)("path", { d: "M10.9 7.8 L13.7 7.8" }), (0, react_jsx_runtime.jsx)("path", { d: "M10.9 9.5 L13.7 9.5" })] })] }); // cost-tracker-icon-patch\n\t\t\t'
+
+// ============================================================
+// 云端按天用量明细 → 「Token 用量统计」热力图形状（纯函数，跨仓库 e2e 直接单测）
+//
+// 形状与本地 buildUsageHeat() 一致：
+//   { ok, source, asOf, days: [{date,input,output,cacheRead,cacheWrite,calls,cost,tokens}],
+//     total: {tokens, input, cache, output, calls, cost} }
+//
+// tokens 一律按 input+output+cacheRead+cacheWrite **重算**：云端 byDay 的 tokens 含
+// reasoning，而本地 buildUsageHeat 不含 —— 直接相加会让「本机+云端」比两侧之和大一截。
+// ============================================================
+export function cloudUsageHeat(body, mode) {
+  const n = (v) => Number(v) || 0
+  const days = ((body && body.byDay) || []).map((d) => {
+    const input = n(d.input), output = n(d.output), cacheRead = n(d.cacheRead), cacheWrite = n(d.cacheWrite)
+    return {
+      date: String(d.date), input, output, cacheRead, cacheWrite,
+      calls: n(d.calls), cost: n(d.cost),
+      tokens: input + output + cacheRead + cacheWrite,
+    }
+  // 云端 range=all 返回的是**连续日期轴**（首条记录到今天，含大量补零日），
+  // 而本地 buildUsageHeat 只返回有数据的日期。这里对齐本地语义：丢掉全零日，
+  // 否则合并后的 days 会多出几百个空格（热力图自己会按 26 周补格，不需要它们）。
+  }).filter((d) => d.tokens > 0 || d.calls > 0 || d.cost > 0)
+  const sum = (k) => days.reduce((s, d) => s + (d[k] || 0), 0)
+  const r4 = (x) => Math.round((Number(x) || 0) * 10000) / 10000
+  return {
+    ok: true,
+    source: 'cloud',
+    asOf: Date.now(),
+    cloudMode: mode,
+    days,
+    total: {
+      tokens: sum('tokens'),
+      input: sum('input'),
+      cache: sum('cacheRead') + sum('cacheWrite'),
+      output: sum('output'),
+      calls: sum('calls'),
+      cost: r4(sum('cost')),
+    },
+  }
+}
 
 export function ensureNavIconPatch(opts) {
   const log = (opts && opts.log) || (() => {})
@@ -1054,8 +1096,9 @@ export default {
           }
         }
       }
-      if (unionParts && query.route === 'overview') {
-        // 只有 overview 支持并集（矩阵/趋势不做并集：口径复杂且易误读）
+      // union 并集：overview（卡片口径）与 plugin-view（按天/按模型图表口径）都支持；
+      // 「本机+云端」的卡片走 overview、热力图走 plugin-view，各自取自己需要的范围。
+      if (unionParts && (query.route === 'overview' || query.route === 'usage')) {
         qs.set('union', JSON.stringify(unionParts))
       } else if (mode === 'cloud-rest' && !selfKnown && selfId) {
         qs.set('excludeDevice', selfId) // 拿不到本机记录时退化为「排除本机整台」
@@ -1072,7 +1115,13 @@ export default {
       //   · 带 union（「本机+云端」并集）时沿用 overview：其卡片是**全网**口径，与并集相加的
       //     语义一致；plugin-view 的卡片落在并集范围内，换成它会让总额口径突变。
       let endpoint = query.route
-      if (query.route === 'overview' && !unionParts) {
+      if (query.route === 'usage') {
+        // 热力图要的是**按天明细 + token 类型拆分**，只有 plugin-view 有；
+        // 且热力图是「全时段累计」口径，与页面上的区间选择无关，固定 range=all。
+        endpoint = 'plugin-view'
+        qs.set('range', 'all')
+        qs.delete('days')
+      } else if (query.route === 'overview' && !unionParts) {
         const caps = await cloudCaps()
         if (caps.pluginView) endpoint = 'plugin-view'
       }
@@ -1089,14 +1138,16 @@ export default {
           const out = { ok: false, error: hint || (body && body.error) || ('HTTP ' + res.status), code: (body && body.code) || (res.status === 404 ? 'CLOUD_TOO_OLD' : 'CLOUD_ERROR') }
           return out
         }
-        const value = Object.assign({}, body, {
-          source: 'cloud',
-          asOf: Date.now(),
-          cloudMode: mode,
-          selfResolved: selfKnown,
-          selfDeviceId: selfId,
-          unionParts: unionParts,
-        })
+        const value = query.route === 'usage'
+          ? Object.assign(cloudUsageHeat(body, mode), { selfResolved: selfKnown, selfDeviceId: selfId, unionParts: unionParts })
+          : Object.assign({}, body, {
+            source: 'cloud',
+            asOf: Date.now(),
+            cloudMode: mode,
+            selfResolved: selfKnown,
+            selfDeviceId: selfId,
+            unionParts: unionParts,
+          })
         cloudCache.set(key, { at: Date.now(), value })
         return value
       } catch (e) {
@@ -1320,13 +1371,23 @@ export default {
         }
         if (scope === 'cloud' || scope === 'both') {
           const c = await fetchCloud({ route: 'overview', range: days === 0 ? 'all' : '7d', days })
+          // 云端响应有两种形状，必须都认：
+          //   · /api/v1/overview   → 金额摊在 c.summary.{realCost,subEquivalent,...}
+          //   · /api/v1/plugin-view → 没有 summary，字段直接摊在顶层（宿主在云端支持
+          //     devicePluginView 时会优先用它）。1.8.11 只读了 c.summary，于是
+          //     scope=cloud|both 必然抛 "Cannot read properties of undefined (reading 'realCost')"。
+          const s = (c && c.summary) ? c.summary : (c || {})
+          const num = (v) => Number(v) || 0
           out.cloud = c.ok === false
             ? { ok: false, error: c.error || '云端不可用' }
             : {
               ok: true,
-              realCost: c.summary.realCost, realCalls: c.summary.realCalls, realTokens: c.summary.realTokens,
-              subEquivalent: c.summary.subEquivalent, subCalls: c.summary.subCalls,
-              peakCost: c.summary.peakCost, offCost: c.summary.offCost, flatCost: c.summary.flatCost,
+              realCost: num(s.realCost != null ? s.realCost : s.real),
+              realCalls: num(s.realCalls != null ? s.realCalls : s.calls),
+              realTokens: num(s.realTokens != null ? s.realTokens : s.tokens),
+              subEquivalent: num(s.subEquivalent != null ? s.subEquivalent : s.sub),
+              subCalls: num(s.subCalls),
+              peakCost: num(s.peakCost), offCost: num(s.offCost), flatCost: num(s.flatCost),
               devices: c.devices, sources: c.sources, asOf: c.asOf,
             }
         }

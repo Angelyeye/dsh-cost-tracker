@@ -83,10 +83,29 @@ const CLOUD = {
   recent: [], devices: [{ device: 'other-machine', name: '另一台', cost: 2.0, calls: 100 }], sources: [{ source: 'dsh', cost: 2.0, calls: 100 }],
 }
 let dashPayload = DASH
-const payloadFor = (name, syncView) => {
+// 「Token 用量统计」热力图：本机按天明细（宿主 usage 路由 → buildUsageHeat）
+const LOCAL_USAGE = {
+  ok: true,
+  total: { tokens: 3650, input: 1100, cache: 2000, output: 550, calls: 4, cost: 1.7 },
+  days: [
+    { date: '2026-09-12', input: 1000, output: 500, cacheRead: 2000, cacheWrite: 0, calls: 3, cost: 1.5, tokens: 3500 },
+    { date: '2026-09-15', input: 100, output: 50, cacheRead: 0, cacheWrite: 0, calls: 1, cost: 0.2, tokens: 150 },
+  ],
+}
+// 云端按天明细（v1.3.2 起 byDay 才带 input/output/cacheRead/cacheWrite 拆分）
+const CLOUD_USAGE = {
+  ok: true, source: 'cloud', asOf: Date.now(),
+  total: { tokens: 8000, input: 7500, cache: 300, output: 200, calls: 7, cost: 4.2 },
+  days: [
+    { date: '2026-08-18', input: 5500, output: 200, cacheRead: 300, cacheWrite: 0, calls: 5, cost: 3.3, tokens: 6000 },
+    { date: '2026-09-12', input: 1500, output: 200, cacheRead: 300, cacheWrite: 0, calls: 2, cost: 0.9, tokens: 2000 },
+  ],
+}
+const payloadFor = (name, syncView, args) => {
   if (name === 'sync') return Object.assign({}, SYNC, { view: syncView })
   if (name === 'dashboard') return dashPayload
-  if (name === 'cloud') return CLOUD
+  if (name === 'usage') return LOCAL_USAGE
+  if (name === 'cloud') return (args && args.route === 'usage') ? CLOUD_USAGE : CLOUD
   return { ok: false }
 }
 
@@ -132,9 +151,11 @@ function makeModule({ view = null, syncView = 'local' } = {}) {
       addEventListener: () => {}, removeEventListener: () => {},
     },
     localStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
-    fetch: (url) => {
+    fetch: (url, init) => {
       const name = String(url).split('/').pop()
-      return Promise.resolve({ ok: true, json: () => Promise.resolve(payloadFor(name, syncView)) })
+      let args = {}
+      try { args = init && init.body ? JSON.parse(init.body) : {} } catch (e) { args = {} }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(payloadFor(name, syncView, args)) })
     },
     console, setTimeout, clearTimeout, setInterval, clearInterval,
   }
@@ -330,6 +351,55 @@ check('flat 为 0 时渲染无异常', noFlat.errors.length === 0, describeError
 check('flat 为 0 时图例不再出现第三项', !nText.includes('不分峰谷') && !nText.includes('平峰'), JSON.stringify(nText.slice(0, 300)))
 check('高峰与闲时始终在', nText.includes('高峰') && nText.includes('闲时'))
 dashPayload = DASH
+
+// ---------- [7] 「Token 用量统计」热力图跟随三态视图 ----------
+// 事故背景：热力图的数据源是宿主的 usage → buildUsageHeat()，**纯本地**；页面其余卡片却走
+// viewDash（本机+云端合并）。于是「本机+云端」下热力图说 98.4M、上方卡片说 955M，
+// 同一屏自相矛盾。现改为按视图取数并合并（云端 byDay 提供 token 类型拆分）。
+console.log('[7] 「Token 用量统计」热力图跟随三态视图')
+const heatOf = (state) => {
+  const node = state.nodes.find((n) => n.name === 'UsageHeatmap')
+  return node ? node.props.data : null
+}
+const dayOf = (data, date) => (data.days || []).find((d) => d.date === date)
+
+hookSlots.clear()
+const heatLocal = await renderAsync(makeModule({ view: REAL_VIEW, syncView: 'local' }).section, {}, 5)
+const hLocal = heatOf(heatLocal)
+check('本机视图渲染出热力图且渲染无异常', !!hLocal && heatLocal.errors.length === 0, describeErrors(heatLocal.errors))
+check('本机视图累计 = 本机 total（3650 tokens · 4 次调用）',
+  !!hLocal && hLocal.total.tokens === 3650 && hLocal.total.calls === 4,
+  JSON.stringify(hLocal && hLocal.total))
+
+hookSlots.clear()
+const heatUnion = await renderAsync(makeModule({ view: REAL_VIEW, syncView: 'local+cloud' }).section, {}, 5)
+const hUnion = heatOf(heatUnion)
+check('本机+云端渲染出热力图且无异常', !!hUnion && heatUnion.errors.length === 0, describeErrors(heatUnion.errors))
+check('本机+云端累计 = 本机 + 云端（3650 + 8000 = 11650）',
+  !!hUnion && hUnion.total.tokens === 11650,
+  JSON.stringify(hUnion && hUnion.total))
+check('本机+云端累计调用 = 4 + 7 = 11',
+  !!hUnion && hUnion.total.calls === 11, JSON.stringify(hUnion && hUnion.total))
+check('云端独有的日期进入热力图（08-18 · 6000 tokens）',
+  !!hUnion && !!dayOf(hUnion, '2026-08-18') && dayOf(hUnion, '2026-08-18').tokens === 6000,
+  JSON.stringify(hUnion && hUnion.days))
+check('两侧同日相加（09-12 = 3500 + 2000 = 5500）',
+  !!hUnion && !!dayOf(hUnion, '2026-09-12') && dayOf(hUnion, '2026-09-12').tokens === 5500,
+  JSON.stringify(dayOf(hUnion || { days: [] }, '2026-09-12')))
+check('按天 tokens 与拆分项自洽（tokens = input+output+cacheRead+cacheWrite）',
+  !!hUnion && hUnion.days.every((d) => d.tokens === d.input + d.output + d.cacheRead + d.cacheWrite),
+  JSON.stringify(hUnion && hUnion.days))
+check('卡片标题右侧标注口径「本机 + 云端」', heatUnion.text.includes('本机 + 云端'),
+  JSON.stringify(heatUnion.text.replace(/\s+/g, ' ').slice(0, 200)))
+
+hookSlots.clear()
+const heatCloud = await renderAsync(makeModule({ view: REAL_VIEW, syncView: 'cloud' }).section, {}, 5)
+const hCloud = heatOf(heatCloud)
+check('仅云端累计 = 云端 total（8000 tokens），不含本机',
+  !!hCloud && hCloud.total.tokens === 8000 && hCloud.total.calls === 7,
+  JSON.stringify(hCloud && hCloud.total))
+check('仅云端不再出现本机独有的 09-15（150 tokens）',
+  !!hCloud && !dayOf(hCloud, '2026-09-15'), JSON.stringify(hCloud && hCloud.days))
 
 console.log('')
 if (failures > 0) {
