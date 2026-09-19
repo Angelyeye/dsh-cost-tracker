@@ -213,6 +213,21 @@ The dimension selector adds per-device / per-agent / per-model breakdowns and a 
 
 **Privacy**: only token counts, cost, timestamps and identifiers are uploaded — never prompts, responses, file paths or code. The config card offers "mask session id" (irreversible hash) and "omit purpose".
 
+### Interface visibility (v1.8.12, optional)
+
+Don't want the plugin in your face? **Settings → Plugins → Plugin configuration → Cost Tracker → Interface visibility** has three independent switches that apply **the moment you tick them** (no Save, no `dsh` restart):
+
+| Switch | What turning it off does |
+| --- | --- |
+| Composer cost pill | the per-session cost / model breakdown above the chat input disappears |
+| Sidebar peak bar | the phase / countdown strip at the bottom of the sidebar disappears (the peak-switch popup and web notifications go with it; if you only want the reminder without the strip, use the notice switch under "Peak/off-peak pricing & notices" instead) |
+| Settings dashboard | the "Cost Tracker" entry disappears from the Settings nav (accounting and cloud sync keep running; the page then shows a one-line hint on how to bring it back) |
+
+- **Display only**: accounting, persistence, cloud sync and the agent tools (`cost_stats` etc.) are unaffected;
+- **The plugin configuration card itself is never hidden by these switches** — otherwise you would have no way to turn them back on;
+- Truth value is "hidden only on an explicit `false`", so a missing key means visible: **an existing config file looks exactly the same after upgrading**;
+- All three keys live in the same `~/.dsh/storages/cost-tracker-config.json` (`uiDockEnabled` / `uiPeakEnabled` / `uiDashboardEnabled`) and never overwrite the peak/cloud fields.
+
 ### HTTP API (for other tools)
 
 All endpoints are `POST` + JSON and listen on the loopback address:
@@ -221,9 +236,10 @@ All endpoints are `POST` + JSON and listen on the loopback address:
 POST /api/cost-tracker/summary      Overview
 POST /api/cost-tracker/dashboard    Dashboard data
 POST /api/cost-tracker/usage        Usage heatmap (all-time totals + daily token aggregation)
-POST /api/cost-tracker/peak         Peak-phase snapshot (current tier / next switch / config)
+POST /api/cost-tracker/peak         Peak-phase snapshot (current tier / next switch / config / interface visibility)
 POST /api/cost-tracker/peak-config  Save peak-price notice config
-POST /api/cost-tracker/sync         Cloud sync status (device id / watermark / pending / last error)
+POST /api/cost-tracker/ui-config    Save interface-visibility switches (pill / sidebar bar / dashboard; partial patches OK)
+POST /api/cost-tracker/sync         Cloud sync status (device id / watermark / pending / last error / interface visibility)
 POST /api/cost-tracker/sync-now     Sync now ({"full":true} to re-send everything)
 POST /api/cost-tracker/sync-test    Test the cloud connection
 POST /api/cost-tracker/sync-config  Save cloud sync config
@@ -242,6 +258,14 @@ Example: `curl -X POST http://127.0.0.1:3080/api/cost-tracker/summary -d '{}'`
 ## Changelog
 
 > Highlights only — the full version-by-version history lives in [`CHANGELOG.md`](./CHANGELOG.md) (Chinese).
+
+### v1.8.13 (2026-09-25)
+
+**Added: the plugin's front-end surfaces can now be turned off (three independent switches)**
+
+- **Settings → Plugins → Plugin configuration → Cost Tracker → Interface visibility**: the composer cost pill, the sidebar peak bar and the Settings "Cost Tracker" dashboard can each be switched off on their own, applied **immediately** (no Save, no `dsh` restart), plus a one-click "Show all".
+- **Display only**: accounting, cloud sync and the agent tools keep working; the plugin configuration card itself is never hidden (otherwise there would be no way back).
+- **Safe default**: hidden only on an explicit `false`, so missing keys mean visible — an existing config file looks identical after upgrading. See the "Interface visibility" section above.
 
 ### v1.8.12 (2026-09-19)
 

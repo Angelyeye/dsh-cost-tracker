@@ -58,6 +58,40 @@ window.__ModuleLoader__.load({
 		}
 		const MEMBERSHIP = { LEVEL_FREE: "免费版", LEVEL_BASIC: "基础版", LEVEL_INTERMEDIATE: "进阶版", LEVEL_ADVANCED: "高级版" };
 
+		// ---------- 前端显隐开关（服务端 ui-config，见 config.js 的 UI_SURFACES） ----------
+		// 配置改动后由配置卡片广播，已挂载的部件立刻响应，不必等下一次轮询。
+		const UI_EVENT = "dsh-cost-tracker-ui";
+		/**
+		 * 取显隐标志：只有显式 false 才算关闭。
+		 * snap 还没加载完 / 老服务端不返回该字段时按「可见」处理 —— 否则界面会先闪一下再出现。
+		 */
+		function uiOn(ui, key) {
+			return !(ui && ui[key] === false);
+		}
+		/**
+		 * 「界面显示」分组的开关清单。
+		 * 说明书（label/desc）在浏览器里必须有本地副本：配置卡片渲染时不该为了拿一段
+		 * 文案再往返一次服务端。key 与 config.js 的 UI_SURFACES 必须逐字一致 ——
+		 * test/client-render.test.js 的 [8] 会把两份清单对起来，漂移即报红。
+		 */
+		const UI_SURFACES = [
+			{
+				key: "uiDockEnabled",
+				label: "输入框上方的花费胶囊",
+				desc: "本会话花费与模型明细（会话输入区上方）。关闭后输入区不再显示任何花费信息。",
+			},
+			{
+				key: "uiPeakEnabled",
+				label: "侧边栏峰谷时段条",
+				desc: "侧边栏底部的当前档位 / 倒计时。关闭后峰谷切换弹窗与系统通知一并停用；只想留提醒不想要时段条时，请改用「峰谷计价与提示」里的提示开关。",
+			},
+			{
+				key: "uiDashboardEnabled",
+				label: "设置页「花费统计」看板",
+				desc: "设置页左侧导航的花费统计入口与看板。关闭后该入口隐藏，插件仍照常记账并同步云端。",
+			},
+		];
+
 		// ---------- styles ----------
 		function applyStyles(ctx) {
 			const css = `
@@ -1296,6 +1330,10 @@ window.__ModuleLoader__.load({
 				// 预览跟随用户配置的弹窗位置（右下角 / 屏幕中心），不强制覆盖
 				popup = e(PeakAlertPopup, { snap, preview, now: now + 120000, countdownText: "2 分", onDismiss: () => setPreview(null) });
 			}
+			// 显隐开关（在所有 hook 之后判定，避免条件式 hook 顺序漂移）：
+			// 时段条、切换弹窗与系统通知同属这一个落点，关闭即整体停用；
+			// 想「只留提醒、不要时段条」请关掉「峰谷计价与提示 → 峰时高价时段显著提示」。
+			if (!uiOn(snap && snap.ui, "uiPeakEnabled")) return null;
 			return e("div", null,
 				e(PeakStrip, { snap, style: snap ? snap.style : "compact", wide, now, ringSize: 112 }),
 				popup);
@@ -1443,6 +1481,9 @@ window.__ModuleLoader__.load({
 			const [msg, setMsg] = useState("");
 			const [busy, setBusy] = useState(false);
 			const [testing, setTesting] = useState("");
+			// 界面显示三开关（独立于云端同步草稿：勾选即刻生效并落盘）
+			const [uiDraft, setUiDraft] = useState({ uiDockEnabled: true, uiPeakEnabled: true, uiDashboardEnabled: true });
+			const [uiMsg, setUiMsg] = useState("");
 			// 折叠态：与宿主「插件配置」里其它卡片一致——默认收起，点标题展开
 			const [open, setOpen] = useState(false);
 			function load() {
@@ -1458,6 +1499,12 @@ window.__ModuleLoader__.load({
 						maskSessionId: !!v.maskSessionId,
 						includePurpose: v.includePurpose !== false,
 						cloudView: v.view || "local",
+					});
+					// 界面显示：缺省视为可见（与 normalizeUiConfig 同一真值语义）
+					setUiDraft({
+						uiDockEnabled: v.uiDockEnabled !== false,
+						uiPeakEnabled: v.uiPeakEnabled !== false,
+						uiDashboardEnabled: v.uiDashboardEnabled !== false,
 					});
 				}).catch(() => {});
 			}
@@ -1493,6 +1540,32 @@ window.__ModuleLoader__.load({
 					setMsg(r.error ? ("同步失败：" + r.error) : ("已同步：新增 " + (r.accepted || 0) + " · 去重 " + (r.duplicates || 0) + " · 日汇总 " + (r.rollups || 0)));
 					load();
 				}).catch(err => { setBusy(false); setMsg("同步失败：" + String(err && err.message ? err.message : err)); });
+			}
+			/**
+			 * 界面显示开关：勾选即刻提交并落盘（无需点「保存」），随后广播 UI_EVENT，
+			 * 让已经挂载的胶囊 / 时段条 / 看板立刻跟着显隐。
+			 * 关掉看板后本卡片仍在原位（它不受这三个开关控制），随时能改回来。
+			 */
+			function saveUi(patch) {
+				const next = Object.assign({}, uiDraft, patch);
+				setUiDraft(next);
+				setUiMsg("保存中…");
+				apiCall("ui-config", patch).then(v => {
+					if (v && v.ok) {
+						setUiDraft({
+							uiDockEnabled: v.uiDockEnabled !== false,
+							uiPeakEnabled: v.uiPeakEnabled !== false,
+							uiDashboardEnabled: v.uiDashboardEnabled !== false,
+						});
+						setUiMsg("已保存，界面立即生效");
+						try { window.dispatchEvent(new CustomEvent(UI_EVENT)); } catch (_) {}
+					} else {
+						setUiMsg("保存失败：" + ((v && v.error) || "未知错误"));
+					}
+					setTimeout(() => setUiMsg(""), 2500);
+				}).catch(err => {
+					setUiMsg("保存失败：" + String(err && err.message ? err.message : err));
+				});
 			}
 			// 卡片外壳对齐宿主 PluginCard：li.cost-pcard > button.cost-pcard-head（标题+副标题+箭头）> body
 			const head = e("button", { type: "button", className: "cost-pcard-head", "aria-expanded": open, onClick: () => setOpen(v => !v) },
@@ -1537,10 +1610,58 @@ window.__ModuleLoader__.load({
 					"设备 ID " + (st.deviceId || "（未生成）") + " · 水位 seq=" + st.watermark + " · 待上报 " + st.pending + " 条 · 上次同步 " + (st.lastSyncAt ? timeLabel(st.lastSyncAt) : "从未")),
 				st.lastError ? e("div", { className: "cost-err" }, "最近错误：" + st.lastError) : null,
 				st.needAuth ? e("div", { className: "cost-err" }, "令牌无效：请在云端看板重新生成共享引导令牌后填入上方「共享令牌」。") : null,
-				st.url ? e("div", { className: "cost-hint", style: { marginTop: "6px" } }, "云端看板：" + st.url) : null);
+				st.url ? e("div", { className: "cost-hint", style: { marginTop: "6px" } }, "云端看板：" + st.url) : null,
+				// ---------- 界面显示：三个前端落点各自显隐，勾选即刻生效 ----------
+				// 只影响渲染，不影响记账 / 云端同步 / Agent 工具；本卡片不受这三个开关控制
+				// （否则关掉之后就再没有入口能打开了）。
+				e("div", { className: "cost-sync-card" },
+					e("div", { className: "cost-panel-title" }, "界面显示"),
+					e("div", { className: "cost-hint", style: { marginTop: "6px" } },
+						"控制插件在 DSH 界面上的落点，勾选后立即生效（无需点上面的「保存」）。关闭只影响显示：记账、云端同步与 Agent 工具照常工作。"),
+					e("div", { style: { marginTop: "8px", display: "grid", gap: "6px" } },
+						UI_SURFACES.map(s => e("label", { key: s.key, className: "cost-row", style: { gap: "8px", alignItems: "flex-start" } },
+							e("input", {
+								type: "checkbox",
+								checked: uiDraft[s.key] !== false,
+								onChange: ev => saveUi({ [s.key]: ev.target.checked }),
+							}),
+							e("span", null,
+								e("span", null, s.label),
+								e("div", { className: "cost-hint" }, s.desc))))),
+					e("div", { className: "cost-row", style: { gap: "8px", marginTop: "6px" } },
+						e("button", { className: "cost-btn", onClick: () => saveUi({ uiDockEnabled: true, uiPeakEnabled: true, uiDashboardEnabled: true }) }, "全部显示"),
+						uiMsg ? e("span", { className: "cost-hint" }, uiMsg) : null)));
 			return e("li", { className: "cost-pcard" + (open ? " is-open" : "") },
 				head,
 				open ? e("div", { className: "cost-pcard-body" }, body) : null);
+		}
+
+		/**
+		 * 「花费统计」看板的插槽门卫。
+		 * 关掉界面显示时**不能注册成空渲染**（会留下一个点不开的空白导航项），
+		 * 所以这里保留设置项但只渲染一句说明 —— 用户随时能在插件配置卡片里改回来。
+		 * 宿主不重启插件、插槽注册也无法撤销，因此显隐必须在渲染期判定。
+		 */
+		function DashGate() {
+			const [ui, setUi] = useState(null);
+			useEffect(() => {
+				let alive = true;
+				function load() {
+					apiCall("peak", {}).then(v => { if (alive && v && v.ok) setUi(v.ui || {}); }).catch(() => {});
+				}
+				load();
+				const id = setInterval(load, 30000);
+				window.addEventListener(UI_EVENT, load);
+				return () => { alive = false; clearInterval(id); window.removeEventListener(UI_EVENT, load); };
+			}, []);
+			if (!uiOn(ui, "uiDashboardEnabled")) {
+				return e("div", { className: "cost-wrap" },
+					e("div", { className: "cost-h1" }, pluginIcon(18), "花费统计"),
+					e("div", { className: "cost-hint", style: { marginTop: "8px" } },
+						"花费统计看板已在设置里关闭显示。记账与云端同步不受影响；要重新打开：" +
+						"设置 → 插件 → 插件配置 → 花费统计 → 界面显示 → 打开「设置页花费统计看板」。"));
+			}
+			return e(Dashboard, {});
 		}
 
 		function Dashboard() {
@@ -1802,7 +1923,12 @@ window.__ModuleLoader__.load({
 							e("span", { className: "cost-matrix-num" }, "¥" + fmtMoney((matrix.totals || {}).cost || 0))))));
 		}
 
-		function StatusLine(props) {
+		/**
+		 * 输入框上方的花费胶囊（conversation.composer.dock）。
+		 * 显隐只在本部件内部判定：StatusLine 始终注册，快照说关就渲染 null ——
+		 * 用户改配置后无需重载页面（宿主不重启插件，插槽注册也无法撤销）。
+		 */
+		function CostDock(props) {
 			const sessionId = props && props.sessionId ? String(props.sessionId) : "";
 			const [s, setS] = useState(null);
 			const [expanded, setExpanded] = useState(false);
@@ -1813,9 +1939,12 @@ window.__ModuleLoader__.load({
 				}
 				load();
 				const id = setInterval(load, 30000);
-				return () => { alive = false; clearInterval(id); };
+				const onUi = () => load();
+				window.addEventListener(UI_EVENT, onUi);
+				return () => { alive = false; clearInterval(id); window.removeEventListener(UI_EVENT, onUi); };
 			}, [sessionId]);
 			if (!s) return null;
+			if (!uiOn(s.ui, "uiDockEnabled")) return null;
 			// 按会话实际内容决定显示（而不是按当前选中的模型）：
 			//  - realModels 按量模型 / subModels 订阅模型（分开）
 			//  - 订阅只用一个着色徽标展示套餐名 + 总等效费用，订阅模型不再单独进模型区（避免重复）
@@ -1859,11 +1988,17 @@ window.__ModuleLoader__.load({
 				}
 			}
 			// 分段组装：主胶囊 | 订阅胶囊 | 模型胶囊（细竖线分隔，换行时自动分段）
+			// hasReal 为假时（本会话还没有任何按量花费）不渲染主胶囊，避免出现 ¥0.0000 的空壳
 			const segs = [];
-			segs.push(costPill);
+			if (hasReal || !hasSub) segs.push(costPill);
 			if (subPill) segs.push(subPill);
 			if (modelPill) segs.push(modelPill);
 			return e("div", { className: "cost-dock" }, segs.map((seg, i) => e("span", { key: "seg" + i, className: "cost-seg" }, seg)));
+		}
+
+		/** 插槽入口：插槽本身始终注册，显隐在 CostDock 内判定 */
+		function StatusLine(props) {
+			return e(CostDock, props || {});
 		}
 
 		const inject = ["slots"];
@@ -1873,7 +2008,7 @@ window.__ModuleLoader__.load({
 			if (slots === undefined) return;
 			slots.inject("settings.section", () => slots.register(
 				{ name: "settings.section", id: "cost-dashboard", order: 30, label: "花费统计" },
-				() => e(Dashboard, {}),
+				() => e(DashGate, {}),
 			));
 			// 插件配置卡片（设置 → 插件 → 插件配置）：以 settings 命名空间为键。
 			// 这里必须**无条件** inject，不能拿 slots.entries(key).length 当"插槽是否存在"的探测：

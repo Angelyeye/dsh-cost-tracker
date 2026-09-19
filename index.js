@@ -14,12 +14,13 @@ import { PRICE_ERAS, V41_EFFECTIVE_AT, V41_PRO_ROUTE_AT, exactModelsAt, eraAt, S
 import {
   normalizePeakConfig, defaultPeakConfig, peakEffective,
   normalizeCloudConfig, defaultCloudConfig, normalizePluginConfig,
+  normalizeUiConfig, defaultUiConfig, UI_SURFACES,
 } from './config.js'
 import { createSyncEngine, setPluginVersion, SOURCE as SYNC_SOURCE, SYNC_VERSION, loadIdentity } from './sync.js'
 import { Schema } from './schema.js'
 
 /** 插件版本（写入上报信封，便于云端排查版本差异） */
-const PLUGIN_VERSION = '1.8.12'
+const PLUGIN_VERSION = '1.8.13'
 setPluginVersion(PLUGIN_VERSION)
 
 /** 「设置 → 插件 → 插件配置」里的卡片字段（与 settings 命名空间一致） */
@@ -35,6 +36,10 @@ const SyncSchema = Schema.object({
   syncRollups: Schema.boolean().default(undefined).description('上报历史日汇总快照'),
   syncSinceDays: Schema.natural().default(undefined).description('补传起始窗口天数（0 = 不限）'),
   cloudView: Schema.string().default(undefined).description('看板视图：local / local+cloud / cloud'),
+  // 界面显示（v1.8.12）：三个前端落点各自显隐，缺省/非布尔 = 可见
+  uiDockEnabled: Schema.boolean().default(undefined).description('显示输入框上方的花费胶囊'),
+  uiPeakEnabled: Schema.boolean().default(undefined).description('显示侧边栏峰谷时段条'),
+  uiDashboardEnabled: Schema.boolean().default(undefined).description('显示设置页「花费统计」看板'),
 })
 
 // ============================================================
@@ -217,6 +222,7 @@ export default {
     const CONFIG_FILE = join(process.env.DSH_HOME || join(homedir(), '.dsh'), 'storages', 'cost-tracker-config.json')
     let peakConfig = defaultPeakConfig()
     let cloudConfig = defaultCloudConfig()
+    let uiConfig = defaultUiConfig()
     let configLoadWarned = false
 
     function loadConfig() {
@@ -225,6 +231,7 @@ export default {
         const parsed = JSON.parse(readFileSync(CONFIG_FILE, 'utf8'))
         peakConfig = normalizePeakConfig(parsed)
         cloudConfig = normalizeCloudConfig(parsed)
+        uiConfig = normalizeUiConfig(parsed)
       } catch (e) {
         if (!configLoadWarned) { console.error('cost tracker config load failed, using defaults', e); configLoadWarned = true }
       }
@@ -234,7 +241,7 @@ export default {
       try {
         mkdirSync(dirname(CONFIG_FILE), { recursive: true })
         const tmp = CONFIG_FILE + '.tmp'
-        writeFileSync(tmp, JSON.stringify(Object.assign({}, peakConfig, cloudConfig)), 'utf8')
+        writeFileSync(tmp, JSON.stringify(Object.assign({}, peakConfig, cloudConfig, uiConfig)), 'utf8')
         renameSync(tmp, CONFIG_FILE)
         return true
       } catch (e) {
@@ -255,6 +262,13 @@ export default {
       return cloudConfig
     }
 
+    /** 界面显示开关：显式写 false 才隐藏，缺省保持可见（老配置升级后界面不变） */
+    function setUiConfig(raw) {
+      uiConfig = normalizeUiConfig(Object.assign({}, uiConfig, raw))
+      saveConfig()
+      return uiConfig
+    }
+
     // ---------- settings 命名空间（可选服务） ----------
     // 字段全部 .default(undefined)：只有用户在卡片里显式保存才写入用户层，
     // 从而不覆盖我们自己配置文件里的既有值。
@@ -268,9 +282,25 @@ export default {
       const patch = {}
       for (const k of Object.keys(next)) if (next[k] !== undefined) patch[k] = next[k]
       if (!Object.keys(patch).length) return
-      const before = JSON.stringify(cloudConfig)
-      cloudConfig = normalizeCloudConfig(Object.assign({}, cloudConfig, patch))
-      if (JSON.stringify(cloudConfig) !== before) saveConfig()
+      // 卡片里既有云端同步字段也有界面显示字段，分给各自的规范化函数（互不覆盖）
+      const cloudPatch = {}
+      const uiPatch = {}
+      for (const [k, v] of Object.entries(patch)) {
+        if (UI_SURFACES.some((s) => s.key === k)) uiPatch[k] = v
+        else cloudPatch[k] = v
+      }
+      let changed = false
+      if (Object.keys(cloudPatch).length) {
+        const before = JSON.stringify(cloudConfig)
+        cloudConfig = normalizeCloudConfig(Object.assign({}, cloudConfig, cloudPatch))
+        if (JSON.stringify(cloudConfig) !== before) changed = true
+      }
+      if (Object.keys(uiPatch).length) {
+        const before = JSON.stringify(uiConfig)
+        uiConfig = normalizeUiConfig(Object.assign({}, uiConfig, uiPatch))
+        if (JSON.stringify(uiConfig) !== before) changed = true
+      }
+      if (changed) saveConfig()
     }
 
     function installSettingsSection(provider, owner) {
@@ -319,6 +349,8 @@ export default {
         peakWindows: PEAK_WINDOWS,
         peakHours: PEAK_HOUR_WINDOWS,
         effectiveAt: peakConfig.peakEffectiveAt,
+        // 前端显隐开关（只影响渲染；与峰谷计价本身无关，因此不参与 enabled/effective 判定）
+        ui: Object.assign({}, uiConfig),
         now,
       }
     }
@@ -964,7 +996,7 @@ export default {
     // ---------- cloud sync ----------
     // 同步引擎：只上报、不回写；失败只影响云端视图，绝不影响本地记账。
     const syncEngine = createSyncEngine({
-      getConfig: () => Object.assign({}, peakConfig, cloudConfig),
+      getConfig: () => Object.assign({}, peakConfig, cloudConfig, uiConfig),
       getSnapshot: () => ({
         details: records,
         rollups,
@@ -1169,7 +1201,10 @@ export default {
       usage: () => buildUsageHeat(),
       peak: () => peakSnapshot(),
       'peak-config': (args) => setPeakConfig(args),
-      sync: () => syncEngine.status(),
+      // 界面显示三开关（设置卡片的「界面显示」分组）：patch 里只带这几个键，写回后原样回显
+      'ui-config': (args) => Object.assign({ ok: true }, setUiConfig(args || {})),
+      // 同步状态里一并带上界面显示开关：配置卡片只需一次往返就能初始化表单
+      sync: () => Object.assign({}, syncEngine.status(), uiConfig),
       'sync-now': async (args) => {
         const result = await syncEngine.runOnce({ manual: true, full: !!(args && args.full) })
         return Object.assign({ ok: result.ok !== false || !result.error, result }, syncEngine.status())

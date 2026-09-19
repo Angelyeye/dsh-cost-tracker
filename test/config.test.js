@@ -1,9 +1,9 @@
 // ============================================================
 // dsh-cost-tracker 配置层单元测试（零依赖，直接 node 运行）
 //   node test/config.test.js
-// 覆盖：默认值、非法回退、生效门控
+// 覆盖：默认值、非法回退、生效门控、界面显示开关
 // ============================================================
-import { defaultPeakConfig, normalizePeakConfig, peakEffective } from '../config.js'
+import { defaultPeakConfig, normalizePeakConfig, peakEffective, defaultUiConfig, normalizeUiConfig, normalizePluginConfig, UI_SURFACES } from '../config.js'
 
 let failures = 0
 const passed = []
@@ -67,6 +67,39 @@ function ok(cond, msg) {
   ok(peakEffective(cfg, after) === true, '生效: 有效期后 → true')
   ok(peakEffective(cfg, before) === false, '生效: 生效前 → false')
   ok(peakEffective(normalizePeakConfig({ peakEnabled: false }), after) === false, '生效: 停用时 → false')
+}
+
+// 4. 界面显示开关（v1.8.12）
+//    真值语义与 peakEnabled **相反**：显隐是新加的能力，老配置文件里没有这几个键，
+//    读出来必须是 true（否则升级后界面会凭空消失），只有显式 false 才隐藏。
+{
+  const d = defaultUiConfig()
+  ok(Object.keys(d).length === UI_SURFACES.length, '界面显示: 默认项数与 UI_SURFACES 一致')
+  ok(UI_SURFACES.every((s) => d[s.key] === true), '界面显示: 默认全部可见')
+  ok(UI_SURFACES.map((s) => s.key).join(',') === 'uiDockEnabled,uiPeakEnabled,uiDashboardEnabled',
+    '界面显示: 三个落点键名固定（胶囊 / 时段条 / 看板）')
+
+  // 老配置文件（完全没有 ui* 键）→ 全部可见，界面不得因升级而变化
+  const legacy = normalizeUiConfig({ peakEnabled: true, cloudEnabled: true, cloudUrl: 'https://c.example.com' })
+  ok(Object.keys(legacy).every((k) => legacy[k] === true), '界面显示: 老配置（无 ui* 键）→ 全部可见')
+  ok(normalizeUiConfig(null).uiDockEnabled === true, '界面显示: null → 全部可见')
+  ok(normalizeUiConfig([]).uiPeakEnabled === true, '界面显示: 数组 → 全部可见')
+
+  // 显式 false 才隐藏
+  const off = normalizeUiConfig({ uiDockEnabled: false, uiPeakEnabled: true, uiDashboardEnabled: false })
+  ok(off.uiDockEnabled === false && off.uiPeakEnabled === true && off.uiDashboardEnabled === false,
+    '界面显示: 显式 false 精确生效，互不牵连')
+
+  // 非布尔一律回退到"可见"（"no" / 0 / "" 都不算关闭，避免歧义真值）
+  const weird = normalizeUiConfig({ uiDockEnabled: 'no', uiPeakEnabled: 0, uiDashboardEnabled: '' })
+  ok(weird.uiDockEnabled === true && weird.uiPeakEnabled === true && weird.uiDashboardEnabled === true,
+    '界面显示: 非布尔值 → 回退可见（不把 "no"/0 当开关）')
+
+  // 三组字段同存一份文件：合并规范化必须同时保留
+  const merged = normalizePluginConfig({ peakStyle: 'classic', cloudUrl: 'https://c.example.com', uiPeakEnabled: false })
+  ok(merged.peakStyle === 'classic' && merged.cloudUrl === 'https://c.example.com' && merged.uiPeakEnabled === false,
+    '界面显示: 与峰谷 / 云端字段同存不互相覆盖')
+  ok(merged.uiDockEnabled === true && merged.uiDashboardEnabled === true, '界面显示: 未提及的开关保持可见')
 }
 
 console.log('\n' + passed.length + ' passed, ' + failures + ' failed')

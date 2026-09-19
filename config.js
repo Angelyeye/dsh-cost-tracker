@@ -1,9 +1,10 @@
 // ============================================================
 // DSH 花费统计插件 —— 配置层（纯逻辑，可独立测试）
 //
-// 两部分配置同存于 $DSH_HOME/storages/cost-tracker-config.json：
+// 三部分配置同存于 $DSH_HOME/storages/cost-tracker-config.json：
 //   1. 峰谷计价提示（peak*）：默认值与参考项目 dsh-cost-meter 保持一致；
-//   2. 云端同步（cloud* / sync* / boardView）：多机汇总与设备身份。
+//   2. 云端同步（cloud* / sync* / boardView）：多机汇总与设备身份；
+//   3. 界面显示（ui*）：前端各落点的显隐（本文件末尾有说明）。
 //
 // 字段（峰谷）：
 //   peakEnabled        启用 DeepSeek 峰谷时段价格（影响计费 + 提示显隐）
@@ -36,6 +37,19 @@
 //                          于是「本机可见数据 + 云端结果」= 本机全部 + 其他整机 + 本机其它 agent（不重不漏）
 //   cloudPanelDevices  云端视图的机器过滤（空数组 = 全部）
 //   lastSyncAt/lastSyncOk/lastSyncError  最近一次同步结果（只读回显用）
+//
+// 字段（界面显示，v1.8.12）：
+//   uiDockEnabled       输入框上方的「本会话花费」胶囊（conversation.composer.dock）
+//   uiPeakEnabled       侧边栏底部的峰谷时段条（sidebar.footer.action）
+//   uiDashboardEnabled  设置页左侧的「花费统计」看板入口（settings.section）
+//
+//   三者**互相独立**，且都只影响前端渲染，不影响记账、云端同步与 Agent 工具。
+//   插件配置卡片（settings.plugin.item）不受这三个开关控制 —— 它必须始终可点，
+//   否则关掉之后用户就没有入口再打开了。
+//
+//   真值语义与 peakEnabled 相反：null/undefined → true（显隐是从 v1.8.12 才有的新
+//   能力，老配置文件里没有这几个键，必须保持默认全部可见），只有显式 false 才隐藏。
+//   这样两个方向上都安全：老配置升级后界面不变，新配置关掉就是关掉。
 // ============================================================
 
 /** 默认峰谷计价生效时间（UTC；两档方案已即时生效，门控恒通过） */
@@ -83,6 +97,39 @@ export function defaultCloudConfig() {
 
 /** 看板三态视图取值 */
 export const BOARD_VIEWS = ['local', 'local+cloud', 'cloud']
+
+/**
+ * 前端显隐开关（设置 → 插件 → 插件配置 → 花费统计 → 界面显示）。
+ * 每项声明：配置键、文案、说明，以及它在 DSH 里对应的插槽（便于对照宿主与测试）。
+ * 新增可控落点时只改这张表：服务端 normalize 与前端卡片都从它派生。
+ */
+export const UI_SURFACES = [
+  {
+    key: 'uiDockEnabled',
+    label: '输入框上方的花费胶囊',
+    desc: '本会话花费与模型明细（会话输入区上方）。关闭后输入区不再显示任何花费信息。',
+    slot: 'conversation.composer.dock',
+  },
+  {
+    key: 'uiPeakEnabled',
+    label: '侧边栏峰谷时段条',
+    desc: '侧边栏底部的当前档位 / 倒计时。关闭后峰谷切换弹窗与系统通知一并停用；只想留提醒不想要时段条时，请改用「峰谷计价与提示」里的提示开关。',
+    slot: 'sidebar.footer.action',
+  },
+  {
+    key: 'uiDashboardEnabled',
+    label: '设置页「花费统计」看板',
+    desc: '设置页左侧导航的花费统计入口与看板。关闭后该入口隐藏，插件仍照常记账并同步云端。',
+    slot: 'settings.section',
+  },
+]
+
+/** 界面显示默认配置（全部可见；老配置文件里没有这几个键，读出来就是 true） */
+export function defaultUiConfig() {
+  const out = {}
+  for (const s of UI_SURFACES) out[s.key] = true
+  return out
+}
 
 function bool(v, fallback) { return typeof v === 'boolean' ? v : fallback }
 function intIn(v, lo, hi, fallback) { return typeof v === 'number' && Number.isInteger(v) && v >= lo && v <= hi ? v : fallback }
@@ -143,9 +190,21 @@ export function normalizeCloudConfig(raw) {
   }
 }
 
-/** 合并规范化：一份配置文件同时承载峰谷与云端同步字段 */
+/**
+ * 规范化界面显示开关（显隐真值见文件头的说明：缺省/非布尔 → 可见）。
+ * @param {object} raw - 任意输入
+ */
+export function normalizeUiConfig(raw) {
+  const def = defaultUiConfig()
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return def
+  const out = {}
+  for (const s of UI_SURFACES) out[s.key] = bool(raw[s.key], def[s.key])
+  return out
+}
+
+/** 合并规范化：一份配置文件同时承载峰谷、云端同步与界面显示三组字段 */
 export function normalizePluginConfig(raw) {
-  return Object.assign(normalizePeakConfig(raw), normalizeCloudConfig(raw))
+  return Object.assign(normalizePeakConfig(raw), normalizeCloudConfig(raw), normalizeUiConfig(raw))
 }
 
 /**

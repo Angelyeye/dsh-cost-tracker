@@ -25,6 +25,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import * as REAL_VIEW from '../view.js'
+import { UI_SURFACES, defaultUiConfig } from '../config.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const root = join(here, '..')
@@ -82,6 +83,26 @@ const CLOUD = {
   byModelDay: [{ model: 'deepseek-v4.1-flash', days: [{ date: '2026-09-15', label: '09/15', calls: 100, tokens: 5000000, input: 10, output: 5, cacheRead: 90, cacheWrite: 0, cost: 2.0 }] }],
   recent: [], devices: [{ device: 'other-machine', name: '另一台', cost: 2.0, calls: 100 }], sources: [{ source: 'dsh', cost: 2.0, calls: 100 }],
 }
+// 前端显隐开关（v1.8.12）。默认全可见 —— 每条断言都必须能在「显式 false」下看到消失，
+// 否则「关掉前端显示」这个能力就只是配置里多了一个没人读的字段。
+let uiFlags = { uiDockEnabled: true, uiPeakEnabled: true, uiDashboardEnabled: true }
+const uiPayload = (name) => {
+  // peak 的响应按**真实形态**构造：PeakStrip 依赖 phase（峰谷判定 + 倒计时）才渲染，
+  // 只回 { ok:true } 会让"可见"的断言假红。这里把弹窗关掉，避免测试随真实时间抖动。
+  if (name === 'peak') return {
+    ok: true, enabled: true, effective: true, notice: true, style: 'compact',
+    alert: { enabled: false, ahead: 2, target: 'both', position: 'corner', webNotify: false },
+    phase: { inPeak: false, weekend: false, nextAtMs: Date.now() + 3600000, nextIntoPeak: true, label: '平价时段' },
+    config: { peakStyle: 'compact', peakShowTickLabels: true, peakCompactStack: false, peakAlertWebNotify: false },
+    peakWindows: '周一至周五 9:00-12:00 · 14:00-18:00（周末全天闲时）',
+    peakHours: [{ start: 9, end: 12 }, { start: 14, end: 18 }],
+    effectiveAt: '2026-08-01T00:00:00Z',
+    ui: Object.assign({}, uiFlags),
+    now: Date.now(),
+  }
+  if (name === 'summary') return Object.assign({ ok: true, sessionCost: 1.23, sessionSub: 0, provider: 'deepseek', sessionRealModels: [{ model: 'deepseek-flash', cost: 1.23 }] }, { ui: Object.assign({}, uiFlags) })
+  return null
+}
 let dashPayload = DASH
 // 「Token 用量统计」热力图：本机按天明细（宿主 usage 路由 → buildUsageHeat）
 const LOCAL_USAGE = {
@@ -102,7 +123,11 @@ const CLOUD_USAGE = {
   ],
 }
 const payloadFor = (name, syncView, args) => {
-  if (name === 'sync') return Object.assign({}, SYNC, { view: syncView })
+  // 界面显示开关的写入口：按服务端语义回显（ui-config → Object.assign({ok:true}, 规范化结果)）
+  if (name === 'ui-config') return Object.assign({ ok: true }, uiFlags, args || {})
+  const ui = uiPayload(name)
+  if (ui) return ui
+  if (name === 'sync') return Object.assign({}, SYNC, { view: syncView }, uiFlags)
   if (name === 'dashboard') return dashPayload
   if (name === 'usage') return LOCAL_USAGE
   if (name === 'cloud') return (args && args.route === 'usage') ? CLOUD_USAGE : CLOUD
@@ -135,6 +160,7 @@ const React = {
  */
 function makeModule({ view = null, syncView = 'local' } = {}) {
   let captured = null
+  const apiLog = []
   const sandbox = {
     window: {
       __ModuleLoader__: { load: (reg) => { captured = reg } },
@@ -155,6 +181,7 @@ function makeModule({ view = null, syncView = 'local' } = {}) {
       const name = String(url).split('/').pop()
       let args = {}
       try { args = init && init.body ? JSON.parse(init.body) : {} } catch (e) { args = {} }
+      apiLog.push({ name, args })
       return Promise.resolve({ ok: true, json: () => Promise.resolve(payloadFor(name, syncView, args)) })
     },
     console, setTimeout, clearTimeout, setInterval, clearInterval,
@@ -168,13 +195,15 @@ function makeModule({ view = null, syncView = 'local' } = {}) {
     throw new Error('未预期的模块: ' + spec)
   }
 
-  const out = { bundleId: captured && captured.id, section: null, card: null, cardMeta: null, injected: [], applyError: '' }
+  const out = { bundleId: captured && captured.id, section: null, card: null, cardMeta: null, injected: [], applyError: '', surfaces: {}, apiLog }
   const slots = {
     entries: () => [],
     inject: (name, cb) => { out.injected.push(name); try { cb() } catch (e) { out.injected.push('!!' + name + ':' + e.message) } return () => {} },
     register: (meta, render) => {
       if (meta && meta.name === 'settings.section') out.section = render
       if (meta && meta.name === 'settings.plugin.item') { out.cardMeta = meta; out.card = render }
+      // 常驻落点（输入区胶囊 / 侧边栏时段条）：显隐必须能在渲染期判定，所以这里要拿到渲染函数
+      if (meta && (meta.name === 'conversation.composer.dock' || meta.name === 'sidebar.footer.action')) out.surfaces[meta.name] = render
       return () => {}
     },
   }
@@ -285,6 +314,33 @@ if (typeof mod.card !== 'function') {
     check('展开后出现「服务地址」字段', second.text.includes('服务地址'), JSON.stringify(second.text.trim().slice(0, 100)))
     check('展开后渲染「上次同步」时间标签', /上次同步\s*(刚刚|\d+\s*(分钟|小时)前|\d{2}-\d{2} \d{2}:\d{2})/.test(second.text.replace(/\s+/g, ' ')),
       JSON.stringify(second.text.replace(/\s+/g, ' ').slice(0, 200)))
+
+    check('展开后出现「界面显示」分组', second.text.includes('界面显示'))
+    // 「界面显示」分组：三个开关都要在卡片里，勾选后必须真的提交给宿主并广播事件。
+    // 卡片里共 6 个 checkbox（云端同步 3 个 + 界面显示 3 个），界面显示这组是**立即提交**的：
+    // 用它提交的内容是不是单个 ui* 键来把这 3 个挑出来（顺带断言了云端那组没有变成即提交）。
+    const uiBoxes = []
+    for (const n of second.nodes) {
+      if (n.name !== 'input' || !n.props || n.props.type !== 'checkbox' || typeof n.props.onChange !== 'function') continue
+      const writesUi = []
+      const probe = mod.apiLog.length
+      n.props.onChange({ target: { checked: false } })
+      for (let i = 0; i < 3; i++) await new Promise((r) => setImmediate(r))
+      for (const c of mod.apiLog.slice(probe)) if (c.name === 'ui-config') writesUi.push(c)
+      if (writesUi.length) uiBoxes.push({ node: n, call: writesUi[writesUi.length - 1] })
+    }
+    check('「界面显示」分组渲染出三个开关', uiBoxes.length === 3, `立即提交型 checkbox 数=${uiBoxes.length}`)
+    check('分组文案点明三个落点（胶囊 / 时段条 / 看板）',
+      second.text.includes('输入框上方的花费胶囊') && second.text.includes('侧边栏峰谷时段条') && second.text.includes('设置页「花费统计」看板'),
+      JSON.stringify(second.text.replace(/\s+/g, ' ').slice(-260)))
+    check('分组说明点明「只影响显示、不影响记账」', second.text.includes('照常工作'))
+    if (uiBoxes.length === 3) {
+      const keys = uiBoxes.map((b) => Object.keys(b.call.args || {}).join(','))
+      check('三个开关各自提交自己的键（不整包覆盖）',
+        keys.join('|') === 'uiDockEnabled|uiPeakEnabled|uiDashboardEnabled', JSON.stringify(keys))
+      check('提交内容就是被点开关的新值（false）',
+        uiBoxes.every((b) => Object.values(b.call.args)[0] === false), JSON.stringify(uiBoxes.map((b) => b.call.args)))
+    }
   }
 }
 
@@ -400,6 +456,62 @@ check('仅云端累计 = 云端 total（8000 tokens），不含本机',
   JSON.stringify(hCloud && hCloud.total))
 check('仅云端不再出现本机独有的 09-15（150 tokens）',
   !!hCloud && !dayOf(hCloud, '2026-09-15'), JSON.stringify(hCloud && hCloud.days))
+
+// ---------- [8] 前端显隐开关：显式 false 必须真的让对应落点消失 ----------
+// 这组断言拦的是"开关只写进了配置、界面却不读"这类假功能：每个落点都要能在
+// 关掉后渲染出空（或设置项提示），并且重新打开后原样恢复。
+console.log('[8] 前端显隐开关（uiDockEnabled / uiPeakEnabled / uiDashboardEnabled）')
+const mod7 = makeModule({ view: REAL_VIEW, syncView: 'local' })
+const dockRender = mod7.surfaces['conversation.composer.dock']
+const peakRender = mod7.surfaces['sidebar.footer.action']
+check('注册了常驻落点：输入区胶囊', typeof dockRender === 'function')
+check('注册了常驻落点：侧边栏时段条', typeof peakRender === 'function')
+
+const dockOn = await (async () => { hookSlots.clear(); return renderAsync(dockRender, { sessionId: 's1' }, 3) })()
+check('胶囊默认可见且显示本会话金额（¥1.23）', dockOn.text.includes('1.23'), JSON.stringify(dockOn.text.trim().slice(0, 120)))
+const peakOn = await (async () => { hookSlots.clear(); return renderAsync(peakRender, { wide: true }, 3) })()
+check('时段条默认可见（渲染出内容）', peakOn.text.trim().length > 0, JSON.stringify(peakOn.text.trim().slice(0, 80)))
+
+uiFlags = { uiDockEnabled: false, uiPeakEnabled: true, uiDashboardEnabled: true }
+const dockOff = await (async () => { hookSlots.clear(); return renderAsync(dockRender, { sessionId: 's1' }, 3) })()
+check('关掉 uiDockEnabled 后胶囊渲染为空', dockOff.text.trim() === '' && !dockOff.errors.length, `${JSON.stringify(dockOff.text)} | ${describeErrors(dockOff.errors)}`)
+
+uiFlags = { uiDockEnabled: true, uiPeakEnabled: false, uiDashboardEnabled: true }
+const peakOff = await (async () => { hookSlots.clear(); return renderAsync(peakRender, { wide: true }, 3) })()
+check('关掉 uiPeakEnabled 后时段条渲染为空', peakOff.text.trim() === '' && !peakOff.errors.length, `${JSON.stringify(peakOff.text)} | ${describeErrors(peakOff.errors)}`)
+
+uiFlags = { uiDockEnabled: true, uiPeakEnabled: true, uiDashboardEnabled: false }
+const dashOff = await (async () => { hookSlots.clear(); return renderAsync(mod7.section, {}, 3) })()
+const dashOffText = dashOff.text.replace(/\s+/g, ' ')
+check('关掉 uiDashboardEnabled 后看板不再渲染统计内容', !dashOffText.includes('Token 用量统计') && !dashOffText.includes('总花费'), JSON.stringify(dashOffText.slice(0, 160)))
+check('看板位置改为提示如何重新打开（不静默白屏）', dashOffText.includes('关闭显示') && dashOffText.includes('插件配置'), JSON.stringify(dashOffText.slice(0, 200)))
+check('关闭看板时渲染无异常', dashOff.errors.length === 0, describeErrors(dashOff.errors))
+
+uiFlags = { uiDockEnabled: true, uiPeakEnabled: true, uiDashboardEnabled: true }
+const dashBack = await (async () => { hookSlots.clear(); return renderAsync(mod7.section, {}, 3) })()
+check('重新打开后看板恢复（统计内容回来）', dashBack.text.includes('Token 用量统计'), JSON.stringify(dashBack.text.replace(/\s+/g, ' ').slice(0, 160)))
+
+// ---------- [9] 显隐说明书的单一事实源：client.js 的 UI_SURFACES 必须与 config.js 对齐 ----------
+// 文案在浏览器里有本地副本（配置卡片不该为一段文案再往返服务端），因此键名可能悄悄漂移：
+// 漂移后卡片勾选的键服务端不认，表现是"勾了没反应"。这里把两份清单逐项对起来。
+console.log('[9] 界面显示清单：client.js 与 config.js 一致')
+{
+  const clientKeys = [...source.matchAll(/key:\s*"(ui[A-Za-z]+Enabled)"/g)].map((m) => m[1])
+  const serverKeys = UI_SURFACES.map((s) => s.key)
+  check('client.js 与 config.js 的开关键完全相同',
+    clientKeys.length === serverKeys.length && serverKeys.every((k) => clientKeys.includes(k)),
+    `client=${JSON.stringify(clientKeys)} server=${JSON.stringify(serverKeys)}`)
+  check('三个落点各自独立（不可只留一个）', serverKeys.length === 3, JSON.stringify(serverKeys))
+  for (const s of UI_SURFACES) {
+    check(`说明书中含有「${s.label}」`, source.includes(s.label), `client.js 缺少 ${s.key} 的文案`)
+  }
+  check('默认值语义一致：只有显式 false 才算关闭',
+    /function uiOn\(ui, key\)\s*\{\s*return !\(ui && ui\[key\] === false\);/.test(source),
+    'client.js 的 uiOn 必须按 === false 判定（缺省可见）')
+  check('服务端默认全部可见（defaultUiConfig 全 true）',
+    UI_SURFACES.every((s) => defaultUiConfig()[s.key] === true),
+    JSON.stringify(defaultUiConfig()))
+}
 
 console.log('')
 if (failures > 0) {

@@ -100,7 +100,7 @@ if (!cloud) {
     }
   })
 
-  test('云端按天明细 → cloudUsageHeat → mergeUsageHeat：「本机+云端」热力图不重不漏', async () => {
+  test('云端按天明细 → cloudUsageHeat → mergeUsageHeat：「本机+云端」热力图不重不漏', async (t) => {
     const dir = tmpDir()
     const config = testConfig(dir, {
       DSH_SYNC_TOKEN: 'shared-bootstrap-token-0123456789', ALLOW_DEVICE_SELF_REGISTER: '1',
@@ -126,9 +126,15 @@ if (!cloud) {
       })
       const body = await res.json()
       assert.equal(body.ok, true)
-      // 云端 v1.3.2 起 byDay 才带 token 类型拆分；缺了它热力图只能拿到 tokens 总数
       const cloudDay = body.byDay.find((d) => d.tokens > 0)
       assert.ok(cloudDay, 'byDay 必须带按天明细')
+      // 云端 v1.3.2 起 byDay 才带 token 类型拆分。本地同时检出的是**旧版云端**时跳过，
+      // 与文件头「跨仓库依赖」同一条原则：环境不满足就明确跳过，不让它变成发布闸门的假红。
+      // 线上若真的连着旧云端，热力图会自动退回本机并在卡片上标注口径 —— 属于已声明的降级行为。
+      if (!('input' in cloudDay)) {
+        t.skip('本地 dsh-cost-cloud 早于 v1.3.2（byDay 无 token 类型拆分）：跳过本用例，请升级兄弟目录后重跑')
+        return
+      }
       for (const k of ['input', 'output', 'cacheRead', 'cacheWrite']) {
         assert.ok(k in cloudDay, 'byDay 必须含 ' + k + '（热力图悬停明细 + 按视图合并）')
       }
