@@ -261,6 +261,17 @@ Example: `curl -X POST http://127.0.0.1:3080/api/cost-tracker/summary -d '{}'`
 
 > Highlights only — the full version-by-version history lives in [`CHANGELOG.md`](./CHANGELOG.md) (Chinese).
 
+### v1.8.15 (2026-09-26)
+
+**Fixed: the Volcengine quota panel had no place to enter credentials, and an inference API key was being used as the AccessKeyID**
+
+- **The panel now has its own credential inputs (the main fix).** Previously credentials could only be set through the plugin-config card or by hand-writing environment variables — the panel itself offered **nowhere to type**, so users saw only "credentials invalid" with no way forward. It now provides `AccessKeyID` / `SecretAccessKey` fields plus three actions: **Query** (verifies without persisting), **Save** (persists to disk) and **Clear**. The AccessKeyID is echoed back for confirmation; the SecretAccessKey is never echoed (when one is stored, the field hints "leave blank to keep"). A **"Volcengine quota"** button was added to the toolbar as an entry point — otherwise the panel stays hidden by default and users can never reach it.
+- **Fixed: an inference API key was being used as the AccessKeyID — the real cause of the 401s.** When a provider's baseURL points at the Ark coding endpoint, its `apiKeyEnv` is an **inference** API key, while quota queries need an IAM `AccessKeyID + SecretAccessKey`. The old discovery chain fed that value into the AK candidates, producing a cross-source Frankenstein pair (inference key as AK + an unrelated SK from the credential file). Signing with it always returns 401, and a 401 is a *soft failure* here, so the plugin only reported "credentials invalid or no permission" — the root cause was undiagnosable. Now AK and SK must come from the **same source**; inference keys are recognised by name (`API_KEY`/`TOKEN` without `ACCESSKEY`/`SECRETKEY`) and excluded; and the message explicitly names the offending variable as an inference key.
+- **Fixed: a `ReferenceError` (TDZ) turned soft failures into HTTP 500.** `keyEnv` was declared inside `try` but referenced in `catch`, so *every* failure path (401 / network error / changed shape) threw again during error handling and surfaced as a 500. It is now declared outside.
+- **Fixed: `keyEnv` always showed "unknown"** — `resolveApiKey()` returns `{value, source}` only, and `env` is added by `resolveAnyEnv()`, so the panel never told you which environment variable to fix.
+- **Safety: an empty string no longer clears a stored secret.** Because the secret is never echoed, its field is necessarily blank whenever the panel is reopened; treating that as "clear" would silently wipe a stored secret the moment someone edited only the AK. Only a **non-empty** secret overwrites, and clearing requires an explicit `clear:true`.
+- Tests: `test/volcengine-host.test.js` grew to **48 assertions**, adding four groups: inference keys must not be treated as AKs (a regression test replicating the real provider config), an empty string must not overwrite a stored secret, editing only the AK still works, and only `clear` clears.
+
 ### v1.8.14 (2026-09-26)
 
 **New: Volcengine Ark Coding Plan support (quota monitoring + equivalent cost)**

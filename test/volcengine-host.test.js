@@ -188,13 +188,18 @@ console.log('[2] 密钥绝不回显')
   check('响应里不含 AccessKeyID 明文', !raw.includes(AK), raw.slice(0, 200))
   check('只回显来源与变量名', typeof v.keySource === 'string' && typeof v.keyEnv === 'string',
     `keySource=${v.keySource} keyEnv=${v.keyEnv}`)
+  // keyEnv 必须是**真实变量名**（不是 undefined/空）：排查时面板要直接告诉用户去改哪个环境变量
+  check('keyEnv 是真实变量名而非未知', v.keyEnv === 'VOLC_ACCESSKEY', String(v.keyEnv))
 
-  // 写进配置卡片也不能被读回来
+  // 写进配置卡片也不能被读回来。
+  // 边界：AccessKeyID **会**回显（面板要用它预填输入框，且它在火山控制台里本就明文可见），
+  // SecretAccessKey 才是真正的秘密，任何响应都不得包含它。
   const saved = await api('volcengine-config', { volcengineAccessKeyId: 'AKLTconfig0001', volcengineSecretAccessKey: 'secretConfig0001' })
-  check('volcengine-config 写入后只回是否已配置', saved.ok === true && saved.volcengineHasKeys === true, JSON.stringify(saved))
-  check('写入响应不含密钥明文',
-    !JSON.stringify(saved).includes('secretConfig0001') && !JSON.stringify(saved).includes('AKLTconfig0001'),
+  check('volcengine-config 写入后回显 AK 与「已配置」',
+    saved.ok === true && saved.volcengineHasKeys === true && saved.volcengineAccessKeyId === 'AKLTconfig0001',
     JSON.stringify(saved))
+  check('写入响应不含 SecretAccessKey 明文',
+    !JSON.stringify(saved).includes('secretConfig0001'), JSON.stringify(saved))
   const status = await api('sync', {})
   check('sync 状态里也不含密钥',
     !JSON.stringify(status).includes('secretConfig0001'), JSON.stringify(status).slice(0, 200))
@@ -204,8 +209,31 @@ console.log('[2] 密钥绝不回显')
   check('落盘后峰谷 / 云端字段未被挤掉',
     onDisk.includes('火山测试机') && JSON.parse(onDisk).peakEnabled === true)
 
-  // 还原成「用凭据文件」，后续用例继续走凭据发现链
-  await api('volcengine-config', { volcengineAccessKeyId: '', volcengineSecretAccessKey: '' })
+  // 还原成「用凭据文件」，后续用例继续走凭据发现链（清空必须显式 clear:true）
+  await api('volcengine-config', { clear: true })
+}
+
+// ---------- 2b. 防呆：空串不等于清空 ----------
+// 我们从不回显 SK，所以跨浏览器/重开面板时 SK 输入框必然是空的。若把空串当成
+// 「清空」，用户只改一下 AK 就会把已存好的 SK 一起抹掉 —— 那是静默丢凭据。
+console.log('[2b] 保存语义：空串不覆盖已存的 SecretAccessKey')
+{
+  await api('volcengine-config', { volcengineAccessKeyId: 'AKLTkeep0001', volcengineSecretAccessKey: 'secretKeep0001' })
+  // 只改 AK，SK 留空（模拟「输入框本来就是空的」）
+  const r1 = await api('volcengine-config', { volcengineAccessKeyId: 'AKLTkeep0002', volcengineSecretAccessKey: '' })
+  check('只改 AK 时 SK 未被清空', r1.volcengineHasKeys === true, JSON.stringify(r1))
+  check('改后的 AK 已生效', r1.volcengineAccessKeyId === 'AKLTkeep0002', String(r1.volcengineAccessKeyId))
+  fetchCalls = []
+  const v1 = await api('volcengine-usage', { force: true })
+  check('改 AK 后仍能用（说明 SK 还在）', v1.ok === true, JSON.stringify(v1).slice(0, 200))
+  check('用的是新 AK', String(fetchCalls[0]?.init?.headers?.authorization || '').includes('Credential=AKLTkeep0002/'))
+
+  // 显式 clear 才清空
+  const r2 = await api('volcengine-config', { clear: true })
+  check('clear:true 后两者都空', r2.volcengineHasKeys === false && r2.volcengineAccessKeyId === '', JSON.stringify(r2))
+  const r3 = await api('volcengine-config', { volcengineAccessKeyId: 'AKLTonly0003' })
+  check('只填 AK 时仍算未配齐', r3.volcengineHasKeys === false, JSON.stringify(r3))
+  await api('volcengine-config', { clear: true })
 }
 
 // ---------- 3. 配置卡片填的凭据优先生效 ----------
@@ -218,7 +246,7 @@ console.log('[3] 配置卡片凭据优先于凭据文件')
   check('用的是卡片里填的 AK', auth.includes('Credential=AKLTcard9999/'), auth.slice(0, 60))
   check('来源标记为 config', v.keySource === 'config', String(v.keySource))
   check('卡片凭据的 SK 不回显', !JSON.stringify(v).includes('secretCard9999'))
-  await api('volcengine-config', { volcengineAccessKeyId: '', volcengineSecretAccessKey: '' })
+  await api('volcengine-config', { clear: true })
 }
 
 // ---------- 4. 失败路径软降级 ----------
@@ -245,6 +273,49 @@ console.log('[4] 失败路径：软失败，不抛异常、不 500')
   respond = () => { throw new Error('ECONNRESET') }
   v = await api('volcengine-usage', { force: true })
   check('网络异常 → ok:false 且不炸路由', v.ok === false && /ECONNRESET/.test(v.error || ''), String(v.error))
+}
+
+// ---------- 5b. 回归：推理 API Key 绝不能被当成 AccessKeyID ----------
+// 真实故障现场：用户配了 baseURL 指向方舟 coding 端点的 provider（其 apiKeyEnv 是
+// **推理用** API Key），凭据库里另有一对 VOLC_ACCESSKEY / VOLC_SECRETKEY。
+// 早先的候选链把 provider 的 apiKeyEnv 也塞进 AK 候选，于是「推理 Key 当 AK +
+// 凭据库的 SK」拼成假凭据 → 签名 401，而报错只说「凭据无效或无权限」，查不出原因。
+console.log('[5b] 推理 API Key 不得被当作 AK（真实故障回归）')
+{
+  const home3 = mkdtempSync(join(tmpdir(), 'cost-volc-infer-'))
+  mkdirSync(join(home3, 'storages'), { recursive: true })
+  // 凭据库：只有 SK，**没有** AK —— 若把推理 Key 当 AK 就会误判为「凭据齐全」
+  writeFileSync(join(home3, '.credentials.yaml'),
+    'version: 1\nrefs:\n  BYTEBLUS_CODING_PLAN_CN_API_KEY: 11111111-2222-3333-4444-555555555555\n  VOLC_SECRETKEY: secretOnly\n', 'utf8')
+  process.env.DSH_HOME = home3
+  const fresh = await import(pathToFileURL(join(root, 'index.js')).href + '?infer=' + Date.now())
+  let handler3 = null
+  const ctx3 = {
+    // 复刻真实 settings：provider 的 apiKeyEnv 是推理 Key
+    get: (k) => (k === 'settings' ? {
+      get: (ns) => (ns === 'llm-pi-ai' ? {
+        providers: {
+          'byteblus-coding-plan-cn': {
+            apiKeyEnv: 'BYTEBLUS_CODING_PLAN_CN_API_KEY',
+            baseURL: 'https://ark.cn-beijing.volces.com/api/coding/v3',
+          },
+        },
+      } : undefined),
+    } : undefined),
+    inject: () => {}, effect: effectNow, on: () => {},
+    tools: { register: () => {} }, commands: { register: () => {} },
+    webServer: { register: (route) => { handler3 = route && (route.handler || route); return () => {} } },
+  }
+  fresh.default.apply(ctx3)
+  fetchCalls = []
+  const v = await api('volcengine-usage', { force: true }, handler3)
+  check('推理 Key 不被当成 AK（仍判定为缺 AK）',
+    v.ok === false && /缺 AccessKeyID|都缺/.test(v.error || ''), String(v.error))
+  check('因此不发任何签名请求（避免拿到误导性的 401）', fetchCalls.length === 0, `count=${fetchCalls.length}`)
+  check('提示里点名那条是推理 Key，不是配额凭据',
+    /推理/.test(v.error || '') && /BYTEBLUS_CODING_PLAN_CN_API_KEY/.test(v.error || ''), String(v.error))
+  process.env.DSH_HOME = home
+  try { rmSync(home3, { recursive: true, force: true }) } catch (e) {}
 }
 
 // ---------- 5. 缓存与无凭据 ----------

@@ -1,6 +1,6 @@
 {
   "name": "@angelyeye/dsh-cost-tracker",
-  "version": "1.8.14",
+  "version": "1.8.15",
   "description": "DeepSeek Harness (DSH) plugin: LLM token usage & cost tracking with a settings dashboard, agent tools, HTTP API, persistent storage and multi-device cloud sync.",
   "type": "module",
   "main": "index.js",

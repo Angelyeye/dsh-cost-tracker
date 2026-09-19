@@ -24,7 +24,7 @@ import { createSyncEngine, setPluginVersion, SOURCE as SYNC_SOURCE, SYNC_VERSION
 import { Schema } from './schema.js'
 
 /** 插件版本（写入上报信封，便于云端排查版本差异） */
-const PLUGIN_VERSION = '1.8.14'
+const PLUGIN_VERSION = '1.8.15'
 setPluginVersion(PLUGIN_VERSION)
 
 /** 「设置 → 插件 → 插件配置」里的卡片字段（与 settings 命名空间一致） */
@@ -639,9 +639,34 @@ export default {
     // 与 kimi 的差别：方舟配额走管控面 OpenAPI，需 AccessKeyID + SecretAccessKey
     // 成对做 HMAC 签名（不是 Bearer），签名与解析在 volcengine.js 里（纯函数可单测）。
 
-    /** 环境变量名候选：用户自定 provider 的 apiKeyEnv 优先，其后是 SDK 约定名 */
+    /**
+     * 疑似「方舟推理 API Key」的环境变量名（**不能**当 AK 用）。
+     *
+     * 用户配了 baseURL 指向方舟 coding 端点的 provider 时，它的 `apiKeyEnv` 是
+     * **推理用的 API Key**（形如 UUID），而配额查询要的是 IAM 的
+     * AccessKeyID + SecretAccessKey —— 两套完全不同的凭据。早先的候选链把
+     * provider 的 apiKeyEnv 也塞进 AK 候选，于是出现「拿推理 Key 当 AK、再配上
+     * 凭据库里的 SK」这种**跨来源拼凑**的假凭据，签名必然 401，而报错只显示
+     * 「凭据无效或无权限」，查不出真正原因（真机上就是这么表现的）。
+     *
+     * 判据：环境变量名里含 API_KEY / APIKEY / TOKEN，且不含 ACCESSKEY / SECRETKEY
+     * 等「管控面密钥」特征词 —— 这正是两套凭据的命名分界。
+     */
+    function looksLikeInferenceKeyEnv(name) {
+      const n = toStr(name).toLowerCase()
+      if (!n) return false
+      if (/accesskey|access_key|secretkey|secret_key|secret/.test(n)) return false
+      return /api_?key|_key$|token/.test(n)
+    }
+
+    /**
+     * 收集方舟相关 provider 的候选环境变量名。
+     * 返回值区分两类：`keys` 是**管控面** AK/SK 候选，`inference` 是推理 Key
+     * （只用于提示用户「这个不是配额凭据」，绝不参与签名）。
+     */
     function volcengineEnvCandidates() {
-      const out = []
+      const keys = []
+      const inference = []
       const settings = ctx.get('settings')
       if (settings) {
         try {
@@ -653,11 +678,15 @@ export default {
             const looksArkCoding = /ark\.cn-beijing\.volces\.com\/api\/coding/i.test(base)
             const looksVolc = /volcengine/i.test(id) || /volces\.com/i.test(base)
             if (!looksArkCoding && !looksVolc) continue
-            if (p.apiKeyEnv) out.push(String(p.apiKeyEnv))
+            const env = p.apiKeyEnv ? String(p.apiKeyEnv) : ''
+            if (!env) continue
+            // 推理 Key 只登记到 inference（用于给出「你配的是推理 Key」这种有价值的提示）
+            if (looksLikeInferenceKeyEnv(env)) inference.push(env)
+            else keys.push(env)
           }
         } catch (e) {}
       }
-      return out
+      return { keys, inference }
     }
 
     /** 在候选名单里逐个查凭据库 + .credentials.yaml，返回首个命中 */
@@ -699,32 +728,83 @@ export default {
 
     /**
      * 查询火山方舟 Coding Plan 配额。
-     * 凭据发现链：配置卡片字段 → 凭据库 / .credentials.yaml → 环境变量约定名。
+     *
+     * 凭据发现链（按优先级）：
+     *   1. 面板 / 配置卡片里填的 AK + SK（两者都在才用，落盘持久化）；
+     *   2. 环境变量 / 凭据库里**配成对**的 AK + SK —— 关键点：AK 与 SK 必须来自
+     *      **同一个来源**（同名同源），否则就是跨来源拼凑的假凭据；
+     *   3. 都没有则软失败，并明确告知「缺哪一半」以及「你配的那条是推理 Key」。
+     *
+     * @param {{force?:boolean, accessKeyId?:string, secretAccessKey?:string}} [args]
+     *   accessKeyId / secretAccessKey：面板临时提交的凭据（只在本次查询生效，
+     *   不落盘；面板另有「保存」走 volcengine-config 落盘）。
      * 全部失败一律软失败（ok:false + 中文原因），绝不抛到路由层。
      * **返回值只含 keySource/keyEnv，绝不回显 AK/SK 本身。**
      */
-    async function volcengineUsage(force) {
+    async function volcengineUsage(args) {
+      const a = args || {}
+      const force = a.force === true
+      const manualId = typeof a.accessKeyId === 'string' ? a.accessKeyId.trim() : ''
+      const manualSecret = typeof a.secretAccessKey === 'string' ? a.secretAccessKey.trim() : ''
       const now = Date.now()
-      if (!force && volcengineCache && now - volcengineCache.fetchedAt < 120000) return volcengineCache.data
-      const idEnvs = volcengineEnvCandidates().concat(VOLCENGINE_KEY_ENVS)
-      const secretEnvs = volcengineEnvCandidates().concat(VOLCENGINE_SECRET_ENVS)
+      // 带临时凭据的请求不读缓存：用户刚粘贴的 Key 必须立刻被验证
+      const useCache = !force && !manualId && !manualSecret
+      if (useCache && volcengineCache && now - volcengineCache.fetchedAt < 120000) return volcengineCache.data
+
+      const cand = volcengineEnvCandidates()
+      const allKeyEnvs = cand.keys.concat(VOLCENGINE_KEY_ENVS)
+      const allSecretEnvs = cand.keys.concat(VOLCENGINE_SECRET_ENVS)
+      const inferenceHint = cand.inference.length > 0 ? cand.inference[0] : ''
       let data
+      // 声明在 try 之外：catch 里要把「用的是哪一对凭据」一并回传，
+      // 否则报错时既看不到来源、还会因 TDZ 抛 ReferenceError（把软失败变成 500）。
+      let keySource = 'none'
+      let keyEnv = 'VOLC_ACCESSKEY'
       try {
         let id = String(volcengineConfig.volcengineAccessKeyId || '')
         let secret = String(volcengineConfig.volcengineSecretAccessKey || '')
-        let keySource = id ? 'config' : 'none'
-        let keyEnv = idEnvs[0] || 'VOLC_ACCESSKEY'
-        if (!id || !secret) {
-          const rid = await resolveAnyEnv(idEnvs)
-          const rsec = await resolveAnyEnv(secretEnvs)
-          if (!id && rid.value) { id = rid.value; keySource = rid.source; keyEnv = rid.env }
-          if (!secret && rsec.value) secret = rsec.value
+        keySource = id && secret ? 'config' : 'none'
+        // 面板临时凭据优先于一切（用户显式操作，意图最明确）
+        if (manualId && manualSecret) {
+          id = manualId; secret = manualSecret
+          keySource = 'manual'; keyEnv = '（面板输入）'
+        } else if (!id || !secret) {
+          // 逐候选查找，但要求 AK 与 SK **同源**：先找到 AK 的候选名，再用同名的
+          // SECRET 变体去取 SK。这样绝不会把 A 来源的 AK 与 B 来源的 SK 拼在一起。
+          for (const envName of allKeyEnvs) {
+            if (!envName) continue
+            const rid = await resolveApiKey(envName)
+            if (!rid.value) continue
+            // 同一个 env 名对应的 secret 候选：按名替换关键词，逐个试。
+            const secretNames = []
+            const swapped = envName
+              .replace(/ACCESS_?KEY_?ID/i, 'SECRET_ACCESS_KEY')
+              .replace(/ACCESS_?KEY/i, 'SECRETKEY')
+            if (swapped !== envName) secretNames.push(swapped)
+            for (const s of VOLCENGINE_SECRET_ENVS) if (secretNames.indexOf(s) < 0) secretNames.push(s)
+            const rsec = await resolveAnyEnv(secretNames)
+            if (!rsec.value) continue
+            id = rid.value; secret = rsec.value
+            // 注意：resolveApiKey 只返回 { value, source }，**没有 env 字段**
+            // （env 是 resolveAnyEnv 加的）。这里要报告的是「AK 取自哪个变量名」，
+            // 直接用循环变量 envName —— 早先误写成 rid.env，导致面板永远显示
+            // 「未知变量」，排查时看不到该去改哪个环境变量。
+            keySource = rid.source
+            keyEnv = envName
+            break
+          }
         }
         if (!id || !secret) {
+          const missing = !id && !secret ? 'AccessKeyID 与 SecretAccessKey 都缺'
+            : (!id ? '缺 AccessKeyID' : '缺 SecretAccessKey')
+          const hint = inferenceHint
+            ? ' 注意：你配置的 ' + inferenceHint + ' 是**推理用的 ARK API Key**，'
+              + '不是配额凭据，插件不会拿它去签名。'
+            : ''
           data = emptyVolcengine(
-            '未找到火山引擎访问密钥（需 AccessKeyID + SecretAccessKey）。配额查询走方舟管控面，'
-            + '与推理用的 ARK API Key 是两套凭据；请配置 ' + keyEnv + ' / VOLC_SECRETKEY，'
-            + '或在插件配置卡片里填写。',
+            '未找到火山引擎访问密钥（' + missing + '）。配额查询走方舟**管控面**，'
+            + '需要 IAM 的 AccessKeyID + SecretAccessKey（授予 ArkReadOnlyAccess + BillingCenterReadOnlyAccess）。'
+            + hint + ' 请在下方输入框直接填写，或设置环境变量 VOLC_ACCESSKEY / VOLC_SECRETKEY。',
             keySource, keyEnv,
           )
         } else {
@@ -739,11 +819,15 @@ export default {
             updateTime: 0,
             fetchedAt: Date.now(),
             keySource, keyEnv,
+            inferenceHint,
           }
         }
       } catch (e) {
-        data = emptyVolcengine(toStr(e && e.message ? e.message : e), 'none', idEnvs[0] || 'VOLC_ACCESSKEY')
+        // 401/403 之类的软失败：把「用的是哪一对凭据」一并回传，便于定位是不是拼错了
+        data = emptyVolcengine(toStr(e && e.message ? e.message : e), 'none', keyEnv || 'VOLC_ACCESSKEY')
+        data.inferenceHint = inferenceHint
       }
+      if (manualId || manualSecret) return data // 临时凭据不进缓存
       volcengineCache = { fetchedAt: now, data }
       return data
     }
@@ -1042,7 +1126,7 @@ export default {
       // 火山的预热条件与 kimi 同源：当前选中的是火山订阅，或最近一次调用就走火山。
       // 面板自己也会主动拉取（volcengine-usage），这里只是让它在「正在用」时自动出数。
       if (isVolc || isVolcengineProvider(lastProviderSeen)) {
-        if (!volcengineCache || now - volcengineCache.fetchedAt >= 120000) volcengineUsage(false).catch(() => {})
+        if (!volcengineCache || now - volcengineCache.fetchedAt >= 120000) volcengineUsage({}).catch(() => {})
       }
       return {
         sessionCost: r4(sessionCost), sessionCalls,
@@ -1394,7 +1478,7 @@ export default {
       summary: (args) => buildSummary(args),
       dashboard: (args) => buildDashboard(args),
       'kimi-usage': (args) => kimiUsage(!!(args && args.force)),
-      'volcengine-usage': (args) => volcengineUsage(!!(args && args.force)),
+      'volcengine-usage': (args) => volcengineUsage(args || {}),
       balance: (args) => balance(args),
       export: () => exportCsv(),
       prices: () => prices(),
@@ -1404,13 +1488,39 @@ export default {
       'peak-config': (args) => setPeakConfig(args),
       // 界面显示三开关（设置卡片的「界面显示」分组）：patch 里只带这几个键，写回后原样回显
       'ui-config': (args) => Object.assign({ ok: true }, setUiConfig(args || {})),
-      // 火山方舟配额凭据：只回显是否已配置，**绝不回显 SecretAccessKey 明文**
+      // 火山方舟配额凭据：只回显「是否已配置」与 AccessKeyID，**绝不回显 SecretAccessKey 明文**
+      //
+      // 语义（防呆，避免一次误保存就把已存好的密钥清空）：
+      //   · accessKeyId     ：传了就更新，没传就不动；
+      //   · secretAccessKey ：**只有非空**才更新（空串视为「我没改」，不是「清空」）；
+      //   · clear:true      ：显式清空两者（面板的「清除」按钮走这条）。
+      // 否则跨浏览器 / 重开面板时 Secret 输入框必然是空的（我们从不回显它），
+      // 用户只改 AK 一保存就会把 Secret 一起写空 —— 那是静默丢失凭据。
       'volcengine-config': (args) => {
-        setVolcengineConfig(args || {})
-        return Object.assign({ ok: true, volcengineHasKeys: !!(volcengineConfig.volcengineAccessKeyId && volcengineConfig.volcengineSecretAccessKey) })
+        const a = args || {}
+        const patch = {}
+        if (a.clear === true) {
+          patch.volcengineAccessKeyId = ''
+          patch.volcengineSecretAccessKey = ''
+        } else {
+          if (typeof a.volcengineAccessKeyId === 'string') patch.volcengineAccessKeyId = a.volcengineAccessKeyId
+          if (typeof a.volcengineSecretAccessKey === 'string' && a.volcengineSecretAccessKey.trim() !== '') {
+            patch.volcengineSecretAccessKey = a.volcengineSecretAccessKey
+          }
+        }
+        setVolcengineConfig(patch)
+        return Object.assign({
+          ok: true,
+          volcengineHasKeys: !!(volcengineConfig.volcengineAccessKeyId && volcengineConfig.volcengineSecretAccessKey),
+          volcengineAccessKeyId: volcengineConfig.volcengineAccessKeyId,
+        })
       },
       // 同步状态里一并带上界面显示开关：配置卡片只需一次往返就能初始化表单
-      sync: () => Object.assign({}, syncEngine.status(), uiConfig),
+      sync: () => Object.assign({}, syncEngine.status(), uiConfig, {
+        // 面板初始化要用的凭据回显：AK 明文（非敏感，控制台里本就可见）+ 是否已存 SK
+        volcengineAccessKeyId: volcengineConfig.volcengineAccessKeyId,
+        volcengineHasSecret: !!volcengineConfig.volcengineSecretAccessKey,
+      }),
       'sync-now': async (args) => {
         const result = await syncEngine.runOnce({ manual: true, full: !!(args && args.full) })
         return Object.assign({ ok: result.ok !== false || !result.error, result }, syncEngine.status())

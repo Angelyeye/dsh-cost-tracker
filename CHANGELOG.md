@@ -2,6 +2,80 @@
 
 本文件用中文记录 dsh-cost-tracker 的版本变更。
 
+## v1.8.15(2026-09-26)
+
+**修复：火山方舟配额面板「没有配置入口」+「拿推理 Key 当 AK」+ 两个失败路径缺陷**
+
+真机现场：用户装了 v1.8.14 后，设置页出现「订阅套餐用量 · 火山方舟 Coding Plan」面板，
+但显示 `配额查询不可用：火山方舟凭据无效或无权限访问 GetPersonalPlan（HTTP 401）`，
+且面板上**没有任何可填写凭据的地方** —— 只有一句「需要 AK/SK」，无从下手。
+
+### 一、面板自带凭据输入框（用户直接提出的问题）
+
+- 面板内新增一行输入：`AccessKeyID`（明文回显，控制台里本就可见）+ `SecretAccessKey`
+  （`type=password`，**从不回显**；已保存过时 placeholder 变为「已保存，留空则不改」）。
+- 三个动作：
+  - **查询** —— 用输入框里的值直接查一次，**不落盘**，便于先验证凭据对不对；
+  - **保存** —— 写入 `~/.dsh/storages/cost-tracker-config.json`，重启不丢；
+  - **清除凭据** —— 显式清空（仅在有凭据时出现）。
+- 工具栏新增**「火山方舟配额」按钮**作为入口。此前面板只在「存在火山订阅调用」时渲染，
+  新用户既看不到面板、也没有入口 —— 等于功能不存在。
+- 面板标题旁新增来源徽标：`已保存凭据` / `临时凭据` / `环境变量`，一眼看出当前用的是哪套。
+
+### 二、修复：推理 API Key 被当成 AccessKeyID（401 的真正根因）
+
+配了 baseURL 指向 `ark.cn-beijing.volces.com/api/coding/v3` 的 provider 时，其 `apiKeyEnv`
+（如 `BYTEBLUS_CODING_PLAN_CN_API_KEY`）是**推理用的 API Key**，而配额查询要的是 IAM 的
+`AccessKeyID + SecretAccessKey` —— 两套完全不同的凭据。
+
+早先 `volcengineEnvCandidates()` 把这个 apiKeyEnv 也塞进 AK 候选，于是出现跨来源拼凑：
+
+```
+AK = BYTEBLUS_CODING_PLAN_CN_API_KEY（推理 Key，UUID 形态）
+SK = VOLC_SECRETKEY（凭据库里的真 SK）
+```
+
+用这对假凭据去签名，服务端必然 401；而 401 在本插件里是「软失败」，只报「凭据无效或
+无权限」，**根因完全查不出来**（真机上就表现为那一行误导性报错）。
+
+现在：
+- AK 与 SK 必须**同源配对** —— 先按候选名取到 AK，再用**同名推导出的** SECRET 变体取 SK，
+  绝不跨来源拼接；
+- 用命名识别推理 Key（含 `API_KEY`/`APIKEY`/`TOKEN` 且不含 `ACCESSKEY`/`SECRETKEY`/
+  `SECRET`），把这类候选**排除**在 AK 之外，并在提示里点名：
+  「你配置的 X 是推理用的 ARK API Key，不是配额凭据，插件不会拿它去签名」；
+- 缺凭据时明确区分「都缺 / 缺 AK / 缺 SK」。
+
+### 三、修复：两个失败路径缺陷
+
+- **`ReferenceError`（TDZ）把软失败变成 500**：`keyEnv` 原先声明在 `try` 内却在 `catch`
+  里引用。任何一次查询失败（401 / 网络异常 / 结构变化）都会在错误处理里再抛一次
+  `keyEnv is not defined`，被路由层兜成 **HTTP 500** —— 恰好把所有失败路径都打穿了。
+  现声明在 `try` 之外。（由新增的失败路径断言抓到。）
+- **`keyEnv` 永远显示「未知」**：`resolveApiKey()` 只返回 `{ value, source }`，`env` 是
+  `resolveAnyEnv()` 才加的字段；误取 `rid.env` 得到 `undefined`，于是面板从不显示
+  「该去改哪个环境变量」。现直接用循环变量名。
+
+### 四、防呆：空串不等于清空
+
+因为 SK 从不回显，跨浏览器 / 重开面板时 SK 输入框**必然是空的**。若把空串当作「清空」，
+用户只改一下 AK 就会把已存好的 SK 一起写空 —— 静默丢凭据。现在：
+
+| 请求 | 行为 |
+| --- | --- |
+| `{volcengineAccessKeyId:'新AK'}` | 只改 AK，**SK 原样保留** |
+| `{volcengineSecretAccessKey:'新SK'}` | 只改 SK |
+| `{volcengineAccessKeyId:'', volcengineSecretAccessKey:''}` | **不动**（空串不是指令） |
+| `{clear:true}` | 显式清空两者 |
+
+响应回显 `volcengineAccessKeyId`（非敏感）与 `volcengineHasKeys`，**永不回显 SK**。
+
+### 五、测试
+
+`test/volcengine-host.test.js` 从 36 条扩到 **48 条**，新增四组：
+推理 Key 不得被当作 AK（真实故障回归，复刻用户的 provider 配置）/ 空串不覆盖已存 SK /
+只改 AK 后仍可用 / `clear` 才清空。全量测试通过。
+
 ## v1.8.14(2026-09-26)
 
 **新增：火山方舟 Coding Plan 订阅支持（配额监控 + 等效费用）；并修掉两个此前静默存在的缺陷**

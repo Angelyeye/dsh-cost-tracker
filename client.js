@@ -763,7 +763,7 @@ window.__ModuleLoader__.load({
 		const mergeDash = VIEW.mergeDash;
 		const mergeUsageHeat = VIEW.mergeUsageHeat || vMergeUsageHeat;
 
-		function filterRow(days, setDays, onExport, onRefresh, msg, busy, peakWindows, viewCtl) {
+		function filterRow(days, setDays, onExport, onRefresh, msg, busy, peakWindows, viewCtl, onOpenVolc) {
 			const views = viewCtl && viewCtl.available ? BOARD_VIEWS : [BOARD_VIEWS[0]];
 			return e("div", { className: "cost-row" },
 				e("select", { className: "cost-select", value: String(days), onChange: ev => setDays(parseInt(ev.target.value, 10)) },
@@ -780,6 +780,10 @@ window.__ModuleLoader__.load({
 				viewCtl && viewCtl.available && viewCtl.view !== "local"
 					? e("select", { className: "cost-select", value: viewCtl.dimension, onChange: ev => viewCtl.setDimension(ev.target.value), title: "维度：查看合计，或按机器 / Agent / 模型 / 项目拆分" },
 						BOARD_DIMS.map(d => e("option", { key: d.id, value: d.id }, d.label)))
+					: null,
+				// 火山方舟配额面板的入口：没配过凭据时面板默认不显示，没这个按钮用户就找不到入口
+				onOpenVolc
+					? e("button", { className: "cost-btn", title: "配置火山方舟 AccessKeyID / SecretAccessKey 并查看 Coding Plan 配额", onClick: onOpenVolc }, "火山方舟配额")
 					: null,
 				e("button", { className: "cost-btn", onClick: onExport, disabled: busy }, "导出 CSV"),
 				e("button", { className: "cost-btn", onClick: onRefresh, disabled: busy }, busy ? "刷新中…" : "刷新"),
@@ -937,7 +941,33 @@ window.__ModuleLoader__.load({
 				resetsAt ? e("div", { className: "cost-hint", style: { marginTop: "4px" } }, countdown(resetsAt, now)) : null);
 		}
 
-		function volcenginePanel(volc, dash, now, onForce) {
+		// 火山方舟凭据输入区（面板自带，不必去翻插件配置卡片或手写环境变量）。
+		// AK 明文回显（控制台里本就可见）；SK 从不回显，已存过时只提示「已保存」。
+		function volcCredForm(cred, hasSecret, onQuery, onSave, onClear) {
+			const busy = cred.busy;
+			return e("div", { style: { marginTop: "10px" } },
+				e("div", { className: "cost-row", style: { gap: "6px", flexWrap: "wrap" } },
+					e("input", {
+						className: "cost-input", placeholder: "火山引擎 AccessKeyID",
+						value: cred.id, spellCheck: false, autoComplete: "off",
+						onChange: ev => cred.setId(ev.target.value),
+					}),
+					e("input", {
+						className: "cost-input", type: "password", spellCheck: false, autoComplete: "new-password",
+						placeholder: hasSecret ? "SecretAccessKey（已保存，留空则不改）" : "火山引擎 SecretAccessKey",
+						value: cred.secret,
+						onChange: ev => cred.setSecret(ev.target.value),
+					}),
+					e("button", { className: "cost-btn", disabled: busy, onClick: onQuery }, busy ? "查询中…" : "查询"),
+					e("button", { className: "cost-btn", disabled: busy, onClick: onSave }, "保存"),
+					hasSecret || cred.id ? e("button", { className: "cost-btn", disabled: busy, onClick: onClear }, "清除凭据") : null),
+				e("div", { className: "cost-hint", style: { marginTop: "4px" } },
+					"配额查询走方舟**管控面** OpenAPI，需要 IAM 的 AccessKeyID / SecretAccessKey"
+					+ "（子用户授予 ArkReadOnlyAccess + BillingCenterReadOnlyAccess）；"
+					+ "它与推理用的 ARK API Key 是**两套不同凭据**。保存后写入本机插件配置，重启不丢。"));
+		}
+
+		function volcenginePanel(volc, dash, now, onForce, credForm) {
 			const ok = volc && volc.ok;
 			let body;
 			if (!volc) {
@@ -945,11 +975,10 @@ window.__ModuleLoader__.load({
 			} else if (!volc.ok) {
 				body = e("div", { style: { marginTop: "8px" } },
 					e("div", { className: "cost-err" }, "配额查询不可用：" + (volc.error || "未知错误")),
-					e("div", { className: "cost-hint", style: { marginTop: "4px" } },
-						"配额查询走方舟**管控面** OpenAPI，需要火山引擎 AccessKeyID / SecretAccessKey"
-						+ "（IAM 子用户授予 ArkReadOnlyAccess + BillingCenterReadOnlyAccess），"
-						+ "与推理用的 ARK API Key 是两套凭据。当前尝试的变量：" + (volc.keyEnv || "未知")
-						+ "（来源：" + (volc.keySource || "无") + "）。"));
+					volc.keyEnv && volc.keySource !== "none"
+						? e("div", { className: "cost-hint", style: { marginTop: "4px" } },
+							"本次尝试的凭据来源：" + volc.keyEnv + "（" + volc.keySource + "）。")
+						: null);
 			} else {
 				const list = volc.windowList || [];
 				if (list.length === 0) {
@@ -965,9 +994,11 @@ window.__ModuleLoader__.load({
 				e("div", { className: "cost-row" },
 					e("span", { className: "cost-panel-title" }, "订阅套餐用量 · 火山方舟 Coding Plan"),
 					ok && volc.action ? e("span", { className: "cost-badge" }, volc.action) : null,
+					ok ? e("span", { className: "cost-badge" }, volc.keySource === "config" ? "已保存凭据" : volc.keySource === "manual" ? "临时凭据" : "环境变量") : null,
 					e("span", { className: "cost-spacer" }),
 					e("button", { className: "cost-btn", onClick: onForce }, "刷新配额")),
 				body,
+				credForm,
 				e("div", { className: "cost-hint", style: { marginTop: "10px" } },
 					"订阅用量统计：" + stats + "（订阅已覆盖，等效费用仅供参考）"));
 		}
@@ -1729,6 +1760,11 @@ window.__ModuleLoader__.load({
 			const [dashErr, setDashErr] = useState("");
 			const [kimi, setKimi] = useState(null);
 			const [volc, setVolc] = useState(null);
+			// 火山方舟凭据输入（面板自带）：AK 回显、SK 不回显、busy 只管自己这块
+			const [volcId, setVolcId] = useState("");
+			const [volcSecret, setVolcSecret] = useState("");
+			const [volcHasSecret, setVolcHasSecret] = useState(false);
+			const [volcBusy, setVolcBusy] = useState(false);
 			const [balance, setBalance] = useState(null);
 			const [tab, setTab] = useState("period");
 			const [scheme, setSchemeState] = useState(() => {
@@ -1767,6 +1803,8 @@ window.__ModuleLoader__.load({
 				try { localStorage.setItem("dsh-cost-tracker-dim", d) } catch (e) {}
 			}
 			const viewInitRef = useRef(false);
+			// 凭据一次回填即可，之后以输入框为准（不然用户刚改完就被 sync 轮询覆盖回去）
+			const volcCredInitRef = useRef(false);
 
 			function loadDash(d) {
 				apiCall("dashboard", { days: d }).then(v => {
@@ -1778,6 +1816,12 @@ window.__ModuleLoader__.load({
 				apiCall("sync", {}).then(v => {
 					if (!v) return;
 					setSync(v);
+					// 面板凭据回显：AK 明文（与云端看板同口径），SK 只回「是否已保存」
+					if (typeof v.volcengineAccessKeyId === "string" && v.volcengineAccessKeyId) {
+						volcCredInitRef.current = true;
+						setVolcId(prev => prev || v.volcengineAccessKeyId);
+					}
+					setVolcHasSecret(!!v.volcengineHasSecret);
 					// 首次进入：以配置里的视图为准（三态开关的权威值在配置，便于多机一致）
 					if (!viewInitRef.current && (v.view === "local" || v.view === "local+cloud" || v.view === "cloud")) {
 						viewInitRef.current = true;
@@ -1824,6 +1868,38 @@ window.__ModuleLoader__.load({
 			}
 			function loadVolc(force) {
 				apiCall("volcengine-usage", { force: !!force }).then(v => setVolc(v)).catch(() => {});
+			}
+			// 面板自带的凭据输入：AK 明文回显、SK 从不回显（只提示已保存）
+			function volcSaveCred() {
+				const patch = {};
+				if (volcId.trim()) patch.volcengineAccessKeyId = volcId.trim();
+				if (volcSecret.trim()) patch.volcengineSecretAccessKey = volcSecret.trim();
+				if (!Object.keys(patch).length) { setMsg("请先填写 AccessKeyID 与 SecretAccessKey"); return; }
+				apiCall("volcengine-config", patch).then(v => {
+					setVolcHasSecret(!!(v && v.volcengineHasSecret) || !!volcSecret.trim());
+					setVolcSecret("");
+					setMsg(v && v.volcengineHasKeys ? "火山方舟凭据已保存" : "已保存（仍缺一半，请补全）");
+					loadVolc(true);
+				}).catch(err => setMsg("保存失败：" + String(err && err.message ? err.message : err)));
+			}
+			function volcClearCred() {
+				apiCall("volcengine-config", { clear: true }).then(() => {
+					setVolcId(""); setVolcSecret(""); setVolcHasSecret(false);
+					setMsg("火山方舟凭据已清除");
+					loadVolc(true);
+				}).catch(() => {});
+			}
+			// 用输入框里的凭据直接查一次（不落盘，便于先验证再保存）
+			function volcQueryWithCred() {
+				const payload = { force: true };
+				if (volcId.trim()) payload.accessKeyId = volcId.trim();
+				if (volcSecret.trim()) payload.secretAccessKey = volcSecret.trim();
+				setVolcBusy(true);
+				apiCall("volcengine-usage", payload).then(v => {
+					setVolc(v); setVolcBusy(false);
+					if (v && v.ok) setVolcHasSecret(!!(volcHasSecret || volcSecret.trim()));
+					else setMsg("查询失败：" + String((v && v.error) || "未知错误").slice(0, 200));
+				}).catch(err => { setVolcBusy(false); setMsg("查询失败：" + String(err && err.message ? err.message : err)); });
 			}
 			function loadUsage() {
 				apiCall("usage", {}).then(v => {
@@ -1895,14 +1971,23 @@ window.__ModuleLoader__.load({
 				pending: sync ? sync.pending : 0,
 			};
 
-			// 火山方舟面板只在「用得上」时出现：存在火山订阅调用（宿主判定并在
-			// summary 里回传 volcengineActive），或已有窗口数据 / 已尝试过凭据。
-			// 只跑 DeepSeek 或 Kimi 的用户界面保持不变，不会被一个无关面板撑长。
-			const showVolc = !!(volc || (viewDash && viewDash.volcengineActive === true));
+			// 火山方舟面板的显示条件（按「用不用得上」）：
+			//   · 已有窗口数据（volc 非空）—— 查过就会显示，含失败（失败也要能就地改凭据）；
+			//   · 宿主判定存在火山订阅调用（summary.volcengineActive）；
+			//   · 已经保存过凭据 —— 用户显然在用，必须一直可见，否则保存完就找不到入口了；
+			//   · 用户主动打开过（本地标记）—— 首次使用时的入口，避免「必须先调用过才看得到配置」。
+			let volcOpened = false;
+			try { volcOpened = localStorage.getItem("dsh-cost-tracker-volc-open") === "1" } catch (e) {}
+			const showVolc = !!(volc || volcOpened || volcHasSecret || volcId
+				|| (viewDash && viewDash.volcengineActive === true));
+			function openVolc() {
+				try { localStorage.setItem("dsh-cost-tracker-volc-open", "1") } catch (e) {}
+				loadVolc(true);
+			}
 
 			return e("div", { className: "cost-wrap" },
 				e("div", { className: "cost-h1" }, pluginIcon(18), "花费统计"),
-				filterRow(days, setDays, onExport, onRefresh, msg, busy, dash ? dash.peakWindows : "周一至周五 9:00-12:00 · 14:00-18:00（周末全天闲时）", viewCtl),
+				filterRow(days, setDays, onExport, onRefresh, msg, busy, dash ? dash.peakWindows : "周一至周五 9:00-12:00 · 14:00-18:00（周末全天闲时）", viewCtl, openVolc),
 				!cloudAvailable
 					? e("div", { className: "cost-hint", style: { marginTop: "4px" } },
 						"仅显示本机数据。在多台电脑/多个 Agent 之间汇总：到「设置 → 插件 → 插件配置 → 花费统计」填写云端服务地址与令牌。")
@@ -1933,7 +2018,10 @@ window.__ModuleLoader__.load({
 							: usageErr ? e("div", { className: "cost-err" }, "加载失败：" + usageErr)
 							: e("div", { className: "cost-hint" }, "加载中…"))),
 				subPanel(kimi, viewDash, now, () => loadKimi(true)),
-				showVolc ? volcenginePanel(volc, viewDash, now, () => loadVolc(true)) : null,
+				showVolc ? volcenginePanel(volc, viewDash, now, () => loadVolc(true), volcCredForm({
+					id: volcId, secret: volcSecret, busy: volcBusy,
+					setId: setVolcId, setSecret: setVolcSecret,
+				}, volcHasSecret, volcQueryWithCred, volcSaveCred, volcClearCred)) : null,
 				balancePanel(balance, manualKey, setManualKey, k => loadBalance(k)),
 				viewDash ? modelSections(viewDash) : null,
 				viewDash ? recentPanel(viewDash) : null,
