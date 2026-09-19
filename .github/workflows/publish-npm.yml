@@ -106,13 +106,38 @@ jobs:
             -o /tmp/oidc.json -w 'OIDC 交换 HTTP %{http_code}\n'
           node -e "try{const j=require('/tmp/oidc.json');console.log('拿到 npm 受众 OIDC 令牌:', !!j.value)}catch(e){console.log('OIDC 令牌解析失败:', e.message)}"
 
+      # 2026-09-20 排障：npm 的 OIDC 流程**从不抛错** —— 交换失败时它静默回落成
+      # 「无令牌」，最终只报 ENEEDAUTH（看不出原因）。这一步按 npm 自己的实现
+      # （lib/utils/oidc.js）复刻一次「OIDC → npm 令牌」交换，把 HTTP 状态与响应体
+      # 打出来（响应里的 token 字段打码），从而区分：
+      #   · 404/401 且带 npm 的说明 → npmjs.com 侧可信发布者配置不匹配（需在网站上修）
+      #   · 200 且拿到 token     → 配置正常，问题在 npm CLI / 环境
+      - name: Probe npm OIDC token exchange
+        if: ${{ !inputs.dry_run }}
+        run: |
+          set -o pipefail
+          IDTOKEN=$(node -e "console.log(require('/tmp/oidc.json').value || '')" 2>/dev/null || true)
+          if [ -z "$IDTOKEN" ]; then echo '没有 id_token，跳过交换探测'; exit 0; fi
+          PKG='@angelyeye/dsh-cost-tracker'
+          ESCAPED='@angelyeye%2fdsh-cost-tracker'
+          echo "POST https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/$ESCAPED"
+          curl -sS -X POST \
+            -H "Authorization: Bearer $IDTOKEN" \
+            -H 'content-type: application/json' \
+            -o /tmp/exchange.json -w '交换 HTTP %{http_code}\n' \
+            "https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/$ESCAPED" || true
+          echo '--- 响应体（token 字段已打码）---'
+          sed -E 's/("token"[[:space:]]*:[[:space:]]*")[^"]*/\1<redacted>/g' /tmp/exchange.json 2>/dev/null | head -c 800 || true
+          echo
+          echo "包名：$PKG"
+
       - name: Publish (dry run)
         if: ${{ inputs.dry_run }}
         run: npm publish --access public --dry-run
 
       # ⚠️ 关键：用 `env -u` **彻底移除**认证变量（不是置空）——空串同样会让 npm
-      # 走令牌认证、跳过 OIDC；`--provenance` 则强制 npm 去换 OIDC 令牌并签名，
-      # 出问题时也会给出明确原因，而不是静默退回未认证发布。
+      # 走令牌认证、跳过 OIDC；`--loglevel verbose` 让 npm 自己的 oidc 日志可见
+      # （它会打印交换失败的真实原因），`--provenance` 强制走 OIDC 签名。
       - name: Publish
         if: ${{ !inputs.dry_run }}
-        run: env -u NODE_AUTH_TOKEN -u NODE_AUTH -u NPM_TOKEN -u NPM_AUTH_TOKEN npm publish --access public --provenance
+        run: env -u NODE_AUTH_TOKEN -u NODE_AUTH -u NPM_TOKEN -u NPM_AUTH_TOKEN npm publish --access public --provenance --loglevel verbose
