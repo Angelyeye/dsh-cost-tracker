@@ -203,9 +203,10 @@ console.log('[2] 密钥绝不回显')
   const status = await api('sync', {})
   check('sync 状态里也不含密钥',
     !JSON.stringify(status).includes('secretConfig0001'), JSON.stringify(status).slice(0, 200))
-  // 落盘是要写的（用户明确填写），但读回只给布尔
+  // v1.9.0：SK 只进凭据库（本沙箱无凭据服务 → 内存态），**配置文件不再落明文**；
+  // 读回依然只给布尔。
   const onDisk = readFileSync(join(home, 'storages', 'cost-tracker-config.json'), 'utf8')
-  check('密钥确实落盘（用户显式填写的配置）', onDisk.includes('secretConfig0001'))
+  check('配置文件不再落 SK 明文（凭据库接管）', !onDisk.includes('secretConfig0001'))
   check('落盘后峰谷 / 云端字段未被挤掉',
     onDisk.includes('火山测试机') && JSON.parse(onDisk).peakEnabled === true)
 
@@ -244,7 +245,7 @@ console.log('[3] 配置卡片凭据优先于凭据文件')
   const v = await api('volcengine-usage', { force: true })
   const auth = String(fetchCalls[0]?.init?.headers?.authorization || '')
   check('用的是卡片里填的 AK', auth.includes('Credential=AKLTcard9999/'), auth.slice(0, 60))
-  check('来源标记为 config', v.keySource === 'config', String(v.keySource))
+  check('来源标记为 credentials（SK 已入凭据库）', v.keySource === 'credentials', String(v.keySource))
   check('卡片凭据的 SK 不回显', !JSON.stringify(v).includes('secretCard9999'))
   await api('volcengine-config', { clear: true })
 }

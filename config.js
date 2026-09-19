@@ -59,6 +59,22 @@
 //   因此老配置文件升级后为零改动、开箱可用。配额查询走方舟管控面 OpenAPI，
 //   需要 IAM 子用户具备 ArkReadOnlyAccess + BillingCenterReadOnlyAccess。
 //   注意与推理用的 ARK API Key 是**两套不同的凭据**，不要混填。
+//
+// 字段（双轨计费 + 价格目录，v1.9.0）：
+//   showTotalWithPlan   金额展示口径：false=只算按量（默认）；true=含 Plan 等值总额
+//   planOverrides       订阅归类覆盖 {'provider/model'|'provider/*': 'plan'|'api'}
+//   priceMatch          目录匹配模式：fuzzy（默认，归一化包含匹配）/ exact
+//   catalogFxRate       目录价 USD→CNY 汇率（默认 7.2）
+//
+// 字段（历史导入，v1.9.0）：
+//   autoImport          启动时自动回放宿主会话日志补录装插件前的调用（幂等）
+//
+// 字段（官方价格同步，v1.9.0）：
+//   priceSyncUrl        官方定价页地址（中文页 = 人民币价）
+//   priceSyncAutoCheck  每日自动核对官方价（只记录差异，应用需手动确认）
+//
+// 字段（安全，v1.9.0，内部标记）：
+//   secretsMigrated     v1.8.x 明文密钥已迁入 DSH 凭据库（幂等迁移标记）
 // ============================================================
 
 /** 默认峰谷计价生效时间（UTC；两档方案已即时生效，门控恒通过） */
@@ -237,13 +253,128 @@ export function normalizeVolcengineConfig(raw) {
   }
 }
 
-/** 合并规范化：一份配置文件同时承载峰谷、云端同步与界面显示三组字段 */
+// ------------------------------------------------------------
+// 双轨计费 + 价格目录（v1.9.0）
+// ------------------------------------------------------------
+
+/** 双轨计费与价格目录默认配置 */
+export function defaultBillingConfig() {
+  return {
+    // 金额展示口径：false = 各金额卡只算按量（真金白银，订阅以附注展示）；
+    //                true  = 含 Plan 等值金额（总口径）。
+    showTotalWithPlan: false,
+    // 订阅归类覆盖：'provider/model' 或 'provider/*' → 'plan' | 'api'
+    planOverrides: {},
+    // 多厂商目录匹配模式：fuzzy（归一化包含匹配，默认）/ exact（全等）
+    priceMatch: 'fuzzy',
+    // 目录价 USD→CNY 汇率（目录数据为 USD / 1M tokens，账本为 CNY）
+    catalogFxRate: 7.2,
+  }
+}
+
+/**
+ * 规范化双轨计费与价格目录配置。
+ * planOverrides 键统一为小写（provider 与 model 各自归一化拼 '/'），
+ * 值只接受 'plan' / 'api'，最多 128 条。
+ */
+export function normalizeBillingConfig(raw) {
+  const def = defaultBillingConfig()
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return def
+  const planOverrides = {}
+  if (raw.planOverrides && typeof raw.planOverrides === 'object' && !Array.isArray(raw.planOverrides)) {
+    for (const [k, v] of Object.entries(raw.planOverrides)) {
+      if (v !== 'plan' && v !== 'api') continue
+      const parts = String(k).split('/')
+      if (parts.length !== 2 || !parts[0].trim() || !parts[1].trim()) continue
+      const norm = (s) => s.trim().toLowerCase().replace(/[^a-z0-9*]/g, '') // 通配键保留 *
+      const key = norm(parts[0]) + '/' + norm(parts[1])
+      if (!key.split('/')[1]) continue
+      planOverrides[key] = v
+      if (Object.keys(planOverrides).length >= 128) break
+    }
+  }
+  const fx = Number(raw.catalogFxRate)
+  return {
+    showTotalWithPlan: raw.showTotalWithPlan === true,
+    planOverrides,
+    priceMatch: raw.priceMatch === 'exact' ? 'exact' : 'fuzzy',
+    catalogFxRate: Number.isFinite(fx) && fx >= 0.1 && fx <= 100 ? fx : def.catalogFxRate,
+  }
+}
+
+// ------------------------------------------------------------
+// 历史导入（v1.9.0）
+// ------------------------------------------------------------
+
+/** 历史导入默认配置 */
+export function defaultImportConfig() {
+  return {
+    // 启动时自动回放宿主会话日志，补录「装插件之前」的调用（幂等，可关闭）
+    autoImport: true,
+  }
+}
+
+export function normalizeImportConfig(raw) {
+  const def = defaultImportConfig()
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return def
+  return { autoImport: raw.autoImport !== false }
+}
+
+// ------------------------------------------------------------
+// 官方价格同步（v1.9.0）
+// ------------------------------------------------------------
+
+/** 官方定价页（中文页直接给出人民币价，与账本币种一致） */
+export const DEFAULT_PRICING_DOC_URL = 'https://api-docs.deepseek.com/zh-cn/quick_start/pricing'
+
+/** 价格同步默认配置 */
+export function defaultPriceSyncConfig() {
+  return {
+    priceSyncUrl: DEFAULT_PRICING_DOC_URL,
+    // 每日自动核对官方价：只核对并记录差异，应用仍需在配置卡手动确认
+    priceSyncAutoCheck: true,
+  }
+}
+
+export function normalizePriceSyncConfig(raw) {
+  const def = defaultPriceSyncConfig()
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return def
+  const url = typeof raw.priceSyncUrl === 'string' ? raw.priceSyncUrl.trim() : ''
+  return {
+    priceSyncUrl: /^https:\/\/\S+$/i.test(url) ? url.slice(0, 512) : def.priceSyncUrl,
+    priceSyncAutoCheck: raw.priceSyncAutoCheck !== false,
+  }
+}
+
+// ------------------------------------------------------------
+// 安全（v1.9.0）：密钥迁移等内部标记
+// ------------------------------------------------------------
+
+export function defaultSecurityConfig() {
+  return {
+    // v1.8.x 明文密钥是否已迁入 DSH 凭据库（幂等迁移标记，配置卡不展示）
+    secretsMigrated: false,
+  }
+}
+
+export function normalizeSecurityConfig(raw) {
+  const def = defaultSecurityConfig()
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return def
+  return { secretsMigrated: raw.secretsMigrated === true }
+}
+
+/** 合并规范化：一份配置文件同时承载峰谷、云端同步、界面显示、计费/目录、
+ *  历史导入、价格同步与安全标记等各组字段 */
 export function normalizePluginConfig(raw) {
   return Object.assign(
     normalizePeakConfig(raw),
     normalizeCloudConfig(raw),
     normalizeUiConfig(raw),
     normalizeVolcengineConfig(raw),
+    normalizeBillingConfig(raw),
+    normalizeImportConfig(raw),
+    normalizePriceSyncConfig(raw),
+    normalizeSecurityConfig(raw),
   )
 }
 

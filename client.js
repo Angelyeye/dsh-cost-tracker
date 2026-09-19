@@ -241,6 +241,31 @@ window.__ModuleLoader__.load({
 .cost-pcard-chevron { color: var(--dsw-alias-label-tertiary, #8b93a1); flex: none; transition: transform .16s; }
 .cost-pcard-chevron.is-open { transform: rotate(180deg); }
 .cost-pcard-body { border-top: .5px solid var(--dsw-alias-border-l2, #e5e7eb); margin: 0 16px; padding: 12px 0 10px; }
+/* ---------- 插件配置卡片 v1.9.0：顶部状态条 + 折叠分组 ---------- */
+.cost-cfg-top { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 2px 0 10px; }
+.cost-cfg-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; line-height: 1.6; padding: 2px 9px; border-radius: 999px; border: .5px solid var(--dsw-alias-border-l2, #e5e7eb); background: var(--dsw-alias-bg-layer-3, transparent); color: var(--dsw-alias-label-secondary, #5b6472); white-space: nowrap; }
+.cost-cfg-chip b { color: var(--dsw-alias-label-primary, #171a1f); font-weight: 600; font-variant-numeric: tabular-nums; }
+.cost-cfg-chip.is-on { border-color: var(--dsw-alias-brand-primary, #2563eb); color: var(--dsw-alias-brand-primary, #2563eb); }
+.cost-sec { border: 1px solid var(--dsw-alias-border-l1, #e5e7eb); border-radius: 10px; margin-top: 10px; overflow: hidden; }
+.cost-sec-head { appearance: none; width: 100%; font: inherit; color: inherit; text-align: left; cursor: pointer; background: none; border: 0; display: flex; align-items: center; gap: 8px; padding: 10px 12px; }
+.cost-sec-head:hover { background: var(--dsw-alias-bg-layer-2, transparent); }
+.cost-sec-head:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary, #2563eb); outline-offset: -2px; }
+.cost-sec-title { font-size: 13px; font-weight: 600; color: var(--dsw-alias-label-primary, #171a1f); flex: none; }
+.cost-sec-sum { font-size: 12px; color: var(--dsw-alias-label-tertiary, #8b93a1); margin-left: auto; text-align: right; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cost-sec-arrow { color: var(--dsw-alias-label-tertiary, #8b93a1); flex: none; transition: transform .16s; }
+.cost-sec-arrow.is-open { transform: rotate(180deg); }
+.cost-sec-body { padding: 2px 12px 12px; }
+.cost-tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
+.cost-tbl th, .cost-tbl td { text-align: left; padding: 4px 6px; border-bottom: .5px solid var(--dsw-alias-border-l2, #e5e7eb); }
+.cost-tbl th { color: var(--dsw-alias-label-secondary, #5b6472); font-weight: 500; }
+.cost-tbl tr:last-child td { border-bottom: 0; }
+.cost-tbl .cost-num { text-align: right; font-variant-numeric: tabular-nums; }
+.cost-kv { display: grid; grid-template-columns: 120px 1fr; gap: 6px 10px; font-size: 12px; align-items: center; }
+.cost-kv .k { color: var(--dsw-alias-label-secondary, #5b6472); }
+.cost-danger { color: var(--dsw-alias-status-error, #dc2626); }
+.cost-plan-switch { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dsw-alias-label-secondary, #5b6472); cursor: pointer; user-select: none; }
+.cost-subblock { border-top: .5px dashed var(--dsw-alias-border-l2, #e5e7eb); margin-top: 10px; padding-top: 10px; }
+.cost-list { font-size: 12px; color: var(--dsw-alias-label-secondary, #5b6472); line-height: 1.7; }
 `;
 			const tag = document.createElement("style");
 			tag.setAttribute("data-plugin-css", "cost-tracker-plugin");
@@ -763,7 +788,37 @@ window.__ModuleLoader__.load({
 		const mergeDash = VIEW.mergeDash;
 		const mergeUsageHeat = VIEW.mergeUsageHeat || vMergeUsageHeat;
 
-		function filterRow(days, setDays, onExport, onRefresh, msg, busy, peakWindows, viewCtl, onOpenVolc) {
+		/**
+		 * 双轨计费口径开关（v1.9.0）：金额是否含 Plan 等值总额。
+		 *   off（默认）= 只算按量真金白银，订阅以附注展示（与 v1.8.x 一致）；
+		 *   on         = 金额 = 按量 + 订阅等值，图表也把订阅并入堆叠。
+		 * 取值优先级：服务端配置 showTotalWithPlan → 浏览器 localStorage（跨设备各存各的）
+		 * 用户一改就同时写两处：localStorage 立即可用，服务端让其它浏览器/看板默认一致。
+		 */
+		const PLAN_TOTAL_KEY = "cost-tracker:showTotalWithPlan";
+		function planTotalInit(serverValue) {
+			try {
+				const ls = window.localStorage.getItem(PLAN_TOTAL_KEY);
+				if (ls === "1") return true;
+				if (ls === "0") return false;
+			} catch (_) { /* 隐私模式禁用 localStorage：回落服务端配置 */ }
+			return serverValue === true;
+		}
+		function planTotalStore(on) {
+			try { window.localStorage.setItem(PLAN_TOTAL_KEY, on ? "1" : "0"); } catch (_) {}
+		}
+
+		function planSwitch(planTotal, setPlanTotal) {
+			return e("label", { className: "cost-plan-switch", title: "开启后金额含订阅套餐等值费用（Plan 总额）；关闭只统计按量真金白银" },
+				e("input", {
+					type: "checkbox",
+					checked: !!planTotal,
+					onChange: ev => setPlanTotal(ev.target.checked),
+				}),
+				e("span", null, "含 Plan 总额"));
+		}
+
+		function filterRow(days, setDays, onExport, onRefresh, msg, busy, peakWindows, viewCtl, onOpenVolc, planTotal, setPlanTotal) {
 			const views = viewCtl && viewCtl.available ? BOARD_VIEWS : [BOARD_VIEWS[0]];
 			return e("div", { className: "cost-row" },
 				e("select", { className: "cost-select", value: String(days), onChange: ev => setDays(parseInt(ev.target.value, 10)) },
@@ -785,6 +840,7 @@ window.__ModuleLoader__.load({
 				onOpenVolc
 					? e("button", { className: "cost-btn", title: "配置火山方舟 AccessKeyID / SecretAccessKey 并查看 Coding Plan 配额", onClick: onOpenVolc }, "火山方舟配额")
 					: null,
+				planSwitch(planTotal, setPlanTotal),
 				e("button", { className: "cost-btn", onClick: onExport, disabled: busy }, "导出 CSV"),
 				e("button", { className: "cost-btn", onClick: onRefresh, disabled: busy }, busy ? "刷新中…" : "刷新"),
 				msg ? e("span", { className: "cost-hint" }, msg) : null,
@@ -794,12 +850,22 @@ window.__ModuleLoader__.load({
 					: e("span", { className: "cost-hint" }, "峰谷时段（北京时间）：" + peakWindows + " · 闲时半价"));
 		}
 
-		function statCards(dash, balance, viewCtl) {
+		function statCards(dash, balance, viewCtl, planTotal) {
 			const today = dash.today || { real: 0, calls: 0, tokens: 0, sub: 0, subCalls: 0, subTokens: 0 };
 			const month = dash.month || { real: 0, calls: 0, tokens: 0, sub: 0, subCalls: 0, subTokens: 0 };
 			const all = dash.all || { real: 0, calls: 0, tokens: 0, sub: 0, subCalls: 0, subTokens: 0 };
-			// 金额卡：主值为按量消费（不含订阅会员等效费用）；副行附注订阅等效
-			const moneySub = (t) => "调用 " + fmtInt(t.calls) + " 次 · Tokens " + fmtCompact(t.tokens) + (t.sub > 0 ? " · 订阅 ¥" + fmtMoney(t.sub) : "");
+			// 金额卡：口径由「含 Plan 总额」开关决定
+			//   off：主值 = 按量消费（不含订阅会员等效费用）；副行附注订阅等效
+			//   on ：主值 = 按量 + 订阅等值（Plan 总额）；副行说明拆分，避免看数不明口径
+			const money = (t) => planTotal ? (Number(t.real) || 0) + (Number(t.sub) || 0) : (Number(t.real) || 0);
+			const moneySub = (t) => {
+				const base = "调用 " + fmtInt(t.calls) + " 次 · Tokens " + fmtCompact(t.tokens);
+				if (planTotal) {
+					return base + " · 含订阅 ¥" + fmtMoney(t.sub) + (t.subCalls ? "（" + fmtInt(t.subCalls) + " 次）" : "");
+				}
+				return base + (t.sub > 0 ? " · 订阅 ¥" + fmtMoney(t.sub) : "");
+			};
+			const planBadge = planTotal ? "（含 Plan）" : "";
 			// 余额卡
 			let balValue = "—", balSub = "查询中…";
 			if (balance && balance.ok) {
@@ -819,9 +885,9 @@ window.__ModuleLoader__.load({
 					: "本机";
 			const tag = (t) => scopeNote + (viewCtl && viewCtl.pending > 0 && viewCtl.view !== "local" ? " · 待同步 " + viewCtl.pending + " 条" : "");
 			return e("div", { className: "cost-cards" },
-				statCard("今日费用（CNY）[" + tag() + "]", "¥" + fmtMoney(today.real), moneySub(today)),
-				statCard("本月费用（CNY）", "¥" + fmtMoney(month.real), moneySub(month)),
-				statCard("总花费（CNY）", "¥" + fmtMoney(all.real), "调用 " + fmtInt(all.calls) + " 次 · Tokens " + fmtCompact(all.tokens) + (all.sub > 0 ? " · 订阅 ¥" + fmtMoney(all.sub) : "")),
+				statCard("今日费用（CNY）" + planBadge + "[" + tag() + "]", "¥" + fmtMoney(money(today)), moneySub(today)),
+				statCard("本月费用（CNY）" + planBadge, "¥" + fmtMoney(money(month)), moneySub(month)),
+				statCard("总花费（CNY）" + planBadge, "¥" + fmtMoney(money(all)), "调用 " + fmtInt(all.calls) + " 次 · Tokens " + fmtCompact(all.tokens) + (all.sub > 0 ? (planTotal ? " · 含订阅 ¥" + fmtMoney(all.sub) : " · 订阅 ¥" + fmtMoney(all.sub)) : "")),
 				statCard("API 请求次数", fmtInt(all.calls + all.subCalls),
 					"按量 " + fmtInt(all.calls) + " · 订阅 " + fmtInt(all.subCalls)),
 				statCard("Tokens", fmtInt(all.tokens + all.subTokens),
@@ -829,12 +895,17 @@ window.__ModuleLoader__.load({
 				statCard("总余额（CNY）", balValue, balSub));
 		}
 
-		function mainPanel(dash, tab, setTab, scheme, setScheme) {
+		function mainPanel(dash, tab, setTab, scheme, setScheme, planTotal) {
 			let chart = null;
 			let legend = [];
 			const labels = dash.byDay.map(d => d.label);
 			const titles = dash.byDay.map(d => d.date);
 			const fmtMoneyValue = (v) => "¥" + fmtMoney(v);
+			// 含 Plan 总额：订阅等值按天并入图（byDay[].sub 由服务端单独给出），
+			// 作为独立图例项而不是混进峰谷段 —— 订阅本就不分峰谷，混进去会污染时段口径。
+			const subTotal = dash.byDay.reduce((s, d) => s + (Number(d.sub) || 0), 0);
+			const showSub = !!planTotal && subTotal > 0;
+			const totalCost = planTotal ? (Number(dash.realCost) || 0) + (Number(dash.subEquivalent) || 0) : (Number(dash.realCost) || 0);
 			if (tab === "period") {
 				// 图例只列真实存在的档位：官方定价只有「高峰 / 闲时」两档；
 				// flat（不分峰谷：订阅套餐、非 DeepSeek provider 兜底价等）**为 0 时不占图例位置**——
@@ -842,16 +913,20 @@ window.__ModuleLoader__.load({
 				const flatTotal = dash.byDay.reduce((s, d) => s + (Number(d.flat) || 0), 0);
 				const hasFlat = flatTotal > 0;
 				const segs = [{ name: "闲时", color: BLUE }, { name: "高峰", color: AMBER }]
-					.concat(hasFlat ? [{ name: "不分峰谷", color: GRAY }] : []);
-				const rows = dash.byDay.map(d => hasFlat ? [d.off, d.peak, d.flat] : [d.off, d.peak]);
+					.concat(hasFlat ? [{ name: "不分峰谷", color: GRAY }] : [])
+					.concat(showSub ? [{ name: "订阅等值", color: GREEN }] : []);
+				const rows = dash.byDay.map(d => {
+					const base = hasFlat ? [d.off, d.peak, d.flat] : [d.off, d.peak];
+					return showSub ? base.concat([d.sub || 0]) : base;
+				});
 				chart = e(StackedBarsChart, { labels, titles, segs, rows, fmtY: fmtAxisMoney, fmtValue: fmtMoneyValue });
 				legend = segs;
 			} else {
 				// 模型按总消费降序排名（byModelDay 已按费用降序），全部展示、不合并、不循环：
 				// 第 1 名取色阶首色（最深，垫底），名次越靠后越浅；色相按所选方案漂移
-				const models = dash.byModelDay.filter(m => !m.subscription);
+				const models = dash.byModelDay.filter(m => planTotal || !m.subscription);
 				const sc = COLOR_SCHEMES[scheme] || COLOR_SCHEMES["orange-yellow"];
-				const segs = models.map((m, i) => ({ name: shortModel(m.model), color: schemeColor(i, sc) }));
+				const segs = models.map((m, i) => ({ name: shortModel(m.model) + (m.subscription ? "（订阅）" : ""), color: schemeColor(i, sc) }));
 				const daySegs = dash.byDay.map((d, di) => {
 					const list = [];
 					for (let i = 0; i < models.length; i++) {
@@ -865,7 +940,7 @@ window.__ModuleLoader__.load({
 			}
 			return e("div", { className: "cost-panel" },
 				e("div", { className: "cost-row" },
-					e("span", { className: "cost-panel-title" }, "消费金额（CNY）¥" + fmtMoney(dash.realCost)),
+					e("span", { className: "cost-panel-title" }, "消费金额（CNY）¥" + fmtMoney(totalCost) + (planTotal ? "（含 Plan 总额）" : "")),
 					tab === "model" ? e("span", { style: { display: "inline-flex", alignItems: "center", gap: "4px", marginLeft: "10px" } },
 						Object.keys(COLOR_SCHEMES).map(k => e("button", {
 							key: k,
@@ -1430,97 +1505,50 @@ window.__ModuleLoader__.load({
 		}
 
 		// 设置面板：峰谷计价与提示
+		/**
+		 * 「峰谷计价与提示」看板面板（v1.9.0 起**只读**）。
+		 * 设置入口统一到「设置 → 插件 → 插件配置 → 花费统计 → 峰谷计价与提示」，
+		 * 这里只回显当前档位与生效配置，避免两处都能改造成口径不一致。
+		 * 预览按钮保留：它只是本地弹窗预览，不改任何持久化状态。
+		 */
 		function PeakPanel(props) {
 			const [snap, setSnap] = useState(null);
-			const [draft, setDraft] = useState(null);
 			const [now, setNow] = useState(Date.now());
-			const [savedMsg, setSavedMsg] = useState("");
 			function load() {
-				apiCall("peak", {}).then(v => {
-					if (v && v.ok) {
-						setSnap(v);
-						setDraft(Object.assign({}, v.config || {}));
-					}
-				}).catch(() => {});
+				apiCall("peak", {}).then(v => { if (v && v.ok) setSnap(v); }).catch(() => {});
 			}
 			useEffect(() => { load(); }, []);
 			useEffect(() => {
 				const id = setInterval(() => setNow(Date.now()), 30000);
 				return () => clearInterval(id);
 			}, []);
-			function setField(k, v) {
-				setDraft(d => Object.assign({}, d, { [k]: v }));
-			}
-			function save() {
-				apiCall("peak-config", draft || {}).then(v => {
-					if (v && typeof v === 'object') {
-						setSnap(s => Object.assign({}, s, { config: v, enabled: v.peakEnabled, notice: v.peakNotice, style: v.peakStyle, alert: { enabled: v.peakAlertEnabled, ahead: v.peakAlertAhead, target: v.peakAlertTarget, position: v.peakAlertPosition, webNotify: v.peakAlertWebNotify } }));
-						setDraft(Object.assign({}, v));
-						setSavedMsg("已保存");
-						setTimeout(() => setSavedMsg(""), 2000);
-					}
-				}).catch(() => setSavedMsg("保存失败"));
-			}
 			function preview(kind) {
 				window.dispatchEvent(new CustomEvent(PEAK_PREVIEW_EVENT, { detail: { kind } }));
 			}
-			const d = draft || {};
-			const cfgSnap = snap ? Object.assign({}, snap, { config: d }) : null;
-			const noticeOn = snap && snap.notice !== false && d.peakNotice !== false;
+			const cfg = (snap && snap.config) || {};
+			const noticeOn = snap && snap.notice !== false && cfg.peakNotice !== false;
+			const rows = [
+				["峰谷计价", cfg.peakEnabled !== false ? "已启用" : "已停用"],
+				["时段条样式", cfg.peakStyle === "classic" ? "环形表盘（24h）" : "简洁（单行紧凑）"],
+				["切换提醒", cfg.peakAlertEnabled !== false ? ("提前 " + (cfg.peakAlertAhead == null ? 2 : cfg.peakAlertAhead) + " 分钟 · " + (cfg.peakAlertTarget === "peak" ? "进入峰时" : cfg.peakAlertTarget === "offpeak" ? "进入谷时" : "峰和谷")) : "已关闭"],
+				["系统通知", cfg.peakAlertWebNotify === true ? "已开启" : "未开启"],
+				["当前档位", snap && snap.phase ? (snap.phase.weekend ? "周末全谷价" : snap.phase.inPeak ? "高峰时段" : "平价时段") : "…"],
+			];
 			return e("div", { className: "cost-panel" },
 				e("div", { className: "cost-row" },
 					e("span", { className: "cost-panel-title" }, "峰谷计价与提示"),
 					e("span", { className: "cost-spacer" }),
-					e("button", { className: "cost-btn", onClick: save, disabled: !draft }, "保存设置")),
-				e("div", { style: { marginTop: "8px", display: "grid", gap: "6px" } },
-					e("label", { className: "cost-row", style: { gap: "8px" } },
-						e("input", { type: "checkbox", checked: d.peakEnabled !== false, onChange: ev => setField("peakEnabled", ev.target.checked) }),
-						e("span", null, "启用 DeepSeek 峰谷时段价格")),
-					e("label", { className: "cost-row", style: { gap: "8px" } },
-						e("input", { type: "checkbox", checked: d.peakNotice !== false, onChange: ev => setField("peakNotice", ev.target.checked) }),
-						e("span", null, "峰时高价时段显著提示（时段条显示）")),
-					e("div", { className: "cost-row", style: { gap: "8px" } },
-						e("span", null, "时段条样式"),
-						e("select", { className: "cost-select", value: d.peakStyle === "classic" ? "classic" : "compact", onChange: ev => setField("peakStyle", ev.target.value) },
-							e("option", { value: "compact" }, "简洁（单行紧凑）"),
-							e("option", { value: "classic" }, "环形表盘（24h）"))),
-					d.peakStyle === "classic" ? e("label", { className: "cost-row", style: { gap: "8px" } },
-						e("input", { type: "checkbox", checked: d.peakShowTickLabels !== false, onChange: ev => setField("peakShowTickLabels", ev.target.checked) }),
-						e("span", null, "显示时间（00:00–21:00 刻度）"))
-						: e("label", { className: "cost-row", style: { gap: "8px" } },
-							e("input", { type: "checkbox", checked: d.peakCompactStack === true, onChange: ev => setField("peakCompactStack", ev.target.checked) }),
-							e("span", null, "双行紧凑（上下布局）"),
-							d.peakCompactStack === true ? e("select", { className: "cost-select", value: d.peakCompactOrder === "text-first" ? "text-first" : "bar-first", onChange: ev => setField("peakCompactOrder", ev.target.value) },
-								e("option", { value: "bar-first" }, "时段条在上·文字在下"),
-								e("option", { value: "text-first" }, "文字在上·时段条在下"))
-								: null),
-					e("label", { className: "cost-row", style: { gap: "8px" } },
-						e("input", { type: "checkbox", checked: d.peakAlertEnabled !== false, onChange: ev => setField("peakAlertEnabled", ev.target.checked) }),
-						e("span", null, "峰/谷切换前弹窗提醒")),
-					d.peakAlertEnabled !== false ? e("div", { className: "cost-row", style: { gap: "8px" } },
-						e("span", null, "提前提醒（分钟，1-30）"),
-						e("input", { className: "cost-input", style: { width: "80px" }, type: "number", min: 1, max: 30, value: String(d.peakAlertAhead == null ? 2 : d.peakAlertAhead), onChange: ev => { const n = parseInt(ev.target.value, 10); if (Number.isInteger(n) && n >= 1 && n <= 30) setField("peakAlertAhead", n); } }),
-						e("span", null, "提醒类型"),
-						e("select", { className: "cost-select", value: d.peakAlertTarget === "peak" || d.peakAlertTarget === "offpeak" ? d.peakAlertTarget : "both", onChange: ev => setField("peakAlertTarget", ev.target.value) },
-							e("option", { value: "both" }, "峰和谷"),
-							e("option", { value: "peak" }, "进入峰时"),
-							e("option", { value: "offpeak" }, "进入谷时")),
-						e("span", null, "弹窗位置"),
-						e("select", { className: "cost-select", value: d.peakAlertPosition === "center" ? "center" : "corner", onChange: ev => setField("peakAlertPosition", ev.target.value) },
-							e("option", { value: "corner" }, "右下角"),
-							e("option", { value: "center" }, "屏幕中心")))
-						: null,
-					e("label", { className: "cost-row", style: { gap: "8px" } },
-						e("input", { type: "checkbox", checked: d.peakAlertWebNotify === true, onChange: ev => setField("peakAlertWebNotify", ev.target.checked) }),
-						e("span", null, "同步发送系统通知（需授权通知权限）")),
-					e("div", { className: "cost-row", style: { gap: "8px", marginTop: "4px" } },
-						e("span", null, "预览弹窗"),
-						e("button", { className: "cost-btn", onClick: () => preview("peak") }, "预览进入峰"),
-						e("button", { className: "cost-btn", onClick: () => preview("offpeak") }, "预览进入谷"),
-						savedMsg ? e("span", { className: "cost-hint" }, savedMsg) : null),
-					e("div", { className: "cost-hint", style: { marginTop: "6px" } },
-						"峰时段（北京时间）：" + (snap ? snap.peakWindows : "周一至周五 9:00-12:00 · 14:00-18:00（周末全天闲时）") + "。生效时间：" + (snap ? snap.effectiveAt : "2026-08-01T00:00:00Z") + "。当前：" + (cfgSnap && cfgSnap.phase ? (cfgSnap.phase.weekend ? "周末全谷价" : cfgSnap.phase.inPeak ? "高峰时段" : "平价时段") : "…"))),
-				noticeOn ? e("div", { style: { marginTop: "8px" } }, e(PeakStrip, { snap: cfgSnap, style: d.peakStyle || "compact", wide: true, now, ringSize: 150 }))
+					e("button", { className: "cost-btn", onClick: () => preview("peak") }, "预览进入峰"),
+					e("button", { className: "cost-btn", onClick: () => preview("offpeak") }, "预览进入谷"),
+					e("button", { className: "cost-btn", onClick: load }, "刷新")),
+				e("div", { className: "cost-sync-ro", style: { marginTop: "8px" } },
+					rows.map(r => e("div", { key: "pk" + r[0], className: "cost-row", style: { gap: "8px" } },
+						e("span", { className: "k", style: { minWidth: "90px" } }, r[0]),
+						e("span", { className: "v" }, r[1])))),
+				e("div", { className: "cost-hint", style: { marginTop: "6px" } },
+					"峰时段（北京时间）：" + (snap ? snap.peakWindows : "周一至周五 9:00-12:00 · 14:00-18:00（周末全天闲时）") +
+					"。当前：" + (snap && snap.phase ? (snap.phase.weekend ? "周末全谷价" : snap.phase.inPeak ? "高峰时段" : "平价时段") : "…")),
+				noticeOn ? e("div", { style: { marginTop: "8px" } }, e(PeakStrip, { snap, style: cfg.peakStyle || "compact", wide: true, now, ringSize: 150 }))
 					: e("p", { className: "cost-hint", style: { marginTop: "8px" } }, "提示已隐藏：需启用峰谷计价并开启「峰时高价时段显著提示」。"),
 				e(SyncReadonlyCard, { sync: props.sync }));
 		}
@@ -1567,15 +1595,47 @@ window.__ModuleLoader__.load({
 		// ============================================================
 		function PluginConfigCard() {
 			const [st, setSt] = useState(null);
+			const [prices, setPrices] = useState(null);
+			const [imp, setImp] = useState(null);
+			const [peakSnap, setPeakSnap] = useState(null);
 			const [draft, setDraft] = useState({});
-			const [msg, setMsg] = useState("");
-			const [busy, setBusy] = useState(false);
-			const [testing, setTesting] = useState("");
-			// 界面显示三开关（独立于云端同步草稿：勾选即刻生效并落盘）
+			// 分组草稿（各自独立保存；互不覆盖）
+			const [peakDraft, setPeakDraft] = useState({});
+			const [bill, setBill] = useState({ showTotalWithPlan: false, priceMatch: "fuzzy", catalogFxRate: 7.2, planRows: [], priceRows: [] });
+			const [psDraft, setPsDraft] = useState({ priceSyncUrl: "", priceSyncAutoCheck: true });
+			const [impDraft, setImpDraft] = useState({ autoImport: true });
+			const [volcId, setVolcId] = useState("");
+			const [volcSecret, setVolcSecret] = useState("");
+			const [volcHasSecret, setVolcHasSecret] = useState(false);
+			const [volcBackend, setVolcBackend] = useState("");
+			const [volcData, setVolcData] = useState(null);
+			const [recomputeRes, setRecomputeRes] = useState(null);
+			const [confirmClear, setConfirmClear] = useState(false);
+			const [msg, setMsg] = useState({});
+			const [busy, setBusy] = useState("");
+			const [now, setNow] = useState(Date.now());
+			// 界面显示三开关（独立于其它草稿：勾选即刻生效并落盘）
 			const [uiDraft, setUiDraft] = useState({ uiDockEnabled: true, uiPeakEnabled: true, uiDashboardEnabled: true });
 			const [uiMsg, setUiMsg] = useState("");
 			// 折叠态：与宿主「插件配置」里其它卡片一致——默认收起，点标题展开
 			const [open, setOpen] = useState(false);
+			// 当前展开的分组（手风琴；默认展开「多机汇总」，其余收起）
+			const [openSec, setOpenSec] = useState("cloud");
+			function say(group, text) {
+				setMsg(prev => Object.assign({}, prev, { [group]: text }));
+				setTimeout(() => setMsg(prev => Object.assign({}, prev, { [group]: "" })), 4000);
+			}
+			function loadPrices() {
+				apiCall("prices", {}).then(v => { if (v && v.ok) setPrices(v); }).catch(() => {});
+			}
+			function loadImport() {
+				apiCall("import-status", {}).then(v => { if (v && v.ok) setImp(v); }).catch(() => {});
+			}
+			function loadPeak() {
+				apiCall("peak", {}).then(v => {
+					if (v && v.ok) { setPeakSnap(v); setPeakDraft(Object.assign({}, v.config || {})); }
+				}).catch(() => {});
+			}
 			function load() {
 				apiCall("sync", {}).then(v => {
 					if (!v) return;
@@ -1586,8 +1646,11 @@ window.__ModuleLoader__.load({
 						cloudUrl: v.url || "",
 						cloudToken: "",
 						syncIntervalSec: v.intervalSec || 60,
+						syncBatchSize: v.syncBatchSize || 500,
 						maskSessionId: !!v.maskSessionId,
 						includePurpose: v.includePurpose !== false,
+						syncRollups: v.syncRollups !== false,
+						syncSinceDays: typeof v.syncSinceDays === "number" ? v.syncSinceDays : 180,
 						cloudView: v.view || "local",
 					});
 					// 界面显示：缺省视为可见（与 normalizeUiConfig 同一真值语义）
@@ -1596,40 +1659,168 @@ window.__ModuleLoader__.load({
 						uiPeakEnabled: v.uiPeakEnabled !== false,
 						uiDashboardEnabled: v.uiDashboardEnabled !== false,
 					});
+					setBill({
+						showTotalWithPlan: v.showTotalWithPlan === true,
+						priceMatch: v.priceMatch === "exact" ? "exact" : "fuzzy",
+						catalogFxRate: typeof v.catalogFxRate === "number" ? v.catalogFxRate : 7.2,
+						planRows: planOverridesToRows(v.planOverrides),
+						priceRows: priceOverridesToRows(v.priceOverrides),
+					});
+					setPsDraft({ priceSyncUrl: v.priceSyncUrl || "", priceSyncAutoCheck: v.priceSyncAutoCheck !== false });
+					setImpDraft({ autoImport: v.autoImport !== false });
+					if (typeof v.volcengineAccessKeyId === "string" && v.volcengineAccessKeyId) setVolcId(prev => prev || v.volcengineAccessKeyId);
+					setVolcHasSecret(!!v.volcengineHasSecret);
+					setVolcBackend(v.volcengineSecretBackend || "");
 				}).catch(() => {});
+				loadPrices();
+				loadImport();
+				loadPeak();
 			}
 			useEffect(() => { load(); }, []);
+			useEffect(() => {
+				const id = setInterval(() => setNow(Date.now()), 30000);
+				return () => clearInterval(id);
+			}, []);
 			const set = (k, v) => setDraft(prev => Object.assign({}, prev, { [k]: v }));
+			const setPeak = (k, v) => setPeakDraft(prev => Object.assign({}, prev, { [k]: v }));
+			const setBillField = (k, v) => setBill(prev => Object.assign({}, prev, { [k]: v }));
 			const field = (label, node, hint) => [
 				e("span", { key: "k" + label, className: "k" }, label),
 				e("span", { key: "v" + label }, node, hint ? e("span", { className: "cost-hint", style: { marginLeft: "8px" } }, hint) : null),
 			];
+			// ---------- 各分组动作 ----------
 			function save() {
-				setBusy(true); setMsg("");
+				setBusy("cloud"); say("cloud", "");
 				const patch = Object.assign({}, draft);
 				if (!patch.cloudToken) delete patch.cloudToken; // 留空 = 不改令牌
 				if (!patch.cloudUrl) patch.cloudEnabled = false;
 				apiCall("sync-config", patch).then(v => {
-					setBusy(false);
-					setMsg(v && v.ok ? "已保存" : "保存失败：" + ((v && v.error) || "未知错误"));
+					setBusy("");
+					say("cloud", v && v.ok ? "已保存" : "保存失败：" + ((v && v.error) || "未知错误"));
 					load();
-				}).catch(err => { setBusy(false); setMsg("保存失败：" + String(err && err.message ? err.message : err)); });
+				}).catch(err => { setBusy(""); say("cloud", "保存失败：" + String(err && err.message ? err.message : err)); });
 			}
 			function test() {
-				setBusy(true); setTesting("测试中…");
+				setBusy("cloud"); say("cloud", "测试中…");
 				apiCall("sync-test", { config: Object.assign({}, draft, { cloudToken: draft.cloudToken || undefined }) }).then(v => {
-					setBusy(false);
-					setTesting(v && v.ok ? ("连接正常 · 服务端 " + (v.serviceVersion || "?") + (v.selfRegister ? " · 允许自注册" : "")) : ("连接失败：" + ((v && v.error) || "未知错误")));
-				}).catch(err => { setBusy(false); setTesting("连接失败：" + String(err && err.message ? err.message : err)); });
+					setBusy("");
+					say("cloud", v && v.ok ? ("连接正常 · 服务端 " + (v.serviceVersion || "?") + (v.selfRegister ? " · 允许自注册" : "")) : ("连接失败：" + ((v && v.error) || "未知错误")));
+				}).catch(err => { setBusy(""); say("cloud", "连接失败：" + String(err && err.message ? err.message : err)); });
 			}
 			function syncNow(full) {
-				setBusy(true); setMsg("同步中…");
+				setBusy("cloud"); say("cloud", "同步中…");
 				apiCall("sync-now", full ? { full: true } : {}).then(v => {
-					setBusy(false);
+					setBusy("");
 					const r = (v && v.result) || {};
-					setMsg(r.error ? ("同步失败：" + r.error) : ("已同步：新增 " + (r.accepted || 0) + " · 去重 " + (r.duplicates || 0) + " · 日汇总 " + (r.rollups || 0)));
+					say("cloud", r.error ? ("同步失败：" + r.error) : ("已同步：新增 " + (r.accepted || 0) + " · 去重 " + (r.duplicates || 0) + " · 日汇总 " + (r.rollups || 0)));
 					load();
-				}).catch(err => { setBusy(false); setMsg("同步失败：" + String(err && err.message ? err.message : err)); });
+				}).catch(err => { setBusy(""); say("cloud", "同步失败：" + String(err && err.message ? err.message : err)); });
+			}
+			/** 峰谷计价与提示：只作用于界面提示与档位判定，不改历史记录 */
+			function savePeak() {
+				setBusy("peak"); say("peak", "");
+				apiCall("peak-config", peakDraft || {}).then(v => {
+					setBusy("");
+					if (v && typeof v === "object") {
+						setPeakDraft(Object.assign({}, v));
+						setPeakSnap(s => Object.assign({}, s, {
+							config: v, enabled: v.peakEnabled, notice: v.peakNotice, style: v.peakStyle,
+							alert: { enabled: v.peakAlertEnabled, ahead: v.peakAlertAhead, target: v.peakAlertTarget, position: v.peakAlertPosition, webNotify: v.peakAlertWebNotify },
+						}));
+						say("peak", "已保存");
+					} else say("peak", "保存失败");
+				}).catch(err => { setBusy(""); say("peak", "保存失败：" + String(err && err.message ? err.message : err)); });
+			}
+			/** 计价与目录：口径开关 + 目录匹配 + 覆盖价（含订阅归类） */
+			function saveBilling() {
+				setBusy("bill"); say("bill", "");
+				apiCall("billing-config", {
+					showTotalWithPlan: !!bill.showTotalWithPlan,
+					priceMatch: bill.priceMatch === "exact" ? "exact" : "fuzzy",
+					catalogFxRate: Number(bill.catalogFxRate) || 7.2,
+					planOverrides: planRowsToObj(bill.planRows),
+					priceOverrides: priceRowsToObj(bill.priceRows),
+				}).then(v => {
+					setBusy("");
+					say("bill", v && v.ok ? "已保存（对之后入库的记录生效）" : "保存失败：" + ((v && v.error) || "未知错误"));
+					loadPrices();
+				}).catch(err => { setBusy(""); say("bill", "保存失败：" + String(err && err.message ? err.message : err)); });
+			}
+			function savePriceSync() {
+				setBusy("bill"); say("bill", "");
+				apiCall("prices-config", { priceSyncUrl: psDraft.priceSyncUrl, priceSyncAutoCheck: !!psDraft.priceSyncAutoCheck }).then(v => {
+					setBusy("");
+					say("bill", v && v.ok ? "已保存" : "保存失败：" + ((v && v.error) || "未知错误"));
+				}).catch(err => { setBusy(""); say("bill", "保存失败：" + String(err && err.message ? err.message : err)); });
+			}
+			function runPriceSync(apply) {
+				setBusy("price"); say("price", apply ? "抓取并应用中…" : "核对中…");
+				apiCall("prices-sync", { apply: !!apply }).then(v => {
+					setBusy("");
+					if (!v || v.ok !== true) { say("price", "失败：" + ((v && v.error) || "未知错误")); return; }
+					say("price", v.applied ? ("已应用新价：" + (v.era || "")) : (v.diff ? ("发现差异：" + v.diff) : "与当前生效价一致"));
+					loadPrices();
+				}).catch(err => { setBusy(""); say("price", "失败：" + String(err && err.message ? err.message : err)); });
+			}
+			function saveImportCfg() {
+				setBusy("imp"); say("imp", "");
+				apiCall("import-config", { autoImport: !!impDraft.autoImport }).then(v => {
+					setBusy("");
+					say("imp", v && v.ok ? "已保存" : "保存失败：" + ((v && v.error) || "未知错误"));
+				}).catch(err => { setBusy(""); say("imp", "保存失败：" + String(err && err.message ? err.message : err)); });
+			}
+			function runImport() {
+				setBusy("imp"); say("imp", "扫描会话日志…");
+				apiCall("import-run", {}).then(v => {
+					setBusy("");
+					say("imp", v && v.ok ? ("完成：扫描 " + v.scanned + " 个日志，新增 " + v.imported + " 条") : ("失败：" + ((v && v.error) || "未知错误")));
+					loadImport();
+				}).catch(err => { setBusy(""); say("imp", "失败：" + String(err && err.message ? err.message : err)); });
+			}
+			function runRecompute(apply) {
+				setBusy("data"); say("data", apply ? "重算并写回…" : "试算中…");
+				apiCall("recompute", { apply: !!apply }).then(v => {
+					setBusy("");
+					if (!v || v.ok !== true) { say("data", "失败：" + ((v && v.error) || "未知错误")); return; }
+					setRecomputeRes(v);
+					say("data", v.note || (apply ? "已重算" : "试算完成"));
+				}).catch(err => { setBusy(""); say("data", "失败：" + String(err && err.message ? err.message : err)); });
+			}
+			function exportCsv() {
+				setBusy("data"); say("data", "导出中…");
+				apiCall("export", {}).then(v => {
+					setBusy("");
+					say("data", v && v.ok ? "已导出 " + v.count + " 条到 " + v.path : "导出失败：" + ((v && v.error) || "未知错误"));
+				}).catch(err => { setBusy(""); say("data", "导出失败：" + String(err && err.message ? err.message : err)); });
+			}
+			function clearData() {
+				setBusy("data"); say("data", "清空中…");
+				apiCall("reset", {}).then(v => {
+					setBusy(""); setConfirmClear(false);
+					say("data", v && v.ok ? ("已清空 " + v.cleared + " 条记录") : "清空失败：" + ((v && v.error) || "未知错误"));
+					load();
+				}).catch(err => { setBusy(""); say("data", "清空失败：" + String(err && err.message ? err.message : err)); });
+			}
+			function saveVolcEngine(clear) {
+				setBusy("sub"); say("sub", "");
+				const args = clear ? { clear: true } : { volcengineAccessKeyId: volcId };
+				if (!clear && volcSecret) args.volcengineSecretAccessKey = volcSecret;
+				apiCall("volcengine-config", args).then(v => {
+					setBusy("");
+					setVolcSecret("");
+					if (v && v.ok) {
+						setVolcHasSecret(!!v.volcengineHasKeys);
+						setVolcBackend(v.volcengineSecretBackend || "");
+						say("sub", clear ? "已清除凭据" : "已保存（SecretAccessKey 存入凭据库）");
+					} else say("sub", "保存失败：" + ((v && v.error) || "未知错误"));
+				}).catch(err => { setBusy(""); say("sub", "保存失败：" + String(err && err.message ? err.message : err)); });
+			}
+			function queryVolc() {
+				setBusy("sub"); say("sub", "查询配额…");
+				apiCall("volcengine-usage", { force: true }).then(v => {
+					setBusy(""); setVolcData(v);
+					say("sub", v && v.ok ? "配额已刷新" : ("查询失败：" + ((v && v.error) || "未知错误")));
+				}).catch(err => { setBusy(""); say("sub", "查询失败：" + String(err && err.message ? err.message : err)); });
 			}
 			/**
 			 * 界面显示开关：勾选即刻提交并落盘（无需点「保存」），随后广播 UI_EVENT，
@@ -1657,17 +1848,26 @@ window.__ModuleLoader__.load({
 					setUiMsg("保存失败：" + String(err && err.message ? err.message : err));
 				});
 			}
-			// 卡片外壳对齐宿主 PluginCard：li.cost-pcard > button.cost-pcard-head（标题+副标题+箭头）> body
-			const head = e("button", { type: "button", className: "cost-pcard-head", "aria-expanded": open, onClick: () => setOpen(v => !v) },
-				e("span", { className: "cost-pcard-headtext" },
-					e("span", { className: "cost-pcard-name" }, "花费统计" + (st && st.enabled ? " · 云端同步已开启" : "")),
-					e("span", { className: "cost-pcard-desc" }, "把本机用量汇总到自建云端服务；多台电脑共用同一个地址与令牌，即可在「花费统计」看板切换查看全网数据。")),
-				e("svg", { className: "cost-pcard-chevron" + (open ? " is-open" : ""), width: 14, height: 14, viewBox: "0 0 14 14", fill: "none", "aria-hidden": "true" },
-					e("path", { d: "M3.5 5.25 7 8.75l3.5-3.5", stroke: "currentColor", strokeWidth: 1.4, strokeLinecap: "round", strokeLinejoin: "round" })));
-			const body = !st
-				? e("div", { className: "cost-hint", style: { margin: "12px 0" } }, "加载云端同步状态…")
-				: e("div", {},
-					e("div", { className: "cost-hint" }, "填好地址与令牌后点「保存」，再点「测试连接」确认可达；首次同步会自动回补历史明细。"),
+			// ---------- 顶部状态条：一眼看清关键状态 ----------
+			const chips = [
+				e("span", { key: "c1", className: "cost-cfg-chip" + (st && st.enabled ? " is-on" : "") },
+					"云端同步", e("b", null, st && st.enabled ? "已开启" : "未开启")),
+			];
+			if (st) {
+				chips.push(e("span", { key: "c2", className: "cost-cfg-chip" }, "已记账 ", e("b", null, fmtInt(st.maxSeq || 0)), " 条"));
+				chips.push(e("span", { key: "c3", className: "cost-cfg-chip" }, "待上报 ", e("b", null, fmtInt(st.pending || 0)), " 条"));
+				chips.push(e("span", { key: "c4", className: "cost-cfg-chip" }, "上次同步 ", e("b", null, timeLabel(st.lastSyncAt))));
+			}
+			if (prices) chips.push(e("span", { key: "c5", className: "cost-cfg-chip" + (prices.eraSynced ? " is-on" : "") }, "计价时代 ", e("b", null, prices.eraLabel || prices.era || "—")));
+			if (imp) chips.push(e("span", { key: "c6", className: "cost-cfg-chip" }, "历史导入 ", e("b", null, fmtInt(imp.totalImported || 0)), " 条"));
+			chips.push(e("span", { key: "c7", className: "cost-cfg-chip" + (bill.showTotalWithPlan ? " is-on" : "") }, "金额口径 ", e("b", null, bill.showTotalWithPlan ? "含 Plan 总额" : "仅按量")));
+			const topStrip = e("div", { className: "cost-cfg-top" }, chips);
+
+			const secProps = (id, title, summary) => ({ id, title, summary, open: openSec === id, onToggle: (k) => setOpenSec(prev => prev === k ? "" : k) });
+
+			// ---------- ① 多机汇总（云端同步） ----------
+			const cloudBody = e("div", null,
+				e("div", { className: "cost-hint" }, "把本机用量汇总到自建云端服务。多台电脑共用同一个地址与令牌，即可在「花费统计」看板切换查看全网数据；首次同步会自动回补历史明细。"),
 				e("div", { className: "cost-sync-fields" },
 					field("设备名", e("input", {
 						className: "cost-input", style: { width: "200px" }, value: draft.deviceName || "", placeholder: "如：办公台式机",
@@ -1677,53 +1877,423 @@ window.__ModuleLoader__.load({
 					field("服务地址", e("input", {
 						className: "cost-input", style: { width: "320px" }, value: draft.cloudUrl || "", placeholder: "https://cost.example.com",
 						onChange: ev => set("cloudUrl", ev.target.value),
-					}), "仅 http/https"),
+					}), "仅 http/https；本机地址可用 http"),
 					field("共享令牌", e("input", {
 						className: "cost-input", type: "password", style: { width: "320px" }, value: draft.cloudToken || "",
-						placeholder: st.hasToken ? "已配置（留空则不修改）" : "dshc_...",
+						placeholder: (st && st.hasToken) || (st && st.cloudTokenConfigured) ? "已配置（留空则不修改）" : "dshc_...",
 						onChange: ev => set("cloudToken", ev.target.value),
-					}), "在云端看板「设置」页生成"),
+					}), "保存后写入 DSH 凭据库，配置文件不落明文"),
 					field("同步间隔", e("select", { className: "cost-select", value: String(draft.syncIntervalSec || 60), onChange: ev => set("syncIntervalSec", parseInt(ev.target.value, 10)) },
 						[15, 30, 60, 120, 300, 600, 1800, 3600].map(s => e("option", { key: "iv" + s, value: String(s) }, s < 60 ? s + " 秒" : (s / 60) + " 分钟")))),
+					field("单批条数", e("select", { className: "cost-select", value: String(draft.syncBatchSize || 500), onChange: ev => set("syncBatchSize", parseInt(ev.target.value, 10)) },
+						[50, 100, 200, 500, 1000, 2000].map(s => e("option", { key: "bs" + s, value: String(s) }, String(s))))),
 					field("会话脱敏", e("input", { type: "checkbox", checked: !!draft.maskSessionId, onChange: ev => set("maskSessionId", ev.target.checked) }), "上报前把 sessionId 换成不可逆哈希"),
 					field("上报 purpose", e("input", { type: "checkbox", checked: draft.includePurpose !== false, onChange: ev => set("includePurpose", ev.target.checked) }), "项目/用途归属"),
+					field("上报日汇总", e("input", { type: "checkbox", checked: draft.syncRollups !== false, onChange: ev => set("syncRollups", ev.target.checked) }), "保留窗口外的历史日汇总"),
+					field("补传窗口（天）", e("input", {
+						className: "cost-input", style: { width: "90px" }, type: "number", min: 0, max: 3650,
+						value: String(typeof draft.syncSinceDays === "number" ? draft.syncSinceDays : 180),
+						onChange: ev => { const n = parseInt(ev.target.value, 10); if (Number.isInteger(n) && n >= 0) set("syncSinceDays", n); },
+					}), "0 = 不限（全量补传）"),
 					field("默认视图", e("select", { className: "cost-select", value: draft.cloudView || "local", onChange: ev => set("cloudView", ev.target.value) },
 						BOARD_VIEWS.map(v => e("option", { key: v.id, value: v.id }, v.label))))),
 				e("div", { className: "cost-sync-actions" },
-					e("button", { className: "cost-btn cost-btn-primary", onClick: save, disabled: busy }, "保存"),
-					e("button", { className: "cost-btn", onClick: test, disabled: busy }, "测试连接"),
-					e("button", { className: "cost-btn", onClick: () => syncNow(false), disabled: busy }, "立即同步"),
-					e("button", { className: "cost-btn", onClick: () => syncNow(true), disabled: busy }, "全量补传")),
-				msg ? e("div", { className: "cost-sync-state" }, msg) : null,
-				testing ? e("div", { className: "cost-sync-state" }, testing) : null,
-				e("div", { className: "cost-sync-state" },
-					"设备 ID " + (st.deviceId || "（未生成）") + " · 水位 seq=" + st.watermark + " · 待上报 " + st.pending + " 条 · 上次同步 " + (st.lastSyncAt ? timeLabel(st.lastSyncAt) : "从未")),
-				st.lastError ? e("div", { className: "cost-err" }, "最近错误：" + st.lastError) : null,
-				st.needAuth ? e("div", { className: "cost-err" }, "令牌无效：请在云端看板重新生成共享引导令牌后填入上方「共享令牌」。") : null,
-				st.url ? e("div", { className: "cost-hint", style: { marginTop: "6px" } }, "云端看板：" + st.url) : null,
-				// ---------- 界面显示：三个前端落点各自显隐，勾选即刻生效 ----------
-				// 只影响渲染，不影响记账 / 云端同步 / Agent 工具；本卡片不受这三个开关控制
-				// （否则关掉之后就再没有入口能打开了）。
-				e("div", { className: "cost-sync-card" },
-					e("div", { className: "cost-panel-title" }, "界面显示"),
-					e("div", { className: "cost-hint", style: { marginTop: "6px" } },
-						"控制插件在 DSH 界面上的落点，勾选后立即生效（无需点上面的「保存」）。关闭只影响显示：记账、云端同步与 Agent 工具照常工作。"),
-					e("div", { style: { marginTop: "8px", display: "grid", gap: "6px" } },
-						UI_SURFACES.map(s => e("label", { key: s.key, className: "cost-row", style: { gap: "8px", alignItems: "flex-start" } },
+					e("button", { className: "cost-btn cost-btn-primary", onClick: save, disabled: busy === "cloud" }, "保存"),
+					e("button", { className: "cost-btn", onClick: test, disabled: busy === "cloud" }, "测试连接"),
+					e("button", { className: "cost-btn", onClick: () => syncNow(false), disabled: busy === "cloud" }, "立即同步"),
+					e("button", { className: "cost-btn", onClick: () => syncNow(true), disabled: busy === "cloud" }, "全量补传")),
+				msg.cloud ? e("div", { className: "cost-sync-state" }, msg.cloud) : null,
+				st ? e("div", { className: "cost-sync-state" },
+					"设备 ID " + (st.deviceId || "（未生成）") + " · 水位 seq=" + st.watermark + " · 待上报 " + st.pending + " 条 · 上次同步 " + timeLabel(st.lastSyncAt)) : null,
+				st && st.lastError ? e("div", { className: "cost-err" }, "最近错误：" + st.lastError) : null,
+				st && st.needAuth ? e("div", { className: "cost-err" }, "令牌无效：请在云端看板重新生成共享引导令牌后填入上方「共享令牌」。") : null,
+				st && st.url ? e("div", { className: "cost-hint", style: { marginTop: "6px" } }, "云端看板：" + st.url) : null);
+
+			// ---------- ② 峰谷计价与提示 ----------
+			const pd = peakDraft || {};
+			// 预览用快照：把草稿覆盖到服务端快照上，从而「改完即可预览、点保存才落盘」
+			const peakPreviewSnap = peakSnap ? Object.assign({}, peakSnap, { config: pd }) : null;
+			const noticeOn = peakSnap && peakSnap.notice !== false && pd.peakNotice !== false;
+			const peakBody = e("div", null,
+				e("div", { className: "cost-hint" }, "官方只有两档：高峰（工作日 9:00-12:00 / 14:00-18:00）与闲时（高峰 × 0.5，含周末全天）。此处只影响界面提示与档位判定：改价请用「计价与价格目录 → 官方价格同步」。"),
+				e("div", { style: { marginTop: "8px", display: "grid", gap: "6px" } },
+					e("label", { className: "cost-row", style: { gap: "8px" } },
+						e("input", { type: "checkbox", checked: pd.peakEnabled !== false, onChange: ev => setPeak("peakEnabled", ev.target.checked) }),
+						e("span", null, "启用 DeepSeek 峰谷时段价格")),
+					e("label", { className: "cost-row", style: { gap: "8px" } },
+						e("input", { type: "checkbox", checked: pd.peakNotice !== false, onChange: ev => setPeak("peakNotice", ev.target.checked) }),
+						e("span", null, "峰时高价时段显著提示（时段条显示）")),
+					e("div", { className: "cost-row", style: { gap: "8px" } },
+						e("span", null, "时段条样式"),
+						e("select", { className: "cost-select", value: pd.peakStyle === "classic" ? "classic" : "compact", onChange: ev => setPeak("peakStyle", ev.target.value) },
+							e("option", { value: "compact" }, "简洁（单行紧凑）"),
+							e("option", { value: "classic" }, "环形表盘（24h）"))),
+					pd.peakStyle === "classic"
+						? e("label", { className: "cost-row", style: { gap: "8px" } },
+							e("input", { type: "checkbox", checked: pd.peakShowTickLabels !== false, onChange: ev => setPeak("peakShowTickLabels", ev.target.checked) }),
+							e("span", null, "显示时间（00:00–21:00 刻度）"))
+						: e("label", { className: "cost-row", style: { gap: "8px" } },
+							e("input", { type: "checkbox", checked: pd.peakCompactStack === true, onChange: ev => setPeak("peakCompactStack", ev.target.checked) }),
+							e("span", null, "双行紧凑（上下布局）"),
+							pd.peakCompactStack === true ? e("select", { className: "cost-select", value: pd.peakCompactOrder === "text-first" ? "text-first" : "bar-first", onChange: ev => setPeak("peakCompactOrder", ev.target.value) },
+								e("option", { value: "bar-first" }, "时段条在上·文字在下"),
+								e("option", { value: "text-first" }, "文字在上·时段条在下")) : null),
+					e("label", { className: "cost-row", style: { gap: "8px" } },
+						e("input", { type: "checkbox", checked: pd.peakAlertEnabled !== false, onChange: ev => setPeak("peakAlertEnabled", ev.target.checked) }),
+						e("span", null, "峰/谷切换前弹窗提醒")),
+					pd.peakAlertEnabled !== false
+						? e("div", { className: "cost-row", style: { gap: "8px", flexWrap: "wrap" } },
+							e("span", null, "提前提醒（分钟，1-30）"),
 							e("input", {
-								type: "checkbox",
-								checked: uiDraft[s.key] !== false,
-								onChange: ev => saveUi({ [s.key]: ev.target.checked }),
+								className: "cost-input", style: { width: "80px" }, type: "number", min: 1, max: 30,
+								value: String(pd.peakAlertAhead == null ? 2 : pd.peakAlertAhead),
+								onChange: ev => { const n = parseInt(ev.target.value, 10); if (Number.isInteger(n) && n >= 1 && n <= 30) setPeak("peakAlertAhead", n); },
 							}),
-							e("span", null,
-								e("span", null, s.label),
-								e("div", { className: "cost-hint" }, s.desc))))),
-					e("div", { className: "cost-row", style: { gap: "8px", marginTop: "6px" } },
-						e("button", { className: "cost-btn", onClick: () => saveUi({ uiDockEnabled: true, uiPeakEnabled: true, uiDashboardEnabled: true }) }, "全部显示"),
-						uiMsg ? e("span", { className: "cost-hint" }, uiMsg) : null)));
+							e("span", null, "提醒类型"),
+							e("select", { className: "cost-select", value: pd.peakAlertTarget === "peak" || pd.peakAlertTarget === "offpeak" ? pd.peakAlertTarget : "both", onChange: ev => setPeak("peakAlertTarget", ev.target.value) },
+								e("option", { value: "both" }, "峰和谷"), e("option", { value: "peak" }, "进入峰时"), e("option", { value: "offpeak" }, "进入谷时")),
+							e("span", null, "弹窗位置"),
+							e("select", { className: "cost-select", value: pd.peakAlertPosition === "center" ? "center" : "corner", onChange: ev => setPeak("peakAlertPosition", ev.target.value) },
+								e("option", { value: "corner" }, "右下角"), e("option", { value: "center" }, "屏幕中心")))
+						: null,
+					e("label", { className: "cost-row", style: { gap: "8px" } },
+						e("input", { type: "checkbox", checked: pd.peakAlertWebNotify === true, onChange: ev => setPeak("peakAlertWebNotify", ev.target.checked) }),
+						e("span", null, "同步发送系统通知（需授权通知权限）")),
+					e("div", { className: "cost-row", style: { gap: "8px", marginTop: "4px" } },
+						e("span", null, "预览弹窗"),
+						e("button", { className: "cost-btn", onClick: () => { try { window.dispatchEvent(new CustomEvent(PEAK_PREVIEW_EVENT, { detail: { kind: "peak" } })); } catch (_) {} } }, "预览进入峰"),
+						e("button", { className: "cost-btn", onClick: () => { try { window.dispatchEvent(new CustomEvent(PEAK_PREVIEW_EVENT, { detail: { kind: "offpeak" } })); } catch (_) {} } }, "预览进入谷"),
+						e("button", { className: "cost-btn cost-btn-primary", onClick: savePeak, disabled: busy === "peak" }, "保存"),
+						msg.peak ? e("span", { className: "cost-hint" }, msg.peak) : null),
+					e("div", { className: "cost-hint", style: { marginTop: "6px" } },
+						"峰时段（北京时间）：" + (peakSnap ? peakSnap.peakWindows : "周一至周五 9:00-12:00 · 14:00-18:00（周末全天闲时）") +
+						"。当前：" + (peakPreviewSnap && peakPreviewSnap.phase ? (peakPreviewSnap.phase.weekend ? "周末全谷价" : peakPreviewSnap.phase.inPeak ? "高峰时段" : "平价时段") : "…")),
+					noticeOn ? e("div", { style: { marginTop: "8px" } }, e(PeakStrip, { snap: peakPreviewSnap, style: pd.peakStyle || "compact", wide: true, now, ringSize: 150 }))
+						: e("p", { className: "cost-hint", style: { marginTop: "8px" } }, "提示已隐藏：需启用峰谷计价并开启「峰时高价时段显著提示」。")));
+
+			// ---------- ③ 订阅套餐与配额 ----------
+			const quotaWindows = (volcData && volcData.windowList) || [];
+			const subBody = e("div", null,
+				e("div", { className: "cost-hint" }, "订阅制（Coding Plan / 会员）的调用**不计入按量消费金额**，只按等值费用展示；这里配置查配额所需的凭据与订阅归类。"),
+				e("div", { className: "cost-subblock" },
+					e("div", { className: "cost-panel-title", style: { fontSize: "12px" } }, "火山方舟 Coding Plan 配额凭据"),
+					e("div", { className: "cost-hint", style: { marginTop: "4px" } },
+						"配额查询走方舟**管控面**，需要 IAM 的 AccessKeyID + SecretAccessKey（授予 ArkReadOnlyAccess + BillingCenterReadOnlyAccess）；它与推理用的 ARK API Key 是两套凭据。SecretAccessKey 只写入凭据库，任何响应都不回显。"),
+					e("div", { className: "cost-sync-fields" },
+						field("AccessKeyID", e("input", {
+							className: "cost-input", style: { width: "260px" }, value: volcId, placeholder: "AKLT...",
+							onChange: ev => setVolcId(ev.target.value),
+						})),
+						field("SecretAccessKey", e("input", {
+							className: "cost-input", type: "password", style: { width: "260px" }, value: volcSecret,
+							placeholder: volcHasSecret ? "已存入凭据库（留空则不修改）" : "仅本机保存，不回显",
+							onChange: ev => setVolcSecret(ev.target.value),
+						})),
+						field("凭据状态", e("span", null,
+							e("span", { className: "cost-badge" }, volcHasSecret ? "已配置" : "未配置"),
+							volcBackend === "memory" ? e("span", { className: "cost-hint", style: { marginLeft: "6px" } }, "（凭据服务缺席，仅进程内暂存）") : null))),
+					e("div", { className: "cost-sync-actions" },
+						e("button", { className: "cost-btn cost-btn-primary", onClick: () => saveVolcEngine(false), disabled: busy === "sub" }, "保存凭据"),
+						e("button", { className: "cost-btn", onClick: queryVolc, disabled: busy === "sub" }, "查询配额"),
+						e("button", { className: "cost-btn", onClick: () => saveVolcEngine(true), disabled: busy === "sub" }, "清除凭据"),
+						msg.sub ? e("span", { className: "cost-hint" }, msg.sub) : null),
+					quotaWindows.length
+						? e("div", { style: { marginTop: "6px" } }, quotaWindows.map((w, i) => e("div", { key: "qw" + i }, pctBar(w.label || w.name, w.percent, w.resetsAt, now, w.used, w.quota))))
+						: null),
+				e("div", { className: "cost-subblock" },
+					e("div", { className: "cost-panel-title", style: { fontSize: "12px" } }, "订阅归类覆盖"),
+					e("div", { className: "cost-hint", style: { marginTop: "4px" } },
+						"内置规则：火山方舟**专属 Coding 端点**整档算订阅；泛 volcengine 走模型白名单；Kimi 整档算订阅。清单追不上模型 id 时，用下面的覆盖表把某个 provider（或某个模型）强制归到订阅/按量。"),
+					planOverrideEditor(bill.planRows, rows => setBillField("planRows", rows)),
+					e("div", { className: "cost-sync-actions", style: { marginTop: "8px" } },
+						e("button", { className: "cost-btn cost-btn-primary", onClick: saveBilling, disabled: busy === "bill" }, "保存归类"),
+						msg.bill ? e("span", { className: "cost-hint" }, msg.bill) : null)));
+
+			// ---------- ④ 计价与价格目录 ----------
+			const cat = prices && prices.catalog;
+			const ps = prices && prices.priceSync;
+			const syncEras = (ps && ps.syncedEras) || [];
+			const lastCheck = ps && ps.lastCheck;
+			const billBody = e("div", null,
+				e("div", { className: "cost-kv" },
+					e("span", { className: "k" }, "金额口径"),
+					e("label", { className: "cost-row", style: { gap: "8px" } },
+						e("input", { type: "checkbox", checked: !!bill.showTotalWithPlan, onChange: ev => setBillField("showTotalWithPlan", ev.target.checked) }),
+						e("span", null, "含 Plan 总额（金额 = 按量 + 订阅等值）"),
+						e("span", { className: "cost-hint" }, "关掉只统计按量真金白银；看板右上角也有同款快捷开关")),
+					e("span", { className: "k" }, "目录匹配"),
+					e("div", { className: "cost-row", style: { gap: "8px" } },
+						e("select", { className: "cost-select", value: bill.priceMatch === "exact" ? "exact" : "fuzzy", onChange: ev => setBillField("priceMatch", ev.target.value) },
+							e("option", { value: "fuzzy" }, "宽松（归一化包含匹配，默认）"),
+							e("option", { value: "exact" }, "严格（名称全等才命中）")),
+						e("span", { className: "cost-hint" }, "目录用于识别内置价格表之外的模型（OpenAI / Anthropic / Gemini / Qwen 等）")),
+					e("span", { className: "k" }, "目录汇率"),
+					e("div", { className: "cost-row", style: { gap: "8px" } },
+						e("input", {
+							className: "cost-input", style: { width: "90px" }, type: "number", step: "0.1", min: "0.1", max: "100",
+							value: String(bill.catalogFxRate == null ? 7.2 : bill.catalogFxRate),
+							onChange: ev => setBillField("catalogFxRate", Number(ev.target.value)),
+						}),
+						e("span", { className: "cost-hint" }, "目录单价为 USD/1M tokens，按此汇率折算为人民币入账"))),
+				e("div", { className: "cost-subblock" },
+					e("div", { className: "cost-panel-title", style: { fontSize: "12px" } }, "手动覆盖价（CNY / 1M tokens）"),
+					e("div", { className: "cost-hint", style: { marginTop: "4px" } }, "优先级最高：命中即按此价计费（含缓存写入价 = 缓存命中价）。用于内网自建端点、议价套餐或官方页未列出的模型。"),
+					priceOverrideEditor(bill.priceRows, rows => setBillField("priceRows", rows))),
+				e("div", { className: "cost-subblock" },
+					e("div", { className: "cost-panel-title", style: { fontSize: "12px" } }, "官方价格同步"),
+					e("div", { className: "cost-hint", style: { marginTop: "4px" } },
+						"抓取官方定价页（中文页给出人民币价），解析出各模型峰价后构建**新的计费时代**：只对生效时刻之后的记录生效，历史记录口径不回改。应用前可先「核对官方价」看差异。"),
+					e("div", { className: "cost-sync-fields" },
+						field("定价页地址", e("input", {
+							className: "cost-input", style: { width: "320px" }, value: psDraft.priceSyncUrl || "", placeholder: "https://api-docs.deepseek.com/zh-cn/quick_start/pricing",
+							onChange: ev => setPsDraft(prev => Object.assign({}, prev, { priceSyncUrl: ev.target.value })),
+						})),
+						field("每日自动核对", e("input", {
+							type: "checkbox", checked: psDraft.priceSyncAutoCheck !== false,
+							onChange: ev => setPsDraft(prev => Object.assign({}, prev, { priceSyncAutoCheck: ev.target.checked })),
+						}), "只核对并提示差异，绝不自动应用"))),
+					e("div", { className: "cost-sync-actions" },
+						e("button", { className: "cost-btn", onClick: savePriceSync, disabled: busy === "bill" }, "保存设置"),
+						e("button", { className: "cost-btn", onClick: () => runPriceSync(false), disabled: busy === "price" }, "核对官方价"),
+						e("button", { className: "cost-btn cost-btn-primary", onClick: () => runPriceSync(true), disabled: busy === "price" }, "应用新价"),
+						msg.price ? e("span", { className: "cost-hint" }, msg.price) : null),
+					lastCheck ? e("div", { className: "cost-sync-state" },
+						"最近核对 " + timeLabel(lastCheck.at) + " · " + (lastCheck.ok ? (lastCheck.diff ? "差异：" + lastCheck.diff : "与当前生效价一致") : ("失败：" + (lastCheck.error || "未知错误")))) : null,
+					e("div", { className: "cost-hint", style: { marginTop: "4px" } },
+						"当前时代：" + (prices ? (prices.eraLabel || prices.era) : "…") + " · 已同步时代 " + syncEras.length + " 个"
+						+ (syncEras.length ? "：" + syncEras.map(x => x.id).join("、") : "（内置价格表）"),
+					e("div", { className: "cost-sync-actions", style: { marginTop: "8px" } },
+						e("button", { className: "cost-btn cost-btn-primary", onClick: saveBilling, disabled: busy === "bill" }, "保存计价设置"))),
+				e("div", { className: "cost-subblock" },
+					e("div", { className: "cost-panel-title", style: { fontSize: "12px" } }, "多厂商模型价格目录"),
+					e("div", { className: "cost-hint", style: { marginTop: "4px" } },
+						cat ? ("共 " + (cat.providers || []).reduce((a, p) => a + p.count, 0) + " 个模型条目 · " + (cat.providers || []).length + " 家厂商 · 数据 " + (cat.meta && cat.meta.generatedAt ? cat.meta.generatedAt : "—") + " · 指纹 " + cat.fingerprint)
+							: "目录数据不可用（未随包分发或读取失败）"),
+					cat ? e("div", { className: "cost-cfg-top", style: { marginTop: "6px" } },
+						(cat.providers || []).map(p => e("span", { key: "cp" + p.id, className: "cost-cfg-chip" }, p.id, " ", e("b", null, p.count)))) : null,
+					e("div", { className: "cost-hint", style: { marginTop: "4px" } },
+						"命中目录 = 精确价（不计入「估算」）；内置时代价优先于目录，手动覆盖价优先于两者；目录读取失败不影响计费，自动回落 provider 兜底。")));
+
+			// ---------- ⑤ 历史导入 ----------
+			const impBody = e("div", null,
+				e("div", { className: "cost-hint" }, "回放宿主会话日志（$DSH_HOME/sessions/…），把**装插件之前**的对话调用补录进账本。幂等：重复执行不会重复计数。"),
+				e("div", { className: "cost-list", style: { marginTop: "6px" } },
+					e("div", null, "· 只导入「插件不可能记到」的调用：早于本机最早一条实时记录，或所在日完全没有实时覆盖（停机缺口）。"),
+					e("div", null, "· 跨安装点的会话按切割线截断：安装前那段补录，安装后那段以实时记录为准。"),
+					e("div", null, "· 已被实时覆盖的日子**宁可不导入**也不重复计数；导入记录标记 source=import，可在明细中区分。")),
+				e("label", { className: "cost-row", style: { gap: "8px", marginTop: "8px" } },
+					e("input", { type: "checkbox", checked: impDraft.autoImport !== false, onChange: ev => setImpDraft({ autoImport: ev.target.checked }) }),
+					e("span", null, "启动时自动导入（延迟 8 秒执行，不阻塞启动）")),
+				e("div", { className: "cost-sync-actions" },
+					e("button", { className: "cost-btn cost-btn-primary", onClick: saveImportCfg, disabled: busy === "imp" }, "保存设置"),
+					e("button", { className: "cost-btn", onClick: runImport, disabled: busy === "imp" }, "立即导入"),
+					msg.imp ? e("span", { className: "cost-hint" }, msg.imp) : null),
+				imp ? e("div", { className: "cost-sync-state" },
+					"累计导入 " + fmtInt(imp.totalImported || 0) + " 条 · 已处理 " + fmtInt(imp.filesImported || 0) + "/" + fmtInt(imp.filesTracked || 0) + " 个日志文件 · 上次运行 " + (imp.lastRunAt ? timeLabel(imp.lastRunAt) : "从未")) : null,
+				imp && imp.lastResult && imp.lastResult.error ? e("div", { className: "cost-err" }, "上次失败：" + imp.lastResult.error) : null,
+				imp ? e("div", { className: "cost-hint", style: { marginTop: "4px" } }, "会话目录：" + imp.sessionsRoot) : null);
+
+			// ---------- ⑥ 数据与界面 ----------
+			const dataBody = e("div", null,
+				e("div", { className: "cost-panel-title", style: { fontSize: "12px" } }, "界面显示"),
+				e("div", { className: "cost-hint", style: { marginTop: "6px" } },
+					"控制插件在 DSH 界面上的落点，勾选后立即生效（无需点保存）。关闭只影响显示：记账、云端同步与 Agent 工具照常工作。"),
+				e("div", { style: { marginTop: "8px", display: "grid", gap: "6px" } },
+					UI_SURFACES.map(s => e("label", { key: s.key, className: "cost-row", style: { gap: "8px", alignItems: "flex-start" } },
+						e("input", {
+							type: "checkbox",
+							checked: uiDraft[s.key] !== false,
+							onChange: ev => saveUi({ [s.key]: ev.target.checked }),
+						}),
+						e("span", null,
+							e("span", null, s.label),
+							e("div", { className: "cost-hint" }, s.desc))))),
+				e("div", { className: "cost-row", style: { gap: "8px", marginTop: "6px" } },
+					e("button", { className: "cost-btn", onClick: () => saveUi({ uiDockEnabled: true, uiPeakEnabled: true, uiDashboardEnabled: true }) }, "全部显示"),
+					uiMsg ? e("span", { className: "cost-hint" }, uiMsg) : null),
+				e("div", { className: "cost-subblock" },
+					e("div", { className: "cost-panel-title", style: { fontSize: "12px" } }, "数据管理"),
+					e("div", { className: "cost-hint", style: { marginTop: "4px" } },
+						"明细保留最近 180 天，更早自动压缩为永久日汇总（看板总额仍精确）。重算按「计费时代 + 覆盖价 + 目录」重算已入库记录，建议先试算。"),
+					e("div", { className: "cost-sync-actions" },
+						e("button", { className: "cost-btn", onClick: exportCsv, disabled: busy === "data" }, "导出 CSV"),
+						e("button", { className: "cost-btn", onClick: () => runRecompute(false), disabled: busy === "data" }, "重算费用（试算）"),
+						e("button", { className: "cost-btn", onClick: () => runRecompute(true), disabled: busy === "data" }, "重算并写回"),
+						confirmClear
+							? e("span", { className: "cost-row", style: { gap: "6px" } },
+								e("span", { className: "cost-danger" }, "确认清空全部记录？不可恢复"),
+								e("button", { className: "cost-btn cost-danger", onClick: clearData, disabled: busy === "data" }, "确认清空"),
+								e("button", { className: "cost-btn", onClick: () => setConfirmClear(false) }, "取消"))
+							: e("button", { className: "cost-btn", onClick: () => setConfirmClear(true) }, "清空数据"),
+						msg.data ? e("span", { className: "cost-hint" }, msg.data) : null),
+					recomputeRes ? e("div", { className: "cost-sync-state" },
+						"扫描 " + recomputeRes.scanned + " 条 · 需修正 " + recomputeRes.changed + " 条 · 合计 ¥" + recomputeRes.oldCost + " → ¥" + recomputeRes.newCost + "（" + (recomputeRes.delta >= 0 ? "+" : "") + recomputeRes.delta + "）") : null));
+
+			// ---------- ⑦ 安全与凭据 ----------
+			const secBody = e("div", null,
+				e("div", { className: "cost-hint" }, "密钥零落盘：令牌与 SecretAccessKey 只存 DSH 凭据库（宿主托管的 .credentials.yaml），配置文件里只保留「是否已配置」。出站请求带三重防护：主机白名单、非本机强制 https、3xx 一律拒绝跟随（防止重定向把 Authorization 头带去别处）。"),
+				e("table", { className: "cost-tbl", style: { marginTop: "8px" } },
+					e("thead", null, e("tr", null, e("th", null, "凭据"), e("th", null, "状态"), e("th", null, "存储位置"))),
+					e("tbody", null,
+						e("tr", null,
+							e("td", null, "云端共享令牌"),
+							e("td", null, st && st.cloudTokenConfigured ? "已配置" : "未配置"),
+							e("td", null, st && st.cloudTokenConfigured ? (st.cloudTokenBackend === "memory" ? "进程内存（凭据服务缺席）" : "DSH 凭据库") : "—")),
+						e("tr", null,
+							e("td", null, "火山 SecretAccessKey"),
+							e("td", null, volcHasSecret ? "已配置" : "未配置"),
+							e("td", null, volcHasSecret ? (volcBackend === "memory" ? "进程内存（凭据服务缺席）" : "DSH 凭据库") : "—")),
+						e("tr", null,
+							e("td", null, "旧版明文迁移"),
+							e("td", null, st && st.secretsMigrated ? "已完成" : "无需迁移"),
+							e("td", null, "配置文件不含明文")))),
+				e("div", { className: "cost-sync-actions" },
+					e("button", { className: "cost-btn", onClick: () => saveVolcEngine(true), disabled: busy === "sub" }, "清除火山 SK"),
+					msg.sub ? e("span", { className: "cost-hint" }, msg.sub) : null),
+				e("div", { className: "cost-hint", style: { marginTop: "6px" } },
+					"提示：AccessKeyID 属非敏感标识（控制台可见），会随看板回显以便预填；SecretAccessKey 与令牌在任何响应里都只有布尔标记。"));
+
+			// 卡片外壳对齐宿主 PluginCard：li.cost-pcard > button.cost-pcard-head（标题+副标题+箭头）> body
+			const head = e("button", { type: "button", className: "cost-pcard-head", "aria-expanded": open, onClick: () => setOpen(v => !v) },
+				e("span", { className: "cost-pcard-headtext" },
+					e("span", { className: "cost-pcard-name" }, "花费统计" + (st && st.enabled ? " · 云端同步已开启" : "")),
+					e("span", { className: "cost-pcard-desc" }, "全部设置集中于此：云端同步（多机汇总）、峰谷计价与提示、订阅套餐与配额、计价与价格目录、历史导入、数据与界面、安全与凭据。")),
+				e("svg", { className: "cost-pcard-chevron" + (open ? " is-open" : ""), width: 14, height: 14, viewBox: "0 0 14 14", fill: "none", "aria-hidden": "true" },
+					e("path", { d: "M3.5 5.25 7 8.75l3.5-3.5", stroke: "currentColor", strokeWidth: 1.4, strokeLinecap: "round", strokeLinejoin: "round" })));
+			const body = e("div", null,
+				topStrip,
+				!st ? e("div", { className: "cost-hint", style: { margin: "4px 0 8px" } }, "加载状态…") : null,
+				cfgSection(Object.assign({ key: "s1" }, secProps("cloud", "多机汇总（云端同步）", st && st.enabled ? ("已开启 · " + (st.deviceName || "未命名设备")) : "未开启")), cloudBody),
+				cfgSection(Object.assign({ key: "s2" }, secProps("peak", "峰谷计价与提示", (pd.peakEnabled !== false ? "已启用" : "已停用") + " · " + (pd.peakStyle === "classic" ? "环形表盘" : "简洁样式"))), peakBody),
+				cfgSection(Object.assign({ key: "s3" }, secProps("sub", "订阅套餐与配额", (volcHasSecret ? "火山凭据已配" : "火山凭据未配") + " · 归类覆盖 " + bill.planRows.length + " 条")), subBody),
+				cfgSection(Object.assign({ key: "s4" }, secProps("bill", "计价与价格目录", (bill.showTotalWithPlan ? "含 Plan 总额" : "仅按量") + " · 覆盖价 " + bill.priceRows.length + " 条 · " + (cat ? (cat.providers || []).length + " 家目录" : "无目录"))), billBody),
+				cfgSection(Object.assign({ key: "s5" }, secProps("imp", "历史导入", (impDraft.autoImport !== false ? "开机自动" : "手动") + " · 已导入 " + fmtInt((imp && imp.totalImported) || 0) + " 条")), impBody),
+				cfgSection(Object.assign({ key: "s6" }, secProps("data", "数据与界面", "保留 180 天明细 · 界面落点 " + UI_SURFACES.filter(s => uiDraft[s.key] !== false).length + "/3")), dataBody),
+				cfgSection(Object.assign({ key: "s7" }, secProps("sec", "安全与凭据", "密钥零落盘 · 出站白名单")), secBody));
 			return e("li", { className: "cost-pcard" + (open ? " is-open" : "") },
 				head,
 				open ? e("div", { className: "cost-pcard-body" }, body) : null);
+		}
+
+		/**
+		 * 折叠分组外壳（配置卡片 v1.9.0）。
+		 * 折叠只切 CSS 显隐、**不卸载内容**：展开任一分组都无需重新取数，
+		 * 草稿也不会因为切分组而丢；同时让「按 id 手风琴」保持简单。
+		 */
+		function cfgSection(p, body) {
+			const open = !!p.open;
+			return e("div", { className: "cost-sec" + (open ? " is-open" : "") },
+				e("button", {
+					type: "button", className: "cost-sec-head", "aria-expanded": open,
+					onClick: () => p.onToggle(p.id),
+				},
+					e("span", { className: "cost-sec-title" }, p.title),
+					p.summary ? e("span", { className: "cost-sec-sum" }, p.summary) : null,
+					e("svg", { className: "cost-sec-arrow" + (open ? " is-open" : ""), width: 12, height: 12, viewBox: "0 0 14 14", fill: "none", "aria-hidden": "true" },
+						e("path", { d: "M3.5 5.25 7 8.75l3.5-3.5", stroke: "currentColor", strokeWidth: 1.4, strokeLinecap: "round", strokeLinejoin: "round" }))),
+				e("div", { className: "cost-sec-body", style: open ? null : { display: "none" } }, body));
+		}
+
+		/** 配置里的订阅归类对象 ⇄ 编辑行（键形如 'provider/model'，model 可为 '*'） */
+		function planOverridesToRows(obj) {
+			return Object.keys(obj || {}).map(k => {
+				const p = String(k).split("/");
+				return { provider: p[0] || "", model: p[1] || "*", kind: obj[k] === "api" ? "api" : "plan" };
+			});
+		}
+		function planRowsToObj(rows) {
+			const out = {};
+			for (const r of rows || []) {
+				const p = String(r.provider || "").trim();
+				const m = String(r.model || "*").trim() || "*";
+				if (!p) continue;
+				out[p + "/" + m] = r.kind === "api" ? "api" : "plan";
+			}
+			return out;
+		}
+		/** 配置里的覆盖价对象 ⇄ 编辑行（cacheWrite 恒等于 cacheRead，与官方口径一致） */
+		function priceOverridesToRows(obj) {
+			return Object.keys(obj || {}).map(k => {
+				const p = String(k).split("/");
+				const v = obj[k] || {};
+				return { provider: p[0] || "", model: p[1] || "", input: v.input, output: v.output, cacheRead: v.cacheRead };
+			});
+		}
+		function priceRowsToObj(rows) {
+			const out = {};
+			for (const r of rows || []) {
+				const p = String(r.provider || "").trim();
+				const m = String(r.model || "").trim();
+				if (!p || !m) continue;
+				out[p + "/" + m] = {
+					input: Number(r.input) || 0,
+					output: Number(r.output) || 0,
+					cacheRead: Number(r.cacheRead) || 0,
+					cacheWrite: Number(r.cacheRead) || 0,
+				};
+			}
+			return out;
+		}
+
+		/** 订阅归类覆盖编辑器 */
+		function planOverrideEditor(rows, setRows) {
+			const list = rows || [];
+			const upd = (i, patch) => setRows(list.map((r, j) => (j === i ? Object.assign({}, r, patch) : r)));
+			return e("div", { style: { marginTop: "6px" } },
+				list.length
+					? e("table", { className: "cost-tbl" },
+						e("thead", null, e("tr", null,
+							e("th", null, "Provider"), e("th", null, "模型（* = 该 provider 全部）"), e("th", null, "归类"), e("th", null, ""))),
+						e("tbody", null, list.map((r, i) => e("tr", { key: "po" + i },
+							e("td", null, e("input", {
+								className: "cost-input", style: { width: "170px" }, value: r.provider || "", placeholder: "byteblus-coding-plan-cn",
+								onChange: ev => upd(i, { provider: ev.target.value }),
+							})),
+							e("td", null, e("input", {
+								className: "cost-input", style: { width: "170px" }, value: r.model || "", placeholder: "*",
+								onChange: ev => upd(i, { model: ev.target.value }),
+							})),
+							e("td", null, e("select", { className: "cost-select", value: r.kind === "api" ? "api" : "plan", onChange: ev => upd(i, { kind: ev.target.value }) },
+								e("option", { value: "plan" }, "订阅（Plan）"), e("option", { value: "api" }, "按量"))),
+							e("td", null, e("button", { className: "cost-btn", onClick: () => setRows(list.filter((_, j) => j !== i)) }, "删除"))))))
+					: e("div", { className: "cost-hint" }, "暂无覆盖：套餐内模型按内置规则自动识别。"),
+				e("button", {
+					className: "cost-btn", style: { marginTop: "6px" },
+					onClick: () => setRows(list.concat([{ provider: "", model: "*", kind: "plan" }])),
+				}, "+ 添加归类"));
+		}
+
+		/** 手动覆盖价编辑器（CNY / 1M tokens；缓存写入价 = 缓存命中价） */
+		function priceOverrideEditor(rows, setRows) {
+			const list = rows || [];
+			const upd = (i, patch) => setRows(list.map((r, j) => (j === i ? Object.assign({}, r, patch) : r)));
+			const numCell = (r, i, key, width) => e("td", { className: "cost-num" }, e("input", {
+				className: "cost-input", style: { width: width || "80px" }, type: "number", step: "0.01", min: "0",
+				value: r[key] == null ? "" : String(r[key]),
+				onChange: ev => upd(i, { [key]: Number(ev.target.value) }),
+			}));
+			return e("div", { style: { marginTop: "6px" } },
+				list.length
+					? e("table", { className: "cost-tbl" },
+						e("thead", null, e("tr", null,
+							e("th", null, "Provider"), e("th", null, "模型"), e("th", { className: "cost-num" }, "输入（未命中）"),
+							e("th", { className: "cost-num" }, "输出"), e("th", { className: "cost-num" }, "缓存命中/写入"), e("th", null, ""))),
+						e("tbody", null, list.map((r, i) => e("tr", { key: "pr" + i },
+							e("td", null, e("input", {
+								className: "cost-input", style: { width: "120px" }, value: r.provider || "", placeholder: "deepseek-official",
+								onChange: ev => upd(i, { provider: ev.target.value }),
+							})),
+							e("td", null, e("input", {
+								className: "cost-input", style: { width: "140px" }, value: r.model || "", placeholder: "deepseek-flash",
+								onChange: ev => upd(i, { model: ev.target.value }),
+							})),
+							numCell(r, i, "input"), numCell(r, i, "output"), numCell(r, i, "cacheRead", "90px"),
+							e("td", null, e("button", { className: "cost-btn", onClick: () => setRows(list.filter((_, j) => j !== i)) }, "删除"))))))
+					: e("div", { className: "cost-hint" }, "暂无覆盖价：直接用内置价格表 / 目录价。"),
+				e("button", {
+					className: "cost-btn", style: { marginTop: "6px" },
+					onClick: () => setRows(list.concat([{ provider: "", model: "", input: "", output: "", cacheRead: "" }])),
+				}, "+ 添加覆盖价"));
 		}
 
 		/**
@@ -1779,6 +2349,17 @@ window.__ModuleLoader__.load({
 			const [now, setNow] = useState(Date.now());
 			const [manualKey, setManualKey] = useState("");
 			const [usage, setUsage] = useState(null);
+			// 双轨计费口径：「含 Plan 总额」开关（localStorage 优先，服务端配置兜底/回写）
+			const [planTotal, setPlanTotalState] = useState(() => planTotalInit(null));
+			// 用户是否已手动改过：改过之后**不再**被服务端/轮询回包覆盖
+			// （用 state 而不是 useRef：渲染期读到的必须是最新值，测试替身也不支持持久 ref）
+			const [planLocked, setPlanLocked] = useState(false);
+			function setPlanTotal(on) {
+				setPlanTotalState(on);
+				setPlanLocked(true);
+				planTotalStore(on);
+				apiCall("billing-config", { showTotalWithPlan: on }).catch(() => {});
+			}
 			const [usageErr, setUsageErr] = useState("");
 			// ---- 云端三态视图 ----
 			const [sync, setSync] = useState(null);
@@ -1822,6 +2403,14 @@ window.__ModuleLoader__.load({
 						setVolcId(prev => prev || v.volcengineAccessKeyId);
 					}
 					setVolcHasSecret(!!v.volcengineHasSecret);
+					// 「含 Plan 总额」：本机偏好优先，其次服务端配置；用户手动改过后不再覆盖
+					if (!planLocked) {
+						let stored = null;
+						try { stored = window.localStorage.getItem(PLAN_TOTAL_KEY); } catch (_) { stored = null; }
+						if (stored === "1") setPlanTotalState(true);
+						else if (stored === "0") setPlanTotalState(false);
+						else setPlanTotalState(v.showTotalWithPlan === true);
+					}
 					// 首次进入：以配置里的视图为准（三态开关的权威值在配置，便于多机一致）
 					if (!viewInitRef.current && (v.view === "local" || v.view === "local+cloud" || v.view === "cloud")) {
 						viewInitRef.current = true;
@@ -1987,7 +2576,7 @@ window.__ModuleLoader__.load({
 
 			return e("div", { className: "cost-wrap" },
 				e("div", { className: "cost-h1" }, pluginIcon(18), "花费统计"),
-				filterRow(days, setDays, onExport, onRefresh, msg, busy, dash ? dash.peakWindows : "周一至周五 9:00-12:00 · 14:00-18:00（周末全天闲时）", viewCtl, openVolc),
+				filterRow(days, setDays, onExport, onRefresh, msg, busy, dash ? dash.peakWindows : "周一至周五 9:00-12:00 · 14:00-18:00（周末全天闲时）", viewCtl, openVolc, planTotal, setPlanTotal),
 				!cloudAvailable
 					? e("div", { className: "cost-hint", style: { marginTop: "4px" } },
 						"仅显示本机数据。在多台电脑/多个 Agent 之间汇总：到「设置 → 插件 → 插件配置 → 花费统计」填写云端服务地址与令牌。")
@@ -2005,9 +2594,9 @@ window.__ModuleLoader__.load({
 					: null,
 				dashErr ? e("div", { className: "cost-err", style: { marginTop: "8px" } }, dashErr) : null,
 				(!viewDash && !dashErr) ? e("div", { className: "cost-hint", style: { marginTop: "12px" } }, "加载中…") : null,
-				viewDash ? statCards(viewDash, balance, viewCtl) : null,
+				viewDash ? statCards(viewDash, balance, viewCtl, planTotal) : null,
 				view !== "local" && dimension !== "total" && viewDash ? dimensionPanel(viewDash, dimension, cloudMatrix, loadingCloud => loadingCloud) : null,
-				viewDash ? mainPanel(viewDash, tab, setTab, scheme, setScheme) : null,
+				viewDash ? mainPanel(viewDash, tab, setTab, scheme, setScheme, planTotal) : null,
 				e("div", { className: "cost-panel" },
 					e("div", { className: "cost-row" },
 						e("span", { className: "cost-panel-title" }, "Token 用量统计"),

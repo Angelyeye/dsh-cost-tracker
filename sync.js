@@ -262,6 +262,8 @@ function classifyStatus(status, body) {
 /**
  * @param {object} deps
  * @param {() => object} deps.getConfig - 返回规范化后的插件配置（含 cloud* 字段）
+ * @param {() => Promise<string>|string} [deps.getToken] - 异步令牌提供者（v1.9.0：
+ *   令牌存 DSH 凭据库，配置文件零明文；未提供时回落 cfg.cloudToken 旧路径）
  * @param {() => {details:Array, rollups:object, resetEpoch:number, storageDir:string, maxSeq:number}} deps.getSnapshot
  * @param {(patch:object) => void} [deps.setConfigField] - 回写配置（记录同步结果/身份）
  * @param {typeof fetch} [deps.fetchFn]
@@ -270,6 +272,7 @@ function classifyStatus(status, body) {
  */
 export function createSyncEngine(deps) {
   const getConfig = deps.getConfig
+  const getToken = typeof deps.getToken === 'function' ? deps.getToken : null
   const getSnapshot = deps.getSnapshot
   const setConfigField = deps.setConfigField || (() => {})
   const fetchFn = deps.fetchFn || globalThis.fetch
@@ -277,6 +280,21 @@ export function createSyncEngine(deps) {
   const log = deps.log || (() => {})
   let identity = null
   let running = false
+  /** 最近一次成功解析的令牌（仅用于 status() 的 hasToken 回显，绝不进日志/配置） */
+  let lastKnownToken = ''
+
+  /** 令牌解析：凭据库提供者优先（异步），回落配置文件旧路径（迁移前的兜底） */
+  async function resolveToken(cfg) {
+    if (getToken) {
+      try {
+        const t = String((await getToken()) || '').trim()
+        if (t) { lastKnownToken = t; return t }
+      } catch (e) { /* 凭据服务暂不可用：回落 cfg */ }
+    }
+    const legacy = String(cfg.cloudToken || '').trim()
+    if (legacy) lastKnownToken = legacy
+    return legacy
+  }
 
   function identityOf() {
     if (!identity) {
@@ -444,7 +462,9 @@ export function createSyncEngine(deps) {
       result.error = '未启用云端同步或未填写服务地址'
       return result
     }
-    if (!cfg.cloudToken) {
+    // 令牌：凭据库（getToken）优先，配置文件遗留明文兜底（迁移完成前）
+    const cloudToken = await resolveToken(cfg)
+    if (!cloudToken) {
       result.error = '未填写云端令牌'
       result.needAuth = true
       return result
@@ -492,7 +512,7 @@ export function createSyncEngine(deps) {
           batchUid: randomUUID(),
           records: pending.records,
         }
-        const r = await postJson(base + '/api/v1/ingest/records', cfg.cloudToken, payload)
+        const r = await postJson(base + '/api/v1/ingest/records', cloudToken, payload)
         const cls = classifyStatus(r.status, r.body)
         if (!cls.ok) {
           if (cls.shrink && pending.records.length > 1) {
@@ -547,7 +567,7 @@ export function createSyncEngine(deps) {
             batchUid: randomUUID(),
             snapshots: chunk.map((x) => x.snapshot),
           }
-          const r = await postJson(base + '/api/v1/ingest/rollups', cfg.cloudToken, payload)
+          const r = await postJson(base + '/api/v1/ingest/rollups', cloudToken, payload)
           const cls = classifyStatus(r.status, r.body)
           if (!cls.ok) throw Object.assign(new Error(cls.message || '快照上报失败'), { needAuth: cls.needAuth, retryAfterMs: cls.retryAfterMs, fatal: cls.fatal })
           result.rollups += Number(r.body.rollupsUpserted) || 0
@@ -628,7 +648,8 @@ export function createSyncEngine(deps) {
     return {
       enabled: cfg.cloudEnabled,
       url: cfg.cloudUrl,
-      hasToken: !!cfg.cloudToken,
+      // v1.9.0：令牌在凭据库（getToken 已解析过则已知）；配置文件明文仅是迁移前兜底
+      hasToken: !!cfg.cloudToken || !!lastKnownToken,
       deviceId: cfg.deviceId || id.machineId,
       deviceName: cfg.deviceName || id.machineName,
       watermark: st.watermark,

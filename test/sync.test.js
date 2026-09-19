@@ -17,6 +17,7 @@ import {
   createSyncEngine, setPluginVersion,
 } from '../sync.js'
 import { normalizePluginConfig, normalizePeakConfig, defaultCloudConfig, BOARD_VIEWS } from '../config.js'
+import { safeFetch } from '../credstore.js'
 import { Schema, schemaShape } from '../schema.js'
 
 let failures = 0
@@ -143,6 +144,43 @@ function engineWith(snapshot, cfg, fetchFn) {
     fetchFn: fetchFn || (async () => { throw new Error('no fetch') }),
     log: () => {},
   })
+}
+
+// ---------- 集成回归：按 index.js 的接线方式（safeFetch 当 fetchFn）跑一轮同步 ----------
+// 2026-09-20 的真实故障：index.js 里写的是
+//   fetchFn: (url, init) => safeFetch(url, Object.assign({}, init, { allowHosts }))
+// 而 safeFetch 当时只读 `opts.init` → method/body 丢失 → 同步请求变成 **GET**，
+// 云端返回 405「方法不允许」，水位永不前进、UI 一直报同步失败。
+// 这里用同一个接线形态跑 runOnce，断言真的发出 POST 且带正文 —— 单测 safeFetch
+// 或单测引擎都拦不住这类「组合起来才错」的缺陷。
+{
+  const home = tmpHome()
+  const T = Date.now() - 60000
+  const snap = makeFixture(home, [makeRec(T + 1000)])
+  const sent = []
+  const stubFetch = async (url, init) => {
+    sent.push({ method: (init && init.method) || 'GET', body: (init && init.body) || '', url: String(url), auth: ((init && init.headers) || {}).authorization || '' })
+    return {
+      status: 200,
+      headers: { get: () => null },
+      text: async () => JSON.stringify({ ok: true, accepted: 1, duplicates: 0, updated: 0, invalid: 0, watermark: { lastClientSeq: 1 } }),
+      json: async () => ({ ok: true, accepted: 1, duplicates: 0, updated: 0, invalid: 0, watermark: { lastClientSeq: 1 } }),
+    }
+  }
+  const fetchLike = (url, init) => safeFetch(url, Object.assign({}, init, { allowHosts: ['tokencost.example.com'], fetchFn: stubFetch }))
+  const eng = createSyncEngine({
+    getConfig: () => Object.assign({}, defaultCloudConfig(), { cloudEnabled: true, cloudUrl: 'https://tokencost.example.com', cloudToken: 'dshc_test_token' }),
+    getSnapshot: () => snap,
+    fetchFn: fetchLike,
+    log: () => {},
+  })
+  const res = await eng.runOnce({})
+  eq(res.ok, true, '经 safeFetch 接线的同步应成功')
+  eq(sent.length >= 1, true, '应发出至少一个请求')
+  eq(sent[0].method, 'POST', '同步请求必须是 POST（GET 化就是那次 405 故障）')
+  eq(sent[0].url, 'https://tokencost.example.com/api/v1/ingest/records', '路径正确')
+  ok(sent[0].body.indexOf('syncVer') >= 0, '请求体带上信封（含 syncVer）')
+  ok(sent[0].auth === 'Bearer dshc_test_token', '授权头带上令牌')
 }
 
 {

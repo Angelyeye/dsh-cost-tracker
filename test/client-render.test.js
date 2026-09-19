@@ -58,7 +58,7 @@ const DASH = {
   today: { real: 1.2, calls: 20, tokens: 100000, sub: 0, subCalls: 0, subTokens: 0 },
   month: { real: 4.0, calls: 100, tokens: 900000, sub: 0.5, subCalls: 12, subTokens: 100000 },
   all: { real: 5.81, calls: 391, tokens: 31382777, sub: 0.5, subCalls: 12, subTokens: 100000 },
-  byDay: [{ date: '2026-09-15', label: '09/15', peak: 3.2, off: 2.1, flat: 0.51 }],
+  byDay: [{ date: '2026-09-15', label: '09/15', peak: 3.2, off: 2.1, flat: 0.51, sub: 0.5 }],
   byModel: [{ model: 'deepseek-v4.1-flash', calls: 391, tokens: 31382777, cost: 5.81 }],
   byModelDay: [{ model: 'deepseek-v4.1-flash', days: [{ date: '2026-09-15', label: '09/15', calls: 391, tokens: 31382777, input: 100, output: 50, cacheRead: 900, cacheWrite: 0, cost: 5.81 }] }],
   recent: [
@@ -490,6 +490,56 @@ check('关闭看板时渲染无异常', dashOff.errors.length === 0, describeErr
 uiFlags = { uiDockEnabled: true, uiPeakEnabled: true, uiDashboardEnabled: true }
 const dashBack = await (async () => { hookSlots.clear(); return renderAsync(mod7.section, {}, 3) })()
 check('重新打开后看板恢复（统计内容回来）', dashBack.text.includes('Token 用量统计'), JSON.stringify(dashBack.text.replace(/\s+/g, ' ').slice(0, 160)))
+
+// ---------- [10] 双轨计费口径：「含 Plan 总额」开关 ----------
+// 关闭（默认）＝只算按量真金白银；打开＝金额 = 按量 + 订阅等值，图表并入「订阅等值」段。
+// 开关必须**同时**写 localStorage（本机偏好）与服务端配置（跨设备/看板默认一致）。
+console.log('[10] 双轨计费口径开关（含 Plan 总额）')
+{
+  const mod10 = makeModule({ view: REAL_VIEW, syncView: 'local' })
+  hookSlots.clear()
+  const off = await renderAsync(mod10.section, {}, 3)
+  const offText = off.text.replace(/\s+/g, ' ')
+  check('默认按量口径：总花费 = 纯按量金额（¥5.81）', offText.includes('5.81'), JSON.stringify(offText.slice(0, 200)))
+  check('默认金额卡不带「（含 Plan）」标记', !offText.includes('（含 Plan）'), JSON.stringify(offText.slice(0, 200)))
+  check('默认图例不含「订阅等值」（订阅未并入金额）', !offText.includes('订阅等值'))
+  check('看板上渲染了金额口径开关（且仅此一个 checkbox）',
+    off.nodes.filter((n) => n.name === 'input' && n.props.type === 'checkbox').length === 1,
+    `checkbox 数=${off.nodes.filter((n) => n.name === 'input' && n.props.type === 'checkbox').length}`)
+
+  // 找到那个会写 billing-config 的开关并打开它
+  const hits = []
+  for (const n of off.nodes) {
+    if (n.name !== 'input' || !n.props || n.props.type !== 'checkbox' || typeof n.props.onChange !== 'function') continue
+    const probe = mod10.apiLog.length
+    n.props.onChange({ target: { checked: true } })
+    for (let i = 0; i < 3; i++) await new Promise((r) => setImmediate(r))
+    for (const c of mod10.apiLog.slice(probe)) if (c.name === 'billing-config') hits.push({ node: n, call: c })
+  }
+  check('金额口径开关写服务端配置（billing-config.showTotalWithPlan）',
+    hits.length === 1 && hits[0].call.args && hits[0].call.args.showTotalWithPlan === true,
+    JSON.stringify(hits.map((h) => h.call.args)))
+
+  const on = await renderAsync(mod10.section, {}, 3)
+  const onText = on.text.replace(/\s+/g, ' ')
+  check('打开后总花费 = 按量 + 订阅等值（5.81 + 0.5 = ¥6.31）', onText.includes('6.31'), JSON.stringify(onText.slice(0, 260)))
+  check('打开后金额卡标注「（含 Plan）」', onText.includes('（含 Plan）'), JSON.stringify(onText.slice(0, 200)))
+  check('打开后图表图例出现「订阅等值」（订阅按天并入堆叠）', onText.includes('订阅等值'), JSON.stringify(onText.slice(0, 300)))
+  check('打开后仍能看出订阅这部分是多少（附注「含订阅」）', onText.includes('含订阅'), JSON.stringify(onText.slice(0, 300)))
+
+  // 关回来：金额回到纯按量（用最新一轮渲染的开关节点，避免拿到过期闭包）
+  const onRendered = await renderAsync(mod10.section, {}, 3)
+  const onBox = onRendered.nodes.find((n) => n.name === 'input' && n.props && n.props.type === 'checkbox' && n.props.checked === true)
+  check('打开状态回显在开关上（checked=true）', !!onBox)
+  if (onBox) {
+    onBox.props.onChange({ target: { checked: false } })
+    for (let i = 0; i < 3; i++) await new Promise((r) => setImmediate(r))
+    const back = await renderAsync(mod10.section, {}, 3)
+    const backText = back.text.replace(/\s+/g, ' ')
+    check('关回后金额恢复纯按量口径（¥5.81）', backText.includes('5.81'), JSON.stringify(backText.slice(0, 260)))
+    check('关回后不再标注「（含 Plan）」', !backText.includes('（含 Plan）'), JSON.stringify(backText.slice(0, 200)))
+  }
+}
 
 // ---------- [9] 显隐说明书的单一事实源：client.js 的 UI_SURFACES 必须与 config.js 对齐 ----------
 // 文案在浏览器里有本地副本（配置卡片不该为一段文案再往返服务端），因此键名可能悄悄漂移：

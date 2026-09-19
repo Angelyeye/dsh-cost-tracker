@@ -10,29 +10,40 @@ import { readFileSync, writeFileSync, mkdirSync, renameSync, existsSync, realpat
 import { join, dirname } from 'node:path'
 import { homedir } from 'node:os'
 import { createStore, collectTotals, DETAIL_DAYS, MAX_AXIS_DAYS } from './store.js'
-import { PRICE_ERAS, V41_EFFECTIVE_AT, V41_PRO_ROUTE_AT, exactModelsAt, eraAt, SUBSCRIPTION_RATES, PROVIDER_RATES, GENERIC_RATES, PEAK_WINDOWS, PEAK_HOUR_WINDOWS, isPeak, peakPhaseAt, priceFor, computeCost, normalizeTokens, subscriptionPlanFor, volcenginePlanModels, VOLCENGINE_PLAN_PROVIDER_KEYS, VOLCENGINE_PLAN_RATES } from './pricing.js'
+import { PRICE_ERAS, V41_EFFECTIVE_AT, V41_PRO_ROUTE_AT, exactModelsAt, eraAt, SUBSCRIPTION_RATES, PROVIDER_RATES, GENERIC_RATES, PEAK_WINDOWS, PEAK_HOUR_WINDOWS, isPeak, peakPhaseAt, priceFor, computeCost, normalizeTokens, subscriptionPlanFor, volcenginePlanModels, VOLCENGINE_PLAN_PROVIDER_KEYS, VOLCENGINE_PLAN_RATES, setSyncedEras, getSyncedEras, setPriceOverrides, getPriceOverrides } from './pricing.js'
 import {
   normalizePeakConfig, defaultPeakConfig, peakEffective,
   normalizeCloudConfig, defaultCloudConfig, normalizePluginConfig,
   normalizeUiConfig, defaultUiConfig, UI_SURFACES,
   normalizeVolcengineConfig, defaultVolcengineConfig,
+  normalizeBillingConfig, defaultBillingConfig,
+  normalizeImportConfig, defaultImportConfig,
+  normalizePriceSyncConfig, defaultPriceSyncConfig,
+  normalizeSecurityConfig, defaultSecurityConfig,
+  DEFAULT_PRICING_DOC_URL,
 } from './config.js'
 import {
   queryVolcenginePlan, VOLCENGINE_KEY_ENVS, VOLCENGINE_SECRET_ENVS, VOLC_WINDOW_LABELS,
 } from './volcengine.js'
 import { createSyncEngine, setPluginVersion, SOURCE as SYNC_SOURCE, SYNC_VERSION, loadIdentity } from './sync.js'
 import { Schema } from './schema.js'
+import { catalogEntryFor, CATALOG_META, catalogProviders, catalogFingerprint, CATALOG_FX_DEFAULT } from './vendor-catalog.js'
+import { fetchOfficialPrices, buildSyncedEra, diffAgainstEra } from './price-sync.js'
+import { createCredSeam, migrateLegacySecrets, safeFetch, CRED_REFS, hostnameOf } from './credstore.js'
+import { listSessionLogs, planAndBuildImports, loadManifest, IMPORT_SOURCE } from './import.js'
 
 /** 插件版本（写入上报信封，便于云端排查版本差异） */
-const PLUGIN_VERSION = '1.8.15'
+const PLUGIN_VERSION = '1.9.1'
 setPluginVersion(PLUGIN_VERSION)
 
-/** 「设置 → 插件 → 插件配置」里的卡片字段（与 settings 命名空间一致） */
+/** 「设置 → 插件 → 插件配置」里的卡片字段（与 settings 命名空间一致）。
+ *  v1.9.0 起配置卡承载**全部**设置（峰谷/订阅/计费/目录/导入/同步/界面显示），
+ *  这里声明的是卡片可写的字段全集；密钥类字段 role('secret') 只进凭据库。 */
 const SyncSchema = Schema.object({
   deviceName: Schema.string().default(undefined).description('本机在看板上显示的名字'),
   cloudEnabled: Schema.boolean().default(undefined).description('启用云端同步'),
   cloudUrl: Schema.string().default(undefined).description('云端服务地址，如 https://cost.example.com'),
-  cloudToken: Schema.string().role('secret').default(undefined).description('共享引导令牌 / 设备令牌'),
+  cloudToken: Schema.string().role('secret').default(undefined).description('共享引导令牌（保存后写入 DSH 凭据库，配置文件不落明文）'),
   syncIntervalSec: Schema.natural().default(undefined).description('自动同步间隔秒（15-3600）'),
   syncBatchSize: Schema.natural().default(undefined).description('单批明细条数（50-2000）'),
   maskSessionId: Schema.boolean().default(undefined).description('会话脱敏（上报前做不可逆哈希）'),
@@ -40,13 +51,35 @@ const SyncSchema = Schema.object({
   syncRollups: Schema.boolean().default(undefined).description('上报历史日汇总快照'),
   syncSinceDays: Schema.natural().default(undefined).description('补传起始窗口天数（0 = 不限）'),
   cloudView: Schema.string().default(undefined).description('看板视图：local / local+cloud / cloud'),
+  // 峰谷计价与提示（v1.9.0 起配置卡是唯一编辑入口，设置页只读展示）
+  peakEnabled: Schema.boolean().default(undefined).description('启用 DeepSeek 峰谷时段价格'),
+  peakNotice: Schema.boolean().default(undefined).description('峰时高价时段显著提示'),
+  peakStyle: Schema.string().default(undefined).description('时段条样式：compact / classic'),
+  peakShowTickLabels: Schema.boolean().default(undefined).description('环形表盘显示时间刻度'),
+  peakCompactStack: Schema.boolean().default(undefined).description('简洁样式双行紧凑（上下布局）'),
+  peakCompactOrder: Schema.string().default(undefined).description('双行紧凑排布：bar-first / text-first'),
+  peakAlertEnabled: Schema.boolean().default(undefined).description('峰/谷切换前弹窗提醒'),
+  peakAlertAhead: Schema.natural().default(undefined).description('提前提醒分钟数（1-30）'),
+  peakAlertTarget: Schema.string().default(undefined).description('提醒类型：both / peak / offpeak'),
+  peakAlertPosition: Schema.string().default(undefined).description('弹窗位置：corner / center'),
+  peakAlertWebNotify: Schema.boolean().default(undefined).description('同步发送浏览器系统通知'),
+  // 双轨计费 + 价格目录（v1.9.0）
+  showTotalWithPlan: Schema.boolean().default(undefined).description('金额含 Plan 等值总额（关闭只算按量）'),
+  priceMatch: Schema.string().default(undefined).description('目录匹配模式：fuzzy / exact'),
+  catalogFxRate: Schema.natural().default(undefined).description('目录价 USD→CNY 汇率'),
+  planOverrides: Schema.any().default(undefined).description('订阅归类覆盖 {provider/model|provider/*: plan|api}'),
+  priceOverrides: Schema.any().default(undefined).description('手动覆盖价 {provider/model: {input,output,cacheRead,cacheWrite}}'),
+  // 历史导入 + 价格同步（v1.9.0）
+  autoImport: Schema.boolean().default(undefined).description('启动时自动回放宿主会话日志补录历史'),
+  priceSyncUrl: Schema.string().default(undefined).description('官方定价页地址'),
+  priceSyncAutoCheck: Schema.boolean().default(undefined).description('每日自动核对官方价（只提示不应用）'),
   // 界面显示（v1.8.12）：三个前端落点各自显隐，缺省/非布尔 = 可见
   uiDockEnabled: Schema.boolean().default(undefined).description('显示输入框上方的花费胶囊'),
   uiPeakEnabled: Schema.boolean().default(undefined).description('显示侧边栏峰谷时段条'),
   uiDashboardEnabled: Schema.boolean().default(undefined).description('显示设置页「花费统计」看板'),
-  // 火山方舟配额（v1.8.14）：留空即回落凭据发现链，老配置零改动可用
+  // 火山方舟配额（v1.8.14）：AK 明文（控制台可见），SK 保存后写入 DSH 凭据库
   volcengineAccessKeyId: Schema.string().default(undefined).description('火山引擎 AccessKeyID（留空则用凭据库 / 环境变量）'),
-  volcengineSecretAccessKey: Schema.string().role('secret').default(undefined).description('火山引擎 SecretAccessKey（留空则用凭据库 / 环境变量）'),
+  volcengineSecretAccessKey: Schema.string().role('secret').default(undefined).description('火山引擎 SecretAccessKey（保存后写入凭据库，不落配置文件）'),
 })
 
 // ============================================================
@@ -242,10 +275,18 @@ export default {
     // `cost-tracker` 命名空间：用户在「设置 → 插件 → 插件配置」里改的字段
     // 通过 settings/updated 回灌到本文件，保证两个入口读写同一份配置。
     const CONFIG_FILE = join(process.env.DSH_HOME || join(homedir(), '.dsh'), 'storages', 'cost-tracker-config.json')
+    /** 官方价格同步产物（同步时代 + 最近核对结果），与配置/账本分开存 */
+    const PRICES_FILE = join(process.env.DSH_HOME || join(homedir(), '.dsh'), 'storages', 'cost-tracker-prices.json')
+    /** 历史导入清单（幂等快跳 + 逐调用去重），与配置/账本分开存 */
+    const IMPORT_MANIFEST_FILE = join(process.env.DSH_HOME || join(homedir(), '.dsh'), 'storages', 'cost-tracker-import.json')
     let peakConfig = defaultPeakConfig()
     let cloudConfig = defaultCloudConfig()
     let uiConfig = defaultUiConfig()
     let volcengineConfig = defaultVolcengineConfig()
+    let billingConfig = defaultBillingConfig()
+    let importConfig = defaultImportConfig()
+    let priceSyncConfig = defaultPriceSyncConfig()
+    let securityConfig = defaultSecurityConfig()
     let configLoadWarned = false
 
     function loadConfig() {
@@ -256,6 +297,10 @@ export default {
         cloudConfig = normalizeCloudConfig(parsed)
         uiConfig = normalizeUiConfig(parsed)
         volcengineConfig = normalizeVolcengineConfig(parsed)
+        billingConfig = normalizeBillingConfig(parsed)
+        importConfig = normalizeImportConfig(parsed)
+        priceSyncConfig = normalizePriceSyncConfig(parsed)
+        securityConfig = normalizeSecurityConfig(parsed)
       } catch (e) {
         if (!configLoadWarned) { console.error('cost tracker config load failed, using defaults', e); configLoadWarned = true }
       }
@@ -265,7 +310,7 @@ export default {
       try {
         mkdirSync(dirname(CONFIG_FILE), { recursive: true })
         const tmp = CONFIG_FILE + '.tmp'
-        writeFileSync(tmp, JSON.stringify(Object.assign({}, peakConfig, cloudConfig, uiConfig, volcengineConfig)), 'utf8')
+        writeFileSync(tmp, JSON.stringify(Object.assign({}, peakConfig, cloudConfig, uiConfig, volcengineConfig, billingConfig, importConfig, priceSyncConfig, securityConfig)), 'utf8')
         renameSync(tmp, CONFIG_FILE)
         return true
       } catch (e) {
@@ -300,6 +345,80 @@ export default {
       return volcengineConfig
     }
 
+    /** 双轨计费 + 价格目录（金额口径 / 订阅归类 / 目录匹配与汇率 / 手动覆盖价） */
+    function setBillingConfig(raw) {
+      billingConfig = normalizeBillingConfig(Object.assign({}, billingConfig, raw))
+      applyPricingRuntime()
+      saveConfig()
+      return billingConfig
+    }
+
+    /** 历史导入开关 */
+    function setImportConfig(raw) {
+      importConfig = normalizeImportConfig(Object.assign({}, importConfig, raw))
+      saveConfig()
+      return importConfig
+    }
+
+    /** 官方价格同步（地址 / 每日自动核对） */
+    function setPriceSyncConfig(raw) {
+      priceSyncConfig = normalizePriceSyncConfig(Object.assign({}, priceSyncConfig, raw))
+      saveConfig()
+      return priceSyncConfig
+    }
+
+    // ---------- 凭据封套（v1.9.0：密钥零落盘） ----------
+    // 密钥只存 DSH 凭据库；封套懒创建（credentials 服务可能晚于本插件注册），
+    // 且在后端退化为内存态时持续探测凭据服务是否已就绪。
+    let credSeam = null
+    function getSeam() {
+      const cred = ctx.get('credentials')
+      if (!credSeam || (credSeam.backend === 'memory' && cred)) credSeam = createCredSeam(cred)
+      return credSeam
+    }
+
+    /**
+     * v1.8.x 明文密钥迁移（幂等，可重复调用）：
+     * 把配置文件里的 volcengineSecretAccessKey / cloudToken 搬进凭据库，
+     * 然后从配置对象清除并回写净化后的配置文件。此后密钥类的唯一落盘位置
+     * 是宿主托管的 .credentials.yaml（凭据库），配置文件里不再出现任何密钥。
+     *
+     * @returns {Promise<boolean>} 是否**仍有悬而未决的明文**（true = 凭据库当时不可用，
+     *   明文被安全地保留在配置里，稍后应再试 —— 见 apply() 里的 ctx.inject(['credentials'])）
+     */
+    async function runSecretMigration() {
+      try {
+        const seam = getSeam()
+        const merged = Object.assign({}, peakConfig, cloudConfig, uiConfig, volcengineConfig)
+        const result = await migrateLegacySecrets(merged, seam)
+        if (result.changed) {
+          volcengineConfig = normalizeVolcengineConfig(merged)
+          cloudConfig = normalizeCloudConfig(merged)
+          saveConfig()
+          for (const n of result.moved) startupLog('[cost-tracker] secret migrated to credential store: ' + n)
+        }
+        // 迁移标记只在「没有悬而未决的明文」时才落盘：凭据库不可写时明文仍留在
+        // 配置里（安全边界见 credstore.js），下次启动/凭据服务就绪后会再试
+        const allClear = !result.pending
+        if (securityConfig.secretsMigrated !== allClear) {
+          securityConfig = Object.assign({}, securityConfig, { secretsMigrated: allClear })
+          saveConfig()
+        }
+        if (result.notes.length) for (const n of result.notes) startupLog('[cost-tracker] ' + n)
+        return result.pending === true
+      } catch (e) {
+        startupLog('[cost-tracker] secret migration skipped: ' + toStr(e && e.message ? e.message : e))
+        return false
+      }
+    }
+
+    /** 从凭据库解析云端令牌（配置文件里的遗留明文仅作迁移前的最后兜底） */
+    async function resolveCloudToken() {
+      const seam = getSeam()
+      const r = await seam.resolve(CRED_REFS.cloudToken)
+      if (r.value) return r.value
+      return toStr(cloudConfig.cloudToken).trim()
+    }
     // ---------- settings 命名空间（可选服务） ----------
     // 字段全部 .default(undefined)：只有用户在卡片里显式保存才写入用户层，
     // 从而不覆盖我们自己配置文件里的既有值。
@@ -313,35 +432,55 @@ export default {
       const patch = {}
       for (const k of Object.keys(next)) if (next[k] !== undefined) patch[k] = next[k]
       if (!Object.keys(patch).length) return
-      // 卡片里既有云端同步字段、界面显示字段，也有火山方舟凭据字段，
-      // 分给各自的规范化函数（互不覆盖）。
+      // 卡片字段分给各自的规范化函数（互不覆盖）。密钥类字段（cloudToken /
+      // volcengineSecretAccessKey）**不入配置对象**：只写凭据库，配置文件零明文。
       const cloudPatch = {}
       const uiPatch = {}
       const volcPatch = {}
+      const peakPatch = {}
+      const billingPatch = {}
+      const importPatch = {}
+      const priceSyncPatch = {}
+      const secretSaves = []
       for (const [k, v] of Object.entries(patch)) {
+        if (k === 'cloudToken') {
+          if (typeof v === 'string' && v.trim() !== '') secretSaves.push([CRED_REFS.cloudToken, v.trim()])
+          continue // 是否已配置由凭据库描述，配置文件只保留布尔语义位
+        }
+        if (k === 'volcengineSecretAccessKey') {
+          if (typeof v === 'string' && v.trim() !== '') secretSaves.push([CRED_REFS.volcengineSecret, v.trim()])
+          volcengineCache = null
+          continue
+        }
         if (UI_SURFACES.some((s) => s.key === k)) uiPatch[k] = v
-        else if (k === 'volcengineAccessKeyId' || k === 'volcengineSecretAccessKey') volcPatch[k] = v
+        else if (k === 'volcengineAccessKeyId') volcPatch[k] = v
+        else if (k.slice(0, 4) === 'peak') peakPatch[k] = v
+        else if (k === 'showTotalWithPlan' || k === 'priceMatch' || k === 'catalogFxRate' || k === 'planOverrides' || k === 'priceOverrides') billingPatch[k] = v
+        else if (k === 'autoImport') importPatch[k] = v
+        else if (k === 'priceSyncUrl' || k === 'priceSyncAutoCheck') priceSyncPatch[k] = v
         else cloudPatch[k] = v
       }
       let changed = false
-      if (Object.keys(cloudPatch).length) {
-        const before = JSON.stringify(cloudConfig)
-        cloudConfig = normalizeCloudConfig(Object.assign({}, cloudConfig, cloudPatch))
-        if (JSON.stringify(cloudConfig) !== before) changed = true
+      const applyGroup = (get, set, p) => {
+        if (!Object.keys(p).length) return
+        const before = JSON.stringify(get())
+        set(p)
+        if (JSON.stringify(get()) !== before) changed = true
       }
-      if (Object.keys(uiPatch).length) {
-        const before = JSON.stringify(uiConfig)
-        uiConfig = normalizeUiConfig(Object.assign({}, uiConfig, uiPatch))
-        if (JSON.stringify(uiConfig) !== before) changed = true
-      }
-      if (Object.keys(volcPatch).length) {
-        const before = JSON.stringify(volcengineConfig)
-        volcengineConfig = normalizeVolcengineConfig(Object.assign({}, volcengineConfig, volcPatch))
-        if (JSON.stringify(volcengineConfig) !== before) changed = true
-        // 凭据变更后作废缓存，用户改完 Key 立刻能拿到新结果，不必等 TTL 到期
-        volcengineCache = null
-      }
+      applyGroup(() => cloudConfig, (p) => { cloudConfig = normalizeCloudConfig(Object.assign({}, cloudConfig, p)) }, cloudPatch)
+      applyGroup(() => uiConfig, (p) => { uiConfig = normalizeUiConfig(Object.assign({}, uiConfig, p)) }, uiPatch)
+      applyGroup(() => volcengineConfig, (p) => { volcengineConfig = normalizeVolcengineConfig(Object.assign({}, volcengineConfig, p)) }, volcPatch)
+      applyGroup(() => peakConfig, (p) => { peakConfig = normalizePeakConfig(Object.assign({}, peakConfig, p)) }, peakPatch)
+      applyGroup(() => billingConfig, (p) => { billingConfig = normalizeBillingConfig(Object.assign({}, billingConfig, p)); applyPricingRuntime() }, billingPatch)
+      applyGroup(() => importConfig, (p) => { importConfig = normalizeImportConfig(Object.assign({}, importConfig, p)) }, importPatch)
+      applyGroup(() => priceSyncConfig, (p) => { priceSyncConfig = normalizePriceSyncConfig(Object.assign({}, priceSyncConfig, p)) }, priceSyncPatch)
+      if (volcPatch.volcengineAccessKeyId !== undefined) volcengineCache = null
       if (changed) saveConfig()
+      if (secretSaves.length) {
+        const seam = getSeam()
+        for (const [ref, value] of secretSaves) seam.save(ref, value).catch(() => {})
+        // 保存动作本身不回写配置文件（凭据库是唯一落盘处），状态回显由 status 路由给
+      }
     }
 
     function installSettingsSection(provider, owner) {
@@ -426,6 +565,31 @@ export default {
     }
 
     // ---------- recording ----------
+    /** 计价运行时注入项：手动覆盖价 + 目录匹配（随 billingConfig 实时更新） */
+    let priceRuntimeOpts = null
+    function applyPricingRuntime() {
+      setPriceOverrides(billingConfig.priceOverrides || {})
+      priceRuntimeOpts = {
+        catalog: (np, m) => catalogEntryFor(np, m, { mode: billingConfig.priceMatch, fx: billingConfig.catalogFxRate }),
+        overrides: getPriceOverrides(),
+        planOverrides: billingConfig.planOverrides || {},
+      }
+    }
+
+    /** 某时刻的计价三件套（实时记账与历史导入共用，保证口径一致） */
+    function priceForAt(np, model, ts, tokens) {
+      const price = priceFor(np, model, ts, priceRuntimeOpts || undefined)
+      const peak = peakEffective(peakConfig, ts) ? isPeak(ts) : false
+      return {
+        cost: computeCost(price.rates, price.tiered, peak, tokens),
+        estimated: price.estimated,
+        subscription: price.subscription,
+        period: price.tiered ? (peak ? 'peak' : 'off-peak') : 'flat',
+        model: price.model || model,
+        source: price.source || '',
+      }
+    }
+
     function recordUsage(options, usage, ts) {
       const provider = toStr(options && options.provider)
       const model = toStr(options && options.model)
@@ -434,23 +598,22 @@ export default {
       // 记下最近一次实际使用的 provider：summary 据此判断该预热哪家的配额缓存
       if (np) lastProviderSeen = np
       // 按「调用发生的时刻」选单价版本（跨 2026-09-10 12:00 / 2026-09-14 12:00 自动切换，无需重启）。
-      const price = priceFor(np, model, ts)
-      // 峰谷计费开关：随配置峰谷启用 + 生效时间门控；未启用时按非峰谷档（平价）计费。
-      const peak = peakEffective(peakConfig, ts) ? isPeak(ts) : false
       // 视觉模型（deepseek-v4-flash-vision-exp）的图片 token 已含在接口
       // prompt_tokens 中（每张≤384 tokens），由 normalizeTokens 归入 input
       const tokens = normalizeTokens(usage)
+      const price = priceForAt(np, model, ts, tokens)
       store.add({
         // 被路由的请求以「实际计费模型规范名」入账（如 V4-Pro → deepseek-flash、
         // 旧名 deepseek-v4-flash → deepseek-flash），使按模型聚合看到的就是真实计费口径。
-        ts, provider, model: price.model || model,
+        ts, provider, model: price.model,
         sessionId: toStr(options && options.sessionId),
         purpose: toStr(options && options.purpose),
-        cost: computeCost(price.rates, price.tiered, peak, tokens),
+        cost: price.cost,
         estimated: price.estimated,
-        period: price.tiered ? (peak ? 'peak' : 'off-peak') : 'flat',
+        period: price.period,
         tokens,
         subscription: price.subscription,
+        source: 'live', // v1.9.0：与历史导入（source:'import'）区分，覆盖判定只认 live
       })
       schedulePersist()
       scheduleSync(4000)
@@ -472,19 +635,35 @@ export default {
 
     ctx.on('llm/stream', (options, next) => wrapStream(next(), options))
 
-    // ---------- network (native fetch) ----------
-    async function httpJson(url, headers, timeoutMs) {
-      const ac = new AbortController()
-      const t = setTimeout(() => ac.abort(), timeoutMs || 15000)
+    // ---------- network (native fetch + 出站防护) ----------
+    // v1.9.0：所有出站请求统一走 safeFetch（credstore.js）——
+    //   · 携带凭据的请求必须命中主机白名单（防凭据外带到任意 host）；
+    //   · 非 loopback 强制 https；redirect:'manual'，3xx 一律按失败处理
+    //     （防「重定向把 Authorization 头带去别处」）。
+    async function httpJson(url, headers, timeoutMs, allowHosts) {
       try {
-        const r = await fetch(url, { headers: headers || {}, signal: ac.signal })
+        const r = await safeFetch(url, { headers: headers || {}, timeoutMs: timeoutMs || 15000, allowHosts: allowHosts || [] })
         const body = await r.text()
         return { status: r.status, body: body.slice(0, 12000) }
       } catch (e) {
         return { status: 0, error: String(e && e.message ? e.message : e) }
-      } finally {
-        clearTimeout(t)
       }
+    }
+
+    /** 各出站目标的主机白名单（凭据只允许发给这几家） */
+    function allowHostsFor(target) {
+      if (target === 'deepseek') return ['api.deepseek.com']
+      if (target === 'kimi') return ['api.kimi.com']
+      if (target === 'volcengine') return ['open.volcengineapi.com']
+      if (target === 'pricing') {
+        const h = hostnameOf(priceSyncConfig.priceSyncUrl)
+        return h ? [h] : ['api-docs.deepseek.com']
+      }
+      if (target === 'cloud') {
+        const h = hostnameOf(cloudConfig.cloudUrl)
+        return h ? [h] : []
+      }
+      return []
     }
 
     // ---------- key resolution ----------
@@ -616,8 +795,8 @@ export default {
           data = emptyKimi('未找到 API Key（' + envName + '）', key.source, envName)
         } else {
           const headers = { Authorization: 'Bearer ' + key.value, 'User-Agent': 'KimiCLI/1.6' }
-          let r = await httpJson('https://api.kimi.com/coding/v1/usages', headers)
-          if (r.status === 404) r = await httpJson('https://api.kimi.com/coding/v1/usage', headers)
+          let r = await httpJson('https://api.kimi.com/coding/v1/usages', headers, 15000, allowHostsFor('kimi'))
+          if (r.status === 404) r = await httpJson('https://api.kimi.com/coding/v1/usage', headers, 15000, allowHostsFor('kimi'))
           if (r.status === 200 && r.body) {
             try {
               data = parseKimi(JSON.parse(r.body), key, envName)
@@ -763,7 +942,14 @@ export default {
       try {
         let id = String(volcengineConfig.volcengineAccessKeyId || '')
         let secret = String(volcengineConfig.volcengineSecretAccessKey || '')
-        keySource = id && secret ? 'config' : 'none'
+        // v1.9.0：SK 优先取凭据库（迁移后配置文件不再持有 SK，此处旧值仅兜底）；
+        // AK 是非敏感标识（控制台可见），仍留在配置里便于回显。
+        let secretFromCredStore = false
+        if (!secret) {
+          const rsec = await getSeam().resolve(CRED_REFS.volcengineSecret)
+          if (rsec.value) { secret = rsec.value; secretFromCredStore = true }
+        }
+        keySource = id && secret ? (secretFromCredStore ? 'credentials' : 'config') : 'none'
         // 面板临时凭据优先于一切（用户显式操作，意图最明确）
         if (manualId && manualSecret) {
           id = manualId; secret = manualSecret
@@ -808,7 +994,11 @@ export default {
             keySource, keyEnv,
           )
         } else {
-          const r = await queryVolcenginePlan({ accessKeyId: id, secretAccessKey: secret })
+          // 出站防护：签名凭据只允许发给火山管控面 host，且不跟随重定向
+          const r = await queryVolcenginePlan({
+            accessKeyId: id, secretAccessKey: secret,
+            fetchImpl: (url, init) => safeFetch(url, Object.assign({}, init, { allowHosts: allowHostsFor('volcengine') })),
+          })
           const windows = r.windows || {}
           data = {
             ok: true, error: '',
@@ -838,7 +1028,7 @@ export default {
       const key = manual ? { value: manual, source: 'manual' } : await resolveApiKey(deepseekKeyEnv())
       if (!key.value) return { ok: false, error: '未找到 DeepSeek API Key', available: false, total: '', granted: '', toppedUp: '', currency: 'CNY', keySource: 'none' }
       try {
-        const r = await httpJson('https://api.deepseek.com/user/balance', { Authorization: 'Bearer ' + key.value })
+        const r = await httpJson('https://api.deepseek.com/user/balance', { Authorization: 'Bearer ' + key.value }, 15000, allowHostsFor('deepseek'))
         if (r.status !== 200 || !r.body) return { ok: false, error: 'HTTP ' + (r.status || 0) + (r.error ? ' · ' + r.error : ''), available: false, total: '', granted: '', toppedUp: '', currency: 'CNY', keySource: key.source }
         const j = JSON.parse(r.body)
         const infos = Array.isArray(j.balance_infos) ? j.balance_infos : []
@@ -901,10 +1091,11 @@ export default {
         peakWindows: PEAK_WINDOWS,
         offPeakFactor: 0.5,
         unit: 'CNY / 1M tokens',
-        // exact = 当前生效时代的精确单价表（随价格时代自动切换）
+        // exact = 当前生效时代的精确单价表（随价格时代自动切换，含同步时代）
         exact: exactModelsAt(now),
         era: era.id,
         eraLabel: era.label,
+        eraSynced: era.synced === true,
         // 全部价格时代（含生效时刻与路由规则），供工具/接口展示
         eras: PRICE_ERAS.map((e) => ({ id: e.id, label: e.label, since: e.since, models: e.models, routes: e.routes || {} })),
         v41EffectiveAt: V41_EFFECTIVE_AT,
@@ -918,6 +1109,22 @@ export default {
         },
         providers: PROVIDER_RATES,
         generic: GENERIC_RATES,
+        // ---- v1.9.0：多厂商目录 + 同步状态 + 覆盖价 ----
+        catalog: {
+          meta: CATALOG_META,
+          fingerprint: catalogFingerprint(),
+          providers: catalogProviders(),
+          fxRate: billingConfig.catalogFxRate,
+          match: billingConfig.priceMatch,
+        },
+        priceSync: {
+          url: priceSyncConfig.priceSyncUrl,
+          autoCheck: priceSyncConfig.priceSyncAutoCheck,
+          lastCheck: priceState.lastCheck,
+          lastApplyAt: priceState.lastApplyAt,
+          syncedEras: getSyncedEras().map((e) => ({ id: e.id, label: e.label, since: e.since, models: e.models, routes: e.routes || {} })),
+        },
+        overrides: billingConfig.priceOverrides || {},
       }
     }
 
@@ -1017,11 +1224,12 @@ export default {
       }
       const dates = enumerateDays(startKey, endKey)
       const dayAgg = {}
-      for (const d of dates) dayAgg[d.key] = { peak: 0, off: 0, flat: 0 }
+      // sub：订阅等值金额按天单列（v1.9.0「含 Plan 总额」开关在客户端按需并入）
+      for (const d of dates) dayAgg[d.key] = { peak: 0, off: 0, flat: 0, sub: 0 }
       for (const r of filt) {
-        if (r.subscription) continue
         const m = dayAgg[dayKey(r.ts)]
         if (!m) continue
+        if (r.subscription) { m.sub += r.cost; continue }
         if (r.period === 'peak') m.peak += r.cost
         else if (r.period === 'off-peak') m.off += r.cost
         else m.flat += r.cost
@@ -1031,11 +1239,11 @@ export default {
         if (!m) continue
         for (const mk of Object.keys(ru[dk])) {
           const e = ru[dk][mk]
-          if (e.subscription) continue
+          if (e.subscription) { m.sub += e.cost; continue }
           m.peak += e.peak; m.off += e.off; m.flat += e.flat
         }
       }
-      const byDay = dates.map(d => ({ date: d.key, label: d.label, peak: r4(dayAgg[d.key].peak), off: r4(dayAgg[d.key].off), flat: r4(dayAgg[d.key].flat) }))
+      const byDay = dates.map(d => ({ date: d.key, label: d.label, peak: r4(dayAgg[d.key].peak), off: r4(dayAgg[d.key].off), flat: r4(dayAgg[d.key].flat), sub: r4(dayAgg[d.key].sub) }))
       // 模型展示顺序：按总费用降序排名（与 DeepSeek 开放平台一致，排名决定取色/堆叠顺序）
       const keys = Object.keys(modelMap).sort((a, b) => modelMap[b].cost - modelMap[a].cost)
       const byModel = keys.map(k => {
@@ -1177,13 +1385,14 @@ export default {
         if (!(r.ts >= since)) continue
         scanned += 1
         const np = normProvider(r.provider)
-        const price = priceFor(np, r.model, r.ts)
-        const peak = peakEffective(peakConfig, r.ts) ? isPeak(r.ts) : false
-        const cost = computeCost(price.rates, price.tiered, peak, r.tokens)
-        const model = price.model || r.model
-        const period = price.tiered ? (peak ? 'peak' : 'off-peak') : 'flat'
-        const estimated = price.estimated === true
-        const subscription = price.subscription === true
+        // v1.9.0：重算与实时记账共用 priceForAt —— 同步时代 / 目录 / 覆盖价 /
+        // 订阅归类覆盖在补账时同样生效（口径完全一致，重算后不会有双标）。
+        const p = priceForAt(np, r.model, r.ts, r.tokens)
+        const cost = p.cost
+        const model = p.model
+        const period = p.period
+        const estimated = p.estimated
+        const subscription = p.subscription
         oldCost += r.cost
         newCost += cost
         // 变更判定含 estimated/subscription：模型名从兜底口径升为精确档时，
@@ -1277,10 +1486,197 @@ export default {
       }
     }
 
+    // ---------- 官方价格同步（v1.9.0） ----------
+    // 同步时代存 storages/cost-tracker-prices.json；启动时注入 pricing.js。
+    // 应用新价只影响「之后」的记录（era.since = 应用时刻），历史口径不变；
+    // 每日自动核对只记录差异并在状态里提示，应用始终需要用户手动确认。
+    let priceState = { v: 1, eras: [], lastCheck: null, lastApplyAt: 0 }
+    function loadPriceState() {
+      try {
+        const j = JSON.parse(readFileSync(PRICES_FILE, 'utf8'))
+        if (j && j.v === 1 && Array.isArray(j.eras)) priceState = j
+      } catch (e) { /* 首次运行 / 坏文件：用默认 */ }
+      setSyncedEras(priceState.eras)
+    }
+    function savePriceState() {
+      try {
+        mkdirSync(dirname(PRICES_FILE), { recursive: true })
+        const tmp = PRICES_FILE + '.tmp'
+        writeFileSync(tmp, JSON.stringify(priceState), 'utf8')
+        renameSync(tmp, PRICES_FILE)
+        return true
+      } catch (e) {
+        startupLog('price state persist failed: ' + toStr(e && e.message ? e.message : e))
+        return false
+      }
+    }
+
+    /**
+     * 抓取并核对官方定价页。
+     * @param {{apply?:boolean}} [opts] apply=true 时把差异构建为新计费时代并生效
+     */
+    async function runPriceSync(opts) {
+      const apply = !!(opts && opts.apply)
+      const out = { ok: false, checkedAt: Date.now(), url: priceSyncConfig.priceSyncUrl, diff: '', applied: false, models: [], error: '' }
+      try {
+        const fetched = await fetchOfficialPrices(out.url, (url, init) => safeFetch(url, Object.assign({}, init, { allowHosts: allowHostsFor('pricing'), timeoutMs: 20000 })))
+        out.models = fetched.parsed.order.map((name) => {
+          const m = fetched.parsed.models[name]
+          return { model: name, input: m.peak.input, output: m.peak.output, cacheRead: m.peak.cacheRead, offpeakInput: m.offpeak.input, offpeakOutput: m.offpeak.output, routesTo: fetched.parsed.routes && Object.keys(fetched.parsed.routes).length ? undefined : undefined }
+        })
+        // 与「当下生效时代」对比（内置最后一代 or 最近一次同步时代）
+        const cur = eraAt(Date.now())
+        const diff = diffAgainstEra(fetched.parsed, cur)
+        out.diff = diff || ''
+        out.ok = true
+        out.currentEra = cur.id
+        if (apply) {
+          if (!diff) {
+            out.applied = false
+            out.note = '官方价与当前生效价一致，无需更新'
+          } else {
+            const era = buildSyncedEra(fetched.parsed, Date.now())
+            priceState.eras = priceState.eras.filter((e) => e.id !== era.id).concat([era])
+            priceState.lastApplyAt = Date.now()
+            setSyncedEras(priceState.eras)
+            savePriceState()
+            out.applied = true
+            out.era = era.id
+          }
+        }
+        const prev = priceState.lastCheck
+        priceState.lastCheck = { at: out.checkedAt, ok: true, diff: out.diff, applied: out.applied, url: out.url }
+        if (!prev || prev.diff !== out.diff || prev.applied !== out.applied) savePriceState()
+      } catch (e) {
+        out.error = toStr(e && e.message ? e.message : e)
+        priceState.lastCheck = { at: out.checkedAt, ok: false, diff: '', error: out.error.slice(0, 300), url: out.url }
+        savePriceState()
+      }
+      return out
+    }
+
+    /** 每日自动核对（只提示不应用）；ctx.timer 就绪后由 startPriceCheckTimer 启动 */
+    let priceCheckTimer = null
+    const PRICE_CHECK_INTERVAL = 24 * 3600 * 1000
+    function startPriceCheckTimer() {
+      if (priceCheckTimer) { try { priceCheckTimer() } catch (e) {} priceCheckTimer = null }
+      if (!priceSyncConfig.priceSyncAutoCheck) return
+      const timer = ctx.get('timer')
+      const tick = () => { runPriceSync({ apply: false }).catch(() => {}) }
+      if (timer) {
+        priceCheckTimer = timer.interval(tick, PRICE_CHECK_INTERVAL)
+      } else {
+        // 无 timer 服务（含测试/极简宿主）：原生定时器必须 unref，
+        // 否则 24h 的 interval 会把进程钉住不退出
+        const t = setInterval(tick, PRICE_CHECK_INTERVAL)
+        if (typeof t.unref === 'function') t.unref()
+        priceCheckTimer = t
+      }
+      // 启动后 90s 先核对一次（避免与启动 IO 挤在一起）
+      const warm = () => { tick() }
+      if (timer) timer.timeout(warm, 90000)
+      else { const w = setTimeout(warm, 90000); if (typeof w.unref === 'function') w.unref() }
+    }
+
+    // ---------- 历史导入（v1.9.0） ----------
+    // 回放宿主会话日志（$DSH_HOME/sessions/<项目>/<会话>/session*.jsonl[.zstd]），
+    // 补录「装插件之前」的调用。幂等三保险见 import.js 文件头。
+    let importManifest = { v: 1, files: {}, lastRunAt: 0, totalImported: 0 }
+    let importRunning = false
+    let importLastResult = null
+    function loadImportManifest() {
+      try {
+        const j = JSON.parse(readFileSync(IMPORT_MANIFEST_FILE, 'utf8'))
+        if (j && j.v === 1 && j.files && typeof j.files === 'object') importManifest = j
+      } catch (e) { /* 首次运行 */ }
+    }
+    function saveImportManifest() {
+      try {
+        mkdirSync(dirname(IMPORT_MANIFEST_FILE), { recursive: true })
+        const tmp = IMPORT_MANIFEST_FILE + '.tmp'
+        writeFileSync(tmp, JSON.stringify(importManifest), 'utf8')
+        renameSync(tmp, IMPORT_MANIFEST_FILE)
+        return true
+      } catch (e) {
+        startupLog('import manifest persist failed: ' + toStr(e && e.message ? e.message : e))
+        return false
+      }
+    }
+
+    function importStatus() {
+      const manifestFiles = Object.keys(importManifest.files)
+      let importedFiles = 0
+      for (const k of manifestFiles) if (importManifest.files[k] && importManifest.files[k].status === 'done') importedFiles += 1
+      return {
+        ok: true,
+        autoImport: importConfig.autoImport,
+        running: importRunning,
+        lastRunAt: importManifest.lastRunAt || 0,
+        totalImported: importManifest.totalImported || 0,
+        filesTracked: manifestFiles.length,
+        filesImported: importedFiles,
+        lastResult: importLastResult,
+        sessionsRoot: join(process.env.DSH_HOME || join(homedir(), '.dsh'), 'sessions'),
+      }
+    }
+
+    /** 执行一轮历史导入（幂等；重复调用自动跳过已导入内容） */
+    async function runHistoryImport() {
+      if (importRunning) return { ok: false, error: '导入正在进行中，请稍后再试' }
+      importRunning = true
+      try {
+        const root = join(process.env.DSH_HOME || join(homedir(), '.dsh'), 'sessions')
+        const logs = listSessionLogs(root)
+        if (!logs.length) {
+          importLastResult = { at: Date.now(), imported: 0, files: 0, scanned: 0, note: '未找到会话日志目录（' + root + '）' }
+          return { ok: true, imported: 0, files: 0, scanned: 0, note: '未找到会话日志' }
+        }
+        const priceFn = (np, model, ts, tokens) => {
+          const p = priceForAt(np, model, ts, tokens)
+          return { cost: p.cost, estimated: p.estimated, subscription: p.subscription, period: p.period, model: p.model }
+        }
+        const results = await planAndBuildImports(records, rollups, logs, importManifest, { priceFn, normProvider })
+        let imported = 0
+        let touched = 0
+        for (const res of results) {
+          if (res.status === 'planned') {
+            let count = 0
+            for (const rec of res.records) {
+              try { store.add(rec); count += 1 } catch (e) { /* 单条坏数据不阻断整批 */ }
+            }
+            imported += count
+            if (count > 0 || res.calls > 0) touched += 1
+            let mtime = 0
+            let size = 0
+            try { const st = statSync(res.path); mtime = st.mtimeMs; size = st.size } catch (e) {}
+            importManifest.files[res.path] = { mtime, size, status: 'done', sessionId: res.sessionId, calls: res.calls, imported: count, at: Date.now() }
+          } else if (res.status === 'error') {
+            importManifest.files[res.path] = Object.assign({}, importManifest.files[res.path], { status: 'error', error: toStr(res.error).slice(0, 200), at: Date.now() })
+          }
+        }
+        importManifest.lastRunAt = Date.now()
+        importManifest.totalImported = (importManifest.totalImported || 0) + imported
+        saveImportManifest()
+        if (imported > 0) { writeRecords(); scheduleSync(4000) }
+        importLastResult = { at: Date.now(), imported, files: touched, scanned: logs.length }
+        if (imported > 0) startupLog('[cost-tracker] history import: +' + imported + ' records from ' + touched + ' session logs')
+        return { ok: true, imported, files: touched, scanned: logs.length }
+      } catch (e) {
+        const err = toStr(e && e.message ? e.message : e)
+        importLastResult = { at: Date.now(), error: err }
+        return { ok: false, error: err }
+      } finally {
+        importRunning = false
+      }
+    }
+
     // ---------- cloud sync ----------
     // 同步引擎：只上报、不回写；失败只影响云端视图，绝不影响本地记账。
+    // v1.9.0：令牌经 getToken 异步取自凭据库（配置文件零明文）；
+    // 出站统一走 safeFetch（redirect:'manual' + 白名单 = cloudUrl 主机）。
     const syncEngine = createSyncEngine({
       getConfig: () => Object.assign({}, peakConfig, cloudConfig, uiConfig),
+      getToken: () => resolveCloudToken(),
       getSnapshot: () => ({
         details: records,
         rollups,
@@ -1293,6 +1689,7 @@ export default {
         cloudConfig = normalizeCloudConfig(Object.assign({}, cloudConfig, patch))
         if (JSON.stringify(cloudConfig) !== before) saveConfig()
       },
+      fetchFn: (url, init) => safeFetch(url, Object.assign({}, init, { allowHosts: allowHostsFor('cloud') })),
       now: () => Date.now(),
       log: (m) => startupLog('[cost-tracker] ' + m),
     })
@@ -1316,7 +1713,15 @@ export default {
       const interval = Math.max(15, Number(cloudConfig.syncIntervalSec) || 60) * 1000
       const timer = ctx.get('timer')
       const tick = () => { syncEngine.runOnce({}).catch(() => {}) }
-      syncTimer = timer ? timer.interval(tick, interval) : setInterval(tick, interval)
+      if (timer) {
+        syncTimer = timer.interval(tick, interval)
+      } else {
+        // 无 timer 服务（极简宿主 / 测试）：原生定时器必须 unref ——
+        // 进程生命周期属于宿主，插件不该把它钉住不退出
+        const t = setInterval(tick, interval)
+        if (typeof t.unref === 'function') t.unref()
+        syncTimer = t
+      }
     }
 
     /** 云端只读聚合（供看板三态视图与「设备 × Agent」下钻） */
@@ -1348,7 +1753,8 @@ export default {
       cloudCapsCache.ok = false
       cloudCapsCache.pluginView = false
       try {
-        const res = await fetch(cloudConfig.cloudUrl + '/api/v1/health', { headers: { authorization: 'Bearer ' + cloudConfig.cloudToken } })
+        const token = await resolveCloudToken()
+        const res = await safeFetch(cloudConfig.cloudUrl + '/api/v1/health', { headers: { authorization: 'Bearer ' + token }, timeoutMs: 12000, allowHosts: allowHostsFor('cloud') })
         const body = await res.json()
         if (body && body.ok === true) {
           cloudCapsCache.ok = true
@@ -1361,7 +1767,8 @@ export default {
       if (Date.now() - deviceNameCache.at < 30000 && deviceNameCache.list.length) return deviceNameCache.list
       try {
         // 同上：设备维度清单也走设备令牌可读的 /api/v1/*
-        const res = await fetch(cloudConfig.cloudUrl + '/api/v1/devices', { headers: { authorization: 'Bearer ' + cloudConfig.cloudToken } })
+        const token = await resolveCloudToken()
+        const res = await safeFetch(cloudConfig.cloudUrl + '/api/v1/devices', { headers: { authorization: 'Bearer ' + token }, timeoutMs: 12000, allowHosts: allowHostsFor('cloud') })
         const body = await res.json()
         if (body && body.ok && Array.isArray(body.devices)) {
           deviceNameCache.at = Date.now()
@@ -1372,7 +1779,9 @@ export default {
     }
 
     async function fetchCloud(query) {
-      if (!cloudConfig.cloudEnabled || !cloudConfig.cloudUrl || !cloudConfig.cloudToken) {
+      // 令牌在凭据库（v1.9.0 起配置文件不落明文）；此处只做「有没有配置」的快速判定，
+      // 真正取值在下方 resolveCloudToken()（异步，凭据服务可能晚于本插件注册）
+      if (!cloudConfig.cloudEnabled || !cloudConfig.cloudUrl) {
         return { ok: false, error: '云端同步未配置（在「设置 → 插件 → 插件配置 → 花费统计」填写服务地址与令牌）', code: 'NOT_CONFIGURED' }
       }
       const key = JSON.stringify(query)
@@ -1442,10 +1851,9 @@ export default {
         if (caps.pluginView) endpoint = 'plugin-view'
       }
       const url = cloudConfig.cloudUrl + '/api/v1/' + endpoint + '?' + qs.toString()
-      const ac = new AbortController()
-      const t = setTimeout(() => ac.abort(), 12000)
       try {
-        const res = await fetch(url, { headers: { authorization: 'Bearer ' + cloudConfig.cloudToken }, signal: ac.signal })
+        const token = await resolveCloudToken()
+        const res = await safeFetch(url, { headers: { authorization: 'Bearer ' + token }, timeoutMs: 12000, allowHosts: allowHostsFor('cloud') })
         const body = await res.json().catch(() => null)
         if (!body || body.ok !== true) {
           const hint = res.status === 404
@@ -1468,8 +1876,6 @@ export default {
         return value
       } catch (e) {
         return { ok: false, error: String(e && e.message ? e.message : e), code: 'NETWORK' }
-      } finally {
-        clearTimeout(t)
       }
     }
 
@@ -1492,48 +1898,81 @@ export default {
       //
       // 语义（防呆，避免一次误保存就把已存好的密钥清空）：
       //   · accessKeyId     ：传了就更新，没传就不动；
-      //   · secretAccessKey ：**只有非空**才更新（空串视为「我没改」，不是「清空」）；
+      //   · secretAccessKey ：**只有非空**才更新（空串视为「我没改」，不是「清空」），
+      //     且 v1.9.0 起**只写凭据库**（配置文件零明文）；
       //   · clear:true      ：显式清空两者（面板的「清除」按钮走这条）。
       // 否则跨浏览器 / 重开面板时 Secret 输入框必然是空的（我们从不回显它），
       // 用户只改 AK 一保存就会把 Secret 一起写空 —— 那是静默丢失凭据。
-      'volcengine-config': (args) => {
+      'volcengine-config': async (args) => {
         const a = args || {}
-        const patch = {}
+        const seam = getSeam()
         if (a.clear === true) {
-          patch.volcengineAccessKeyId = ''
-          patch.volcengineSecretAccessKey = ''
+          setVolcengineConfig({ volcengineAccessKeyId: '' })
+          await seam.clear(CRED_REFS.volcengineSecret)
         } else {
-          if (typeof a.volcengineAccessKeyId === 'string') patch.volcengineAccessKeyId = a.volcengineAccessKeyId
+          if (typeof a.volcengineAccessKeyId === 'string') setVolcengineConfig({ volcengineAccessKeyId: a.volcengineAccessKeyId })
           if (typeof a.volcengineSecretAccessKey === 'string' && a.volcengineSecretAccessKey.trim() !== '') {
-            patch.volcengineSecretAccessKey = a.volcengineSecretAccessKey
+            await seam.save(CRED_REFS.volcengineSecret, a.volcengineSecretAccessKey.trim())
           }
         }
-        setVolcengineConfig(patch)
+        volcengineCache = null
+        const skDesc = await seam.describe(CRED_REFS.volcengineSecret)
         return Object.assign({
           ok: true,
-          volcengineHasKeys: !!(volcengineConfig.volcengineAccessKeyId && volcengineConfig.volcengineSecretAccessKey),
+          volcengineHasKeys: !!(volcengineConfig.volcengineAccessKeyId && skDesc.configured),
           volcengineAccessKeyId: volcengineConfig.volcengineAccessKeyId,
+          volcengineSecretBackend: skDesc.backend,
         })
       },
-      // 同步状态里一并带上界面显示开关：配置卡片只需一次往返就能初始化表单
-      sync: () => Object.assign({}, syncEngine.status(), uiConfig, {
-        // 面板初始化要用的凭据回显：AK 明文（非敏感，控制台里本就可见）+ 是否已存 SK
-        volcengineAccessKeyId: volcengineConfig.volcengineAccessKeyId,
-        volcengineHasSecret: !!volcengineConfig.volcengineSecretAccessKey,
-      }),
+      // 双轨计费 + 价格目录配置（金额口径 / 订阅归类 / 目录匹配与汇率 / 覆盖价）
+      'billing-config': (args) => Object.assign({ ok: true }, setBillingConfig(args || {})),
+      // 历史导入：设置 + 状态查询 + 手动执行
+      'import-config': (args) => Object.assign({ ok: true }, setImportConfig(args || {})),
+      'import-status': () => importStatus(),
+      'import-run': async () => runHistoryImport(),
+      // 官方价格同步：设置 + 核对（dry-run）/ 应用新价
+      'prices-config': (args) => Object.assign({ ok: true }, setPriceSyncConfig(args || {}), { autoCheckTimer: (startPriceCheckTimer(), true) }),
+      'prices-sync': (args) => runPriceSync(args || {}),
+      // 清空账本（配置卡片「数据与界面」走两步确认后调用）
+      reset: () => resetData(),
+      // 同步状态里一并带上界面显示开关与凭据状态：配置卡片只需一次往返就能初始化表单
+      sync: async () => {
+        const seam = getSeam()
+        const [tokenDesc, skDesc] = await Promise.all([seam.describe(CRED_REFS.cloudToken), seam.describe(CRED_REFS.volcengineSecret)])
+        return Object.assign({}, syncEngine.status(), uiConfig, billingConfig, importConfig, priceSyncConfig, {
+          // 面板初始化要用的凭据回显：AK 明文（非敏感，控制台里本就可见）+ 是否已存 SK
+          volcengineAccessKeyId: volcengineConfig.volcengineAccessKeyId,
+          // v1.9.0：SK/令牌在凭据库（backend='memory' 表示凭据服务缺席，仅进程内暂存）
+          volcengineHasSecret: skDesc.configured,
+          volcengineSecretBackend: skDesc.backend,
+          cloudTokenConfigured: tokenDesc.configured,
+          cloudTokenBackend: tokenDesc.backend,
+          // 配置文件里不再回显任何密钥；这两处只给布尔
+          cloudToken: undefined,
+          volcengineSecretAccessKey: undefined,
+          secretsMigrated: securityConfig.secretsMigrated,
+        })
+      },
       'sync-now': async (args) => {
         const result = await syncEngine.runOnce({ manual: true, full: !!(args && args.full) })
         return Object.assign({ ok: result.ok !== false || !result.error, result }, syncEngine.status())
       },
       'sync-test': async (args) => syncEngine.testConnection(args && args.config ? normalizeCloudConfig(Object.assign({}, cloudConfig, args.config)) : null),
-      'sync-config': (args) => {
-        const next = normalizeCloudConfig(Object.assign({}, cloudConfig, args || {}))
+      'sync-config': async (args) => {
+        const a = args || {}
+        // v1.9.0：卡片传来的令牌只进凭据库，配置文件零明文（空串 = 没改，不覆盖）
+        if (typeof a.cloudToken === 'string' && a.cloudToken.trim() !== '') {
+          await getSeam().save(CRED_REFS.cloudToken, a.cloudToken.trim())
+        }
+        const rest = Object.assign({}, a)
+        delete rest.cloudToken
+        const next = normalizeCloudConfig(Object.assign({}, cloudConfig, rest))
         const enabledChanged = next.cloudEnabled !== cloudConfig.cloudEnabled
         const intervalChanged = next.syncIntervalSec !== cloudConfig.syncIntervalSec
         cloudConfig = next
         saveConfig()
         if (enabledChanged || intervalChanged) startSyncTimer()
-        if (args && args.cloudEnabled === true) scheduleSync(500)
+        if (rest.cloudEnabled === true) scheduleSync(500)
         return Object.assign({ ok: true }, syncEngine.status())
       },
       cloud: (args) => fetchCloud(Object.assign({ route: 'overview', range: '7d' }, args || {})),
@@ -1651,6 +2090,29 @@ export default {
         },
       },
       execute: async (args) => recomputeCosts(args),
+    })
+
+    ctx.tools.register({
+      name: 'cost_import',
+      description: '历史导入：回放宿主会话日志，把「装插件之前」的对话调用补录进账本（幂等，可重复执行）。默认返回导入状态；传 run: true 执行一轮导入。',
+      parameters: {
+        type: 'object',
+        properties: {
+          run: { type: 'boolean', description: '执行一轮导入（默认 false 仅查看状态）' },
+        },
+        additionalProperties: true,
+      },
+      output: {
+        schema: { type: 'object', additionalProperties: true },
+        render: (args, v) => {
+          if (args && args.run) {
+            if (v.ok === false) return [{ type: 'text', text: '导入失败：' + v.error }]
+            return [{ type: 'text', text: '导入完成：扫描 ' + v.scanned + ' 个会话日志，新增 ' + v.imported + ' 条记录（涉及 ' + v.files + ' 个文件）。' }]
+          }
+          return [{ type: 'text', text: '历史导入状态：已累计导入 ' + v.totalImported + ' 条（' + v.filesImported + '/' + v.filesTracked + ' 个日志文件），上次运行 ' + (v.lastRunAt ? new Date(v.lastRunAt + 28800000).toISOString().replace('T', ' ').slice(0, 16) + ' 北京' : '从未') + '；自动导入' + (v.autoImport ? '开' : '关') + '。传 run: true 执行一轮。' }]
+        },
+      },
+      execute: async (args) => (args && args.run ? runHistoryImport() : importStatus()),
     })
 
     ctx.tools.register({
@@ -1791,10 +2253,16 @@ export default {
           return { ok: result.ok !== false || !result.error, action, result, status: syncEngine.status() }
         }
         if (action === 'config') {
-          cloudConfig = normalizeCloudConfig(Object.assign({}, cloudConfig, a.config || {}))
+          const cfgIn = a.config || {}
+          // 令牌经工具传入同样只进凭据库（配置文件零明文）
+          if (typeof cfgIn.cloudToken === 'string' && cfgIn.cloudToken.trim() !== '') {
+            await getSeam().save(CRED_REFS.cloudToken, cfgIn.cloudToken.trim())
+            delete cfgIn.cloudToken
+          }
+          cloudConfig = normalizeCloudConfig(Object.assign({}, cloudConfig, cfgIn))
           saveConfig()
           startSyncTimer()
-          if (a.config && a.config.cloudEnabled) scheduleSync(800)
+          if (cfgIn.cloudEnabled) scheduleSync(800)
           return { ok: true, action, status: syncEngine.status() }
         }
         return { ok: true, action: 'status', status: syncEngine.status() }
@@ -1804,6 +2272,27 @@ export default {
     // ---------- lifecycle ----------
     loadRecords()
     loadConfig()
+    // v1.9.0 启动序列：计价运行时（覆盖价/目录注入）→ 官方同步时代 → 导入清单
+    applyPricingRuntime()
+    loadPriceState()
+    loadImportManifest()
+    // v1.8.x 明文密钥迁移（幂等）：搬进凭据库后回写净化配置，配置文件从此零明文。
+    // 异步执行不阻断启动；完成前 SK/令牌解析链仍兼容配置文件旧值。
+    //
+    // 若此刻凭据服务还没就绪（它可能晚于本插件注册），迁移会**安全地保留明文**并返回
+    // true —— 这时用 ctx.inject(['credentials']) 等它就绪后**再试一次**，从而既不会
+    // 丢凭据、也不会让「配置文件零明文」永远停在未完成状态（v1.9.0 首版的真实现场：
+    // 迁移一次没成功就再没重试，`secretsMigrated` 一直是 false）。
+    runSecretMigration().then((pending) => {
+      if (pending) {
+        try {
+          ctx.inject(['credentials'], () => { runSecretMigration().catch(() => {}) })
+        } catch (e) {
+          startupLog('[cost-tracker] credentials inject skipped: ' + toStr(e && e.message ? e.message : e))
+        }
+      }
+      startPriceCheckTimer()
+    }).catch(() => startPriceCheckTimer())
     const settingsOk = installSettingsSection()
     if (!settingsOk) {
       // settings 是可选服务（宿主未组合时不报错、不阻断启动），但不能像 1.8.0 那样只探一次：
@@ -1821,6 +2310,13 @@ export default {
     }
     startSyncTimer()
     if (cloudConfig.cloudEnabled) scheduleSync(5000)
+    // v1.9.0：历史导入自动执行（幂等；延迟 8s 避开启动 IO 高峰，绝不阻塞启动）
+    if (importConfig.autoImport) {
+      const timer = ctx.get('timer')
+      const kick = () => { runHistoryImport().catch(() => {}) }
+      if (timer) timer.timeout(kick, 8000)
+      else { const t = setTimeout(kick, 8000); if (typeof t.unref === 'function') t.unref() }
+    }
     ctx.effect(() => () => {
       // 退出前最后一次落盘：给足重试（10 次 ≈ 2s）——否则被瞬时占用就会丢掉本次会话的记录；
       // 这里不能用 writeRecords()，它失败后只是「排个延迟重试」，而进程马上要退出。

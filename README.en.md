@@ -42,6 +42,11 @@
 | 🔻 | **Status line** | A live line under the chat input: **session cost** (segmented pills: session / subscription plan / per-model), split by the models actually used in the session; multi-model collapses to top2 by default, click to expand. Subscription shows the plan name; no quota or call-count clutter |
 | 🔥 | **Usage heatmap** | A "Token Usage" panel in Settings: a Codex-style **26-week daily-usage grid**, colored per-day by input / cache / output / cost with hover details and a today outline; all-time totals shown on top |
 | 💾 | **Local persistence** | Data lives in `~/.dsh/storages/cost-tracker-records.json`; survives restarts, never leaves your machine. **Details are kept for the last 180 days; older records are auto-compressed into permanent daily rollups, so all-time stats stay exact with bounded memory/disk** |
+| 🕰️ | **History import (v1.9.0)** | Replays host session logs to **backfill calls made before you installed the plugin** (each priced by its own timestamp); only calls the plugin could not have recorded (pre-install / downtime gaps); idempotent, and imported records are tagged `source=import` |
+| 🔄 | **Official price sync (v1.9.0)** | Fetches the official pricing page, parses each model's peak price and shows the diff; applying builds a **new pricing era** that only affects later records (history never shifts). The daily check only reports diffs and never auto-applies; a restructured page aborts instead of writing a wrong price |
+| 🌐 | **Multi-vendor price catalog (v1.9.0)** | 14 vendors / 90 entries (USD→CNY at a configurable rate), so models outside the built-in table (OpenAI / Anthropic / Gemini / Qwen …) get **exact** prices; fuzzy or exact matching plus manual price overrides |
+| ⚖️ | **Plan vs metered dual basis (v1.9.0)** | One "Include Plan total" switch changes the basis: off = metered spend only, with subscriptions shown as a footnote; on = metered + subscription equivalent, merged into the charts as its own segment |
+| 🔐 | **No plaintext secrets (v1.9.0)** | The cloud token and the Volcengine secret live only in the DSH credential store (legacy plaintext migrates on startup); responses only report booleans; every outbound request goes through a host allowlist with forced https and no cross-host redirects |
 | 📤 | **CSV export** | One-click export of details + daily rollups (`purpose=rollup`) for further analysis in Excel / Numbers |
 
 ## Screenshots
@@ -120,6 +125,20 @@ dsh web
 
 > ⚠️ If `~/.dsh/profiles/web/cordis.patch.yml` already contains entries, keep them and only append the block above; the file's top level must remain a YAML array.
 
+> ⚠️ **On a machine where this plugin was installed from the marketplace, never upgrade by copying files by hand** (a real trap hit in v1.9.1):
+> DSH profiles manage plugins with pnpm (`~/.dsh/profiles/web/package.json` records
+> `"@angelyeye/dsh-cost-tracker": "^1.8.15"`), so on the next start the marketplace
+> reconciliation **reinstalls the pinned older version and overwrites your files** — the
+> symptom is "upgraded, restarted, and it is the old version again".
+> For those machines, link the checkout into the profile instead (survives restarts, and a
+> restart picks up your edits):
+>
+> ```bash
+> dsh plugin --profile web add link:/path/to/dsh-cost-tracker
+> ```
+>
+> For released versions just upgrade normally: `dsh plugin --profile web update` (or the marketplace's update button).
+
 ### Migrating from the old package name (only installs of v1.6.0 or older)
 
 As of v1.7.0 the package name changed from `dsh-cost-tracker` to `@angelyeye/dsh-cost-tracker` — the old name is held on npm by an unrelated package, and the marketplace's npm mapping requires the published name to equal the repository's `package.json` `name`.
@@ -171,6 +190,7 @@ rm -rf ~/.dsh/profiles/node_modules/dsh-cost-tracker
 | `cost_prices` | Show the built-in price table & peak rules | "What does deepseek-v4-flash cost right now?" |
 | `cost_peak` | Show the current peak tier & next-switch countdown | "Is it peak hour right now?" |
 | `cost_recompute` | **Re-price stored records by pricing era (one-off backfill)**, dry-run by default | "Re-price the records from before the price change" |
+| `cost_import` | **History import**: show status / run one backfill pass (calls from before the plugin was installed) | "Include what I spent before I installed the plugin" |
 | `cost_sync` | **Cloud sync**: status / sync now / test connection / update config | "Sync my usage to the cloud" · "Is cloud sync healthy?" |
 | `cost_reset` | **Erase ALL statistics (irreversible)** | "Reset my cost statistics" |
 
@@ -228,6 +248,46 @@ Don't want the plugin in your face? **Settings → Plugins → Plugin configurat
 - Truth value is "hidden only on an explicit `false`", so a missing key means visible: **an existing config file looks exactly the same after upgrading**;
 - All three keys live in the same `~/.dsh/storages/cost-tracker-config.json` (`uiDockEnabled` / `uiPeakEnabled` / `uiDashboardEnabled`) and never overwrite the peak/cloud fields.
 
+### Plugin configuration card (v1.9.0 redesign: the single place for every setting)
+
+**Settings → Plugins → Plugin configuration → Cost Tracker** now carries **all** settings, laid out as collapsible groups under a status strip (cloud sync / records stored / pending / last sync / pricing era / history import / amount basis):
+
+| Group | Contents |
+| --- | --- |
+| **Multi-machine aggregation (cloud sync)** | device name, enable switch, service URL, shared token, interval, batch size, session masking, purpose, rollup upload, backfill window, default view + Save / Test / Sync now / Full re-send + device id / watermark / last error |
+| **Peak/off-peak pricing & notices** | peak switch, prominent notice, strip style (compact / dial), tick labels / two-line compact, switch alerts (lead time / target / position / web notification) + **live preview** while editing |
+| **Subscriptions & quotas** | Volcengine Ark `AccessKeyID` / `SecretAccessKey` (the secret goes to the credential store only), quota query with percentage bars, **subscription classification overrides** (`provider/*` or `provider/model` → plan / pay-as-you-go) |
+| **Pricing & price catalog** | "Include Plan total" switch, catalog match mode (fuzzy / exact), USD→CNY rate, **manual price overrides**, **official price sync** (check / apply / last diff / current era / synced eras), **multi-vendor catalog overview** (vendors, entries, data date, fingerprint) |
+| **History import** | auto-import switch, import now, totals and processed log count, the three coverage rules |
+| **Data & interface** | the three interface-visibility switches (instant), CSV export, cost recompute (dry-run / write back), clear data (two-step confirm) |
+| **Security & credentials** | "configured + storage location" badges for the cloud token and Volcengine secret, legacy plaintext migration state, clear buttons, egress-protection notes |
+
+Only the three interface switches apply instantly; every other group is "edit draft → save that group", so a stray click can never write to disk. Collapsing a group only toggles CSS visibility (nothing unmounts), so opening one never refetches data or loses your draft.
+
+### History import (v1.9.0)
+
+Conversations from **before you installed the plugin** can be backfilled: the plugin replays the host session logs (`$DSH_HOME/sessions/<project>/<session>/session.v3.jsonl.zstd`, decompressed frame by frame — the host appends one zstd frame per batch) and books each model call at the price era of **its own timestamp**.
+
+- **Auto-import on startup** by default (8 s delay, never blocks the boot), with an "Import now" button and an `autoImport` switch;
+- **Only calls the plugin could not have recorded**: earlier than this machine's first live record, or on a day with no live coverage at all (downtime gaps);
+- Sessions straddling the install point are cut at that session's first live record: the earlier part is backfilled, the later part stays live-recorded;
+- **Idempotent three ways**: a manifest fast-skips unchanged logs by mtime+size; every call is deduped by `(sessionId, timestamp, five token buckets)`; days already covered by live data are skipped rather than double-counted;
+- Imported records are tagged `source=import` (live ones are `source=live`); forked sessions only count events after `createdAt`, and auxiliary requests (title generation) never produce records.
+
+### Official price sync & multi-vendor catalog (v1.9.0)
+
+- **Official price sync**: "Check official prices" fetches the official pricing page (the Chinese page gives CNY directly), parses each model's peak price and diffs it against the currently effective table; "Apply new prices" turns the result into a **new pricing era** that only affects records at or after the apply moment — history keeps its own era, so past numbers never shift. A daily automatic check (on by default) only reports diffs and **never auto-applies**. The parser refuses to write anything on page restructures, missing numbers, or an off-peak price that is not exactly half the peak price;
+- **Multi-vendor price catalog**: 14 vendors / 90 model entries (OpenAI, Anthropic, Google, Moonshot, z-ai, xAI, Alibaba, MiniMax, Tencent, Xiaomi, Upstage, NVIDIA, Mistral, OpenCode; data adapted from `dsh-cost-meter`'s verified catalog, MIT), converted with a configurable USD→CNY rate (default 7.2). Models outside the built-in table are billed as **exact** prices instead of "estimated"; fuzzy (normalized containment) or exact matching;
+- **Manual price overrides** per `provider/model` (input / output / cache) take the highest priority — for self-hosted endpoints or negotiated deals;
+- **Resolution order**: manual override > subscription classification > built-in / synced era > catalog > provider fallback > generic fallback. `cost_prices` and `/api/cost-tracker/prices` report the current era, synced eras, catalog fingerprint and overrides;
+- The cloud service (`dsh-cost-cloud ≥ v1.4.0`) implements the same rules with its own admin endpoints, and `/api/v1/protocol` reports which price version the cloud is actually using.
+
+### Credential safety (v1.9.0)
+
+- **No secrets on disk**: the cloud shared token and the Volcengine `SecretAccessKey` live only in the DSH credential store (`~/.dsh/.credentials.yaml`); the config file keeps nothing but a boolean. Plaintext left behind by v1.8.x (including the base64-obfuscated secret) is **migrated automatically** on startup and removed from the config (idempotent; an existing credential-store value is never overwritten). **Safety boundary**: plaintext is only removed when the credential store is actually writable — if the host exposes no credential service (or a read-only one), the plaintext is **kept as is** with a startup notice, because a secret that only lives in memory is gone after a restart;
+- **No response ever echoes a secret**: status endpoints return only booleans plus the storage location (credential store / process memory). `AccessKeyID` is a non-sensitive identifier and is echoed so the form can be pre-filled;
+- **Egress protection**: any request carrying credentials must match the host allowlist (DeepSeek / Kimi / Volcengine control plane / your configured cloud URL / the pricing page host), non-loopback hosts must use https, and `redirect: 'manual'` is forced — any 3xx is treated as a failure so a redirect can never carry the `Authorization` header elsewhere.
+
 ### HTTP API (for other tools)
 
 All endpoints are `POST` + JSON and listen on the loopback address:
@@ -248,8 +308,15 @@ POST /api/cost-tracker/kimi-usage   Kimi subscription quota
 POST /api/cost-tracker/volcengine-usage  Volcengine Ark Coding Plan quota (5-hour / weekly / monthly windows)
 POST /api/cost-tracker/volcengine-config Save Volcengine AK/SK (reports only whether keys are configured, never the keys)
 POST /api/cost-tracker/balance      Account balance
-POST /api/cost-tracker/prices       Price table (versioned by pricing era)
+POST /api/cost-tracker/prices       Price table (by pricing era + synced eras + multi-vendor catalog + overrides)
 POST /api/cost-tracker/recompute    Re-price stored records by era (dry-run unless {"apply":true})
+POST /api/cost-tracker/billing-config  Billing basis & catalog config (amount basis / plan overrides / match & fx / price overrides)
+POST /api/cost-tracker/prices-sync  Official price sync (dry-run unless {"apply":true})
+POST /api/cost-tracker/prices-config Price-sync settings (pricing page URL / daily auto-check)
+POST /api/cost-tracker/import-status History-import status
+POST /api/cost-tracker/import-run   Run one history-import pass (idempotent)
+POST /api/cost-tracker/import-config History-import settings (auto-import on startup)
+POST /api/cost-tracker/reset        Clear every record (called after the card's two-step confirm)
 POST /api/cost-tracker/export       CSV export
 ```
 
@@ -260,6 +327,28 @@ Example: `curl -X POST http://127.0.0.1:3080/api/cost-tracker/summary -d '{}'`
 ## Changelog
 
 > Highlights only — the full version-by-version history lives in [`CHANGELOG.md`](./CHANGELOG.md) (Chinese).
+
+### v1.9.1 (2026-09-20)
+
+**Fixed: cloud sync failed with "method not allowed" (405) — `safeFetch` dropped the native fetch signature, turning every POST into a GET**
+
+- The reverse-proxy log showed the plugin sending `GET /api/v1/ingest/records` (it must be POST) → the cloud answered 405, so sync was dead and the watermark never advanced;
+- Root cause: `index.js` passed `safeFetch` where a `<typeof fetch>` was expected — `(url, init) => safeFetch(url, {...init})` — while `safeFetch` only read `opts.init`, so `method` / `body` / `content-type` were all dropped. It now accepts **both shapes** (`opts.init` wins), with the security policy unchanged;
+- Two regression guards, because neither unit-testing `safeFetch` nor unit-testing the engine catches a composition bug: a unit case that reproduces index.js's exact wiring, and an integration case that runs a full `runOnce` through it and asserts a real POST;
+- Also fixed: when the credential service becomes available *after* the plugin (so the first migration attempt safely kept the plaintext), a `ctx.inject(['credentials'])` retry now completes the migration instead of leaving `secretsMigrated` false forever;
+- Install note: see the warning under "Verify it works" — copying files into a pnpm-managed profile gets reverted on restart; use `dsh plugin --profile web add link:<checkout>` for development.
+
+### v1.9.0 (2026-09-27)
+
+**Five new capabilities, all settings unified into the plugin-config card, and zero plaintext secrets (pairs with `dsh-cost-cloud` v1.4.0)**
+
+- **History import** — replays the host session logs (many appended zstd frames, decompressed frame by frame) to backfill calls from **before the plugin was installed**. Idempotent three ways (manifest fast-skip, per-call dedup key, coverage rule), sessions straddling the install point are cut at the first live record, and imported records are tagged `source=import`. Auto-runs on startup (8 s delay, never blocks the boot); new agent tool `cost_import`;
+- **Credential-egress protection** — the cloud token and the Volcengine secret are written only to the DSH credential store (the config file keeps a boolean), legacy plaintext is migrated automatically on startup, and every outbound request goes through an allowlist with forced https and `redirect:'manual'` (3xx is a failure, so a redirect can never carry the `Authorization` header away). No response ever echoes a secret;
+- **Official price sync** — parses the official pricing page (a transposed table: columns are models, rows are metric × time band) into a new pricing era that only affects records at or after the apply moment, so history never shifts. Page restructures, missing numbers or an off-peak price that is not half the peak price all abort the sync instead of writing a wrong price. The daily automatic check only reports diffs;
+- **Multi-vendor price catalog** — 14 vendors / 90 entries (USD per 1M tokens, converted at a configurable rate), so models outside the built-in table get **exact** prices instead of "estimated"; fuzzy/exact matching plus a manual price-override table;
+- **Plan vs metered dual basis + "Include Plan total" switch** — one toolbar switch decides whether the money cards and charts show metered spend only (subscriptions shown as a footnote) or metered + subscription equivalent (a dedicated "subscription equivalent" chart segment). The choice is stored locally and written back to the server config;
+- **Settings unified + card redesign** — **Settings → Plugins → Plugin configuration → Cost Tracker** is now the single entry point, with seven collapsible groups (multi-machine aggregation / peak pricing & notices / subscriptions & quotas / pricing & catalog / history import / data & interface / security & credentials) under a status strip; the dashboard's peak panel became read-only;
+- **Tests** — four new files (`test/import.test.js` synthesises multi-frame zstd logs, `test/price-sync.test.js` also runs against a real fetched page, `test/vendor-catalog.test.js`, `test/credstore.test.js`), plus new client-render assertions for the amount-basis switch and the card groups: 17 test files, all green.
 
 ### v1.8.15 (2026-09-26)
 

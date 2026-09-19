@@ -23,6 +23,10 @@ const TYPES = {};
 function anyNode(meta) {
   const node = (v) => v;
   node.meta = meta || {};
+  // 与其余类型同款的链式声明（v1.9.0 的 planOverrides/priceOverrides 用 any 承载）
+  node.role = (r) => { node.meta.role = r; return node }
+  node.default = (d) => { node.meta.default = d; return node }
+  node.description = (d) => { node.meta.description = d; return node }
   node.toJSON = () => ({ type: undefined, meta: node.meta });
   return node
 }

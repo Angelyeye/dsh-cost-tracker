@@ -1,7 +1,7 @@
 {
   "name": "@angelyeye/dsh-cost-tracker",
-  "version": "1.8.15",
-  "description": "DeepSeek Harness (DSH) plugin: LLM token usage & cost tracking with a settings dashboard, agent tools, HTTP API, persistent storage and multi-device cloud sync.",
+  "version": "1.9.1",
+  "description": "DeepSeek Harness (DSH) plugin: LLM token usage & cost tracking with a settings dashboard, agent tools, HTTP API, persistent storage, multi-device cloud sync, session-log history import, official price sync and a multi-vendor price catalog.",
   "type": "module",
   "main": "index.js",
   "files": [
@@ -14,6 +14,12 @@
     "schema.js",
     "sync.js",
     "volcengine.js",
+    "vendor-catalog.js",
+    "price-sync.js",
+    "credstore.js",
+    "import.js",
+    "docs/provider-pricing.json",
+    "docs/THIRD-PARTY-NOTICES.md",
     "cordis.patch.yml",
     "CHANGELOG.md"
   ],
@@ -22,10 +28,13 @@
     "./client": "./client.js",
     "./view": "./view.js",
     "./volcengine": "./volcengine.js",
+    "./pricing": "./pricing.js",
+    "./vendor-catalog": "./vendor-catalog.js",
     "./package.json": "./package.json"
   },
   "scripts": {
-    "test": "node test/storage.test.js && node test/pricing.test.js && node test/volcengine-plan.test.js && node test/volcengine-host.test.js && node test/config.test.js && node test/recompute.test.js && node test/client-registration.test.js && node test/ui-display.test.js && node test/client-render.test.js && node test/cloud-read.test.js && node --no-warnings test/cloud-view-e2e.test.js && node test/sync.test.js && node test/view.test.js"
+    "test": "node test/storage.test.js && node test/pricing.test.js && node test/volcengine-plan.test.js && node test/volcengine-host.test.js && node test/config.test.js && node test/recompute.test.js && node test/credstore.test.js && node test/vendor-catalog.test.js && node test/price-sync.test.js && node test/import.test.js && node test/client-registration.test.js && node test/ui-display.test.js && node test/client-render.test.js && node test/cloud-read.test.js && node --no-warnings test/cloud-view-e2e.test.js && node test/sync.test.js && node test/view.test.js",
+    "test:sync": "node scripts/check-pricing-sync.js"
   },
   "keywords": [
     "dsh-plugin",

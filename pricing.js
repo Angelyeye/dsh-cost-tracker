@@ -157,13 +157,65 @@ export function resolveModelInEra(era, model) {
   return null
 }
 
-/** 某一时刻生效的价格时代（缺省用当前时间）。 */
+/** 某一时刻生效的价格时代（缺省用当前时间）。
+ *  v1.9.0 起：在内置 PRICE_ERAS 之外合并**官方同步时代**（setSyncedEras 注入，
+ *  见 price-sync.js）——两侧按 since 取「最近生效者」，同时刻同步时代优先
+ *  （同步数据来自官方页面实抓，比内置常量新）。 */
 export function eraAt(ts) {
   const t = Number.isFinite(ts) ? ts : Date.now()
   let cur = PRICE_ERAS[0]
   for (const e of PRICE_ERAS) if (t >= e.since) cur = e
+  for (const e of SYNCED_ERAS) {
+    if (t >= e.since && (cur === PRICE_ERAS[0] || e.since >= cur.since)) cur = e
+  }
   return cur
 }
+
+// ---------- 官方同步时代（v1.9.0，price-sync.js 注入） ----------
+let SYNCED_ERAS = []
+/**
+ * 注入官方价格同步产生的时代（启动时从 storages/cost-tracker-prices.json 加载）。
+ * 时代按 since 升序排序；非法条目（缺 models/since）丢弃，绝不阻断启动。
+ * @param {object[]} eras
+ */
+export function setSyncedEras(eras) {
+  SYNCED_ERAS = (Array.isArray(eras) ? eras : [])
+    .filter((e) => e && typeof e === 'object' && Number.isFinite(e.since) && e.models && typeof e.models === 'object')
+    .sort((a, b) => a.since - b.since)
+    .map((e) => Object.assign({ routes: {}, label: '官方同步价', synced: true }, e))
+}
+/** 当前注入的同步时代（只读副本，供状态回显） */
+export function getSyncedEras() { return SYNCED_ERAS.slice() }
+
+// ---------- 手动覆盖价（v1.9.0，插件配置卡维护） ----------
+let PRICE_OVERRIDES = new Map()
+function overrideKey(np, model) {
+  return normalizeModelName(np) + '/' + normalizeModelName(model)
+}
+/**
+ * 注入手动覆盖价：键 'provider/model'（两侧都归一化），值为
+ * {input, output, cacheRead, cacheWrite}（CNY / 1M tokens）。
+ * 命中优先级最高（高于订阅归类、同步时代与目录）。
+ */
+export function setPriceOverrides(map) {
+  PRICE_OVERRIDES = new Map()
+  for (const [k, v] of Object.entries(map && typeof map === 'object' ? map : {})) {
+    if (!v || typeof v !== 'object') continue
+    const rates = {
+      input: Number(v.input), output: Number(v.output),
+      cacheRead: Number(v.cacheRead), cacheWrite: Number(v.cacheWrite === undefined ? v.cacheRead : v.cacheWrite),
+    }
+    if (!rates.input || !Number.isFinite(rates.input) || rates.input < 0) continue
+    if (!Number.isFinite(rates.output) || rates.output < 0) continue
+    if (!Number.isFinite(rates.cacheRead) || rates.cacheRead < 0) continue
+    // 键形如 'provider/model'：先按 '/' 拆开再各自归一化（normalizeModelName 会
+    // 剔除一切非字母数字，直接整串归一会把 '/' 吃掉，导致写读两侧对不上）
+    const parts = String(k).split('/')
+    if (parts.length !== 2 || !parts[0].trim() || !parts[1].trim()) continue
+    PRICE_OVERRIDES.set(normalizeModelName(parts[0]) + '/' + normalizeModelName(parts[1]), { rates, tiered: false })
+  }
+}
+export function getPriceOverrides() { return PRICE_OVERRIDES }
 
 /** 某一时刻生效的精确单价表（缺省用当前时间）。 */
 export function exactModelsAt(ts) { return eraAt(ts).models }
@@ -425,20 +477,71 @@ export function peakPhaseAt(ts, spanDays) {
  * @param {string} model - 模型名（如 deepseek-v4-flash-vision-exp）
  * @param {number} [ts] - 调用发生时刻（epoch ms）；决定用哪一版单价表。
  *   缺省用当前时间——注意历史/测试场景应显式传入，否则跨价格时代会错。
+ * @param {{catalog?:Function, overrides?:Map, planOverrides?:object}} [opts]
+ *   · catalog(np, model) → 目录命中对象 | null（vendor-catalog.catalogEntryFor，
+ *     由调用方注入以保持本模块可独立测试）；
+ *   · overrides：setPriceOverrides 注入的手动覆盖价（不传则用模块态）；
+ *   · planOverrides：订阅归类覆盖 {'provider/model'|'provider/*': 'plan'|'api'}。
  * @returns {{rates:object, tiered:boolean, estimated:boolean, subscription:boolean,
- *            model:string, era:string|null}}
+ *            model:string, era:string|null, source:string}}
  *   model 为**计费模型规范名**：命中路由时是被路由到的模型（如 V4-Pro → V4.1 Flash），
  *   记账应以它入账；未命中精确表时为原模型名。
+ *   source：override > plan > exact/synced > catalog > provider > generic。
  */
-export function priceFor(np, model, ts) {
+export function priceFor(np, model, ts, opts) {
+  const o = opts || {}
+  // ---- 0. 订阅归类覆盖（用户在配置卡按 provider 或 provider/model 强制归类）----
+  const po = planOverrideFor(np, model, o.planOverrides)
+  if (po === 'plan') {
+    const sub = subscriptionPlanFor(np, model)
+    if (sub) return { rates: sub, tiered: false, estimated: true, subscription: true, model, era: null, source: 'plan' }
+    // 无既有套餐可套：按「该渠道走订阅」处理 —— 照常解析单价（目录/时代/兜底），
+    // 但标记为订阅等值口径；这正是「套餐覆盖了清单外的模型」的兜法。
+    const forced = resolveNonPlanPrice(np, model, ts, o)
+    forced.subscription = true
+    forced.source = 'plan'
+    return forced
+  }
+  if (po === 'api') {
+    const forced = resolveNonPlanPrice(np, model, ts, o)
+    forced.subscription = false
+    return forced
+  }
+  // ---- 1. 内置订阅套餐 ----
   const sub = subscriptionPlanFor(np, model)
-  if (sub) return { rates: sub, tiered: false, estimated: true, subscription: true, model, era: null }
+  if (sub) return { rates: sub, tiered: false, estimated: true, subscription: true, model, era: null, source: 'plan' }
+  return resolveNonPlanPrice(np, model, ts, o)
+}
+
+/** 订阅归类覆盖查找：先 provider/model 精确，再 provider/* 通配 */
+function planOverrideFor(np, model, map) {
+  if (!map || typeof map !== 'object') return ''
+  const nModel = normalizeModelName(model)
+  const nProv = normalizeModelName(np)
+  const exact = map[nProv + '/' + nModel]
+  if (exact === 'plan' || exact === 'api') return exact
+  const wild = map[nProv + '/*']
+  if (wild === 'plan' || wild === 'api') return wild
+  return ''
+}
+
+/** 非订阅路径的价格解析：覆盖价 > 时代精确表（内置+同步） > 目录 > provider 兜底 > 通用兜底 */
+function resolveNonPlanPrice(np, model, ts, o) {
+  const ov = (o.overrides || PRICE_OVERRIDES)
+  const hit = ov.get(overrideKey(np, model))
+  if (hit) return { rates: hit.rates, tiered: hit.tiered, estimated: false, subscription: false, model, era: eraAt(ts).id, source: 'override' }
   const era = eraAt(ts)
-  const hit = resolveModelInEra(era, model)
-  if (hit) return { rates: era.models[hit], tiered: true, estimated: false, subscription: false, model: hit, era: era.id }
+  const exact = resolveModelInEra(era, model)
+  if (exact) return { rates: era.models[exact], tiered: true, estimated: false, subscription: false, model: exact, era: era.id, source: era.synced ? 'synced' : 'exact' }
+  if (typeof o.catalog === 'function') {
+    try {
+      const c = o.catalog(np, model)
+      if (c && c.rates) return { rates: c.rates, tiered: false, estimated: false, subscription: false, model, era: era.id, source: 'catalog', catalog: { provider: c.provider, sourceUrl: c.sourceUrl || '', checkedAt: c.checkedAt || '', via: c.via || '' } }
+    } catch (e) { /* 目录读取失败不阻断计费，落到 provider 兜底 */ }
+  }
   const p = PROVIDER_RATES[np]
-  if (p) return { rates: p.rates, tiered: p.tiered, estimated: true, subscription: false, model, era: era.id }
-  return { rates: GENERIC_RATES, tiered: false, estimated: true, subscription: false, model, era: era.id }
+  if (p) return { rates: p.rates, tiered: p.tiered, estimated: true, subscription: false, model, era: era.id, source: 'provider' }
+  return { rates: GENERIC_RATES, tiered: false, estimated: true, subscription: false, model, era: era.id, source: 'generic' }
 }
 
 /**

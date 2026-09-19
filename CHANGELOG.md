@@ -2,6 +2,169 @@
 
 本文件用中文记录 dsh-cost-tracker 的版本变更。
 
+## v1.9.1(2026-09-20)
+
+**修复：云端同步全面失败（405「方法不允许」）+ 明文迁移在凭据服务晚就绪时不再重试**
+
+### 一、修复：safeFetch 丢掉 fetch 原生签名 → POST 退化成 GET（真实故障）
+
+- **现场**：升级到 v1.9.0 后云端同步一直失败，界面显示「最近错误：方法不允许」，
+  水位卡在 4013、待上报条数只增不减，`pendingFailures` 持续累加并退避到 5 分钟。
+  反代访问日志给出铁证：插件实际发出的是
+  `GET /api/v1/ingest/records` → **405**（`{"code":"METHOD_NOT_ALLOWED","error":"方法不允许"}`），
+  而同路径的 `POST` 是 200 —— 也就是**请求方法与正文都丢了**。
+- **根因**：`index.js` 把 `safeFetch` 当作 `<typeof fetch>` 传给同步引擎 ——
+  `fetchFn: (url, init) => safeFetch(url, Object.assign({}, init, { allowHosts }))`，
+  而 `safeFetch` 当时**只读 `opts.init`**，于是 `method` / `body` / 部分头全落到 `undefined`：
+  fetch 按默认语义发 **GET**、无正文、无 `content-type`，云端按方法不匹配回 405。
+- **修复**：`safeFetch` 同时接受两种入参形状 —— 文档形状 `{ init: {...} }` 与
+  **fetch 原生签名**（`method`/`body`/`headers`/`signal` 等在顶层），`opts.init` 优先。
+  安全策略不因入参形状变化：顶层签名同样强制 `redirect:'manual'`，跨主机重定向照样拒绝。
+- **回归护栏（两层，专治「组合起来才错」）**：
+  · `test/credstore.test.js` 新增 [4b]：照抄 index.js 的接线方式，断言实际发出的是
+    **POST**、正文与 `content-type` 完整、`redirect` 被强制 manual、跨主机仍被拒；
+  · `test/sync.test.js` 新增集成用例：用同一接线形态跑完整 `runOnce`，断言首个请求是
+    `POST /api/v1/ingest/records` 且正文含 `syncVer`、授权头带令牌。
+  只测 `safeFetch` 或只测引擎都拦不住这个缺陷 —— 必须测两者的**组合**。
+
+### 二、修复：凭据服务晚就绪时，明文迁移不再重试
+
+- 现象：升级后 `secretsMigrated` 一直是 `false`，配置里仍留着明文令牌与 SK。
+- 原因：迁移只在启动时跑一次；若那一刻 `ctx.get('credentials')` 还拿不到（凭据服务
+  晚于本插件注册），按安全边界会**保留明文**并报告「有悬而未决的明文」，但之后**再没重试**。
+- 修复：`runSecretMigration()` 返回 `pending`；为真时用 `ctx.inject(['credentials'], …)`
+  等凭据服务就绪后**自动再迁一次** —— 既不丢凭据，也不让「配置文件零明文」永远停在未完成。
+
+### 三、安装方式的坑（已写进 README）
+
+- DSH 的 profile 用 pnpm 管理插件（`profiles/web/package.json` 里写着
+  `"@angelyeye/dsh-cost-tracker": "^1.8.15"`）。**手动把新版本文件拷进
+  `profiles/web/node_modules/…` 会在下次启动时被市场对账重装回旧版**（真实踩坑：
+  拷完 v1.9.0、重启后目录又变回 v1.8.15，只有运行中的进程还带着新代码）。
+- 开发/自测请用官方 dev 流程（profile 记成 `link:`，重启不丢）：
+  `dsh plugin --profile web add link:<仓库路径>`
+
+## v1.9.0(2026-09-27)
+
+**历史导入 + 凭据外带防护 + 官方价格同步 + 多厂商目录 + Plan/按量双轨开关；
+全部设置集中进「插件配置 → 花费统计」并重设计该卡片（配套云端 v1.4.0）**
+
+### 一、新增模块（各自带独立测试，纯逻辑、可单独跑）
+
+| 模块 | 职责 |
+| --- | --- |
+| `import.js` | 回放宿主会话日志（多 zstd frame 逐帧解压 + 逐帧切片，防大日志 OOM），重建逐次调用 |
+| `price-sync.js` | 官方定价页解析器（转置价格表：列 = 模型、行 = 指标 × 时段）→ 计费时代 |
+| `vendor-catalog.js` + `docs/provider-pricing.json` | 多厂商价格目录（14 家厂商 / 90 个条目，USD/1M tokens） |
+| `credstore.js` | 凭据库封套（`ctx.credentials`）+ 旧明文迁移 + 出站白名单与 `safeFetch` |
+
+### 二、历史导入（`import.js` + 宿主接线）
+
+- **只补「插件不可能记到」的调用**：早于本机最早一条**实时**记录（`source!=='import'`），
+  或所在日完全没有实时覆盖（明细 + 日汇总都没有 → 停机缺口）；
+- **跨安装点会话按切割线截断**：`min(该会话首条实时记录时刻)` 之后一律不导入，
+  与全局安装点取「更早者」，从而既补全安装前那段、又不与实时记录重复；
+- **幂等三保险**：① 清单（`cost-tracker-import.json`）按 mtime+size 快跳未变化日志；
+  ② 逐调用键 `(sessionId, 事件时刻, 五桶 tokens)` 与已导入明细比对
+  ——**刻意不含模型名**，因为入账时模型会被路由改写（`deepseek-v4-pro → deepseek-flash`），
+  含模型名会导致重跑重复导入；③ 已被实时覆盖的日子宁可不导入也不重复计数；
+- **解析对齐宿主真实格式**：`usage` 取 `assistant/message.data.usage`（按 `(turn, step)`
+  去重、最终 message 覆盖流式样本、全零用量即失败尝试不产出）；provider/model 取
+  `data.message.source`，回落 `request/header.data.header.config`（实测的嵌套形状）
+  与 `request/context`；fork 种子段（`time < createdAt`）跳过；标题生成等辅路请求不计；
+- 导入记录标记 `source:'import'`（实时记录 `source:'live'`），覆盖判定只看 live；
+- 默认**开机自动导入**（延迟 8s，`ctx.timer` 缺失时用 unref 的原生定时器，不阻塞退出），
+  配置卡可关；新增 Agent 工具 `cost_import`（`run: true` 执行一轮）。
+
+### 三、凭据外带防护（`credstore.js` + 全链路接线）
+
+- **密钥零落盘**：新增 `CRED_REFS`（`COST_TRACKER_CLOUD_TOKEN` / `COST_TRACKER_VOLCENGINE_SK`），
+  云端令牌与火山 SK 只写 DSH 凭据库；`createCredSeam` 在凭据服务缺席时退化为**内存态**
+  并如实标注（UI 显示「仅进程内暂存」），绝不为兼容把明文写回配置文件；
+- **启动迁移**：`migrateLegacySecrets()` 把 v1.8.x 明文（含 base64 混淆的 SK）搬进凭据库、
+  从配置对象清除并回写净化配置；幂等，凭据库已有值时不覆盖（只提示）；
+- **迁移的安全边界**：`save()` 的返回值区分「已持久化」与「只写进了内存」——
+  只有凭据库确实可写时才清除配置里的明文；宿主没有凭据服务或凭据只读时，
+  明文**原样保留**并在启动日志里说明原因（密钥若只留在内存里，重启后就永久丢了，
+  「配置文件零明文」不能以丢凭据为代价），`secretsMigrated` 也只在没有悬而未决的明文时才置位；
+- **状态只给布尔**：`sync` / `volcengine-config` 响应只含 `cloudTokenConfigured` /
+  `volcengineHasSecret` / `*Backend` / `secretsMigrated`，**永不回显密钥**；
+- **出站防护**：`safeFetch` 强制 `redirect:'manual'`（3xx 一律失败并点名去向主机，
+  防重定向把 `Authorization` 带去别处）、非 loopback 强制 https、携带凭据的请求必须命中
+  主机白名单（DeepSeek / Kimi / 火山管控面 / 配置的云端地址 / 定价页主机），
+  且白名单校验在**发请求之前**完成；`httpJson`、云端只读聚合、`sync.js`、火山签名请求
+  全部改走它（`sync.js` 顺带支持异步 `getToken` 依赖）。
+
+### 四、官方价格同步（`price-sync.js` + `pricing.js` 时代注入）
+
+- `parsePricingPage`：模型列（`模型` 与 `BASE URL` 之间）× {缓存命中 / 缓存未命中 / 输出}
+  × {空闲 / 高峰} 状态机；**校验六组取齐、个数等于模型列数、数值合理、空闲价 ≈ 高峰一半**，
+  任一不满足即抛错 —— 页面改版时宁可不同步，也绝不把错价写进账本；
+- 脚注解析「旧模型名 … 仍可调用」得到**路由**（旧名 → 现役名），同时支持脚注分行与整行两种排版；
+- `buildSyncedEra` → `pricing.setSyncedEras()`：同步时代与内置时代按 `since` 取最近生效者
+  （同时刻同步时代优先）；应用时刻 = 生效时刻，**历史记录按自身时间戳选版，口径不回改**；
+- 产物存 `storages/cost-tracker-prices.json`；每日自动核对（`priceSyncAutoCheck`，默认开）
+  只记录差异，应用始终需手动确认（`prices-sync` 传 `apply:true`）；
+- 实测价值：内置 `v41pro` 时代把 `deepseek-v4-pro` 路由到 Flash，而官方页已恢复 V4-Pro
+  独立牌价（9.0/27.0/0.30 高峰）—— 同步一次即可修正，且不影响历史记录。
+
+### 五、多厂商目录与手动覆盖价（`vendor-catalog.js` + `pricing.priceFor` 扩展）
+
+- 目录数据改编自 `dsh-cost-meter`（MIT）的已核对官方目录，保留 `sourceUrl` / `checkedAt` 溯源；
+  provider 别名归一（`gpt→openai`、`claude→anthropic`、`gemini→google`、`kimi→moonshot`、
+  `zhipu/glm/bigmodel→z-ai`、`qwen/dashscope→alibaba` …）；
+- 匹配模式 `fuzzy`（默认，归一化包含匹配，长度 ≥4 才参与）| `exact`；跨厂商同名仅在**唯一**时命中；
+- USD→CNY 按 `catalogFxRate`（默认 7.2）折算；缓存写入价 = 缓存命中价（官方口径）；
+- `priceFor(np, model, ts, opts)` 新增可选第 4 参（保持 3 参兼容）：
+  **覆盖价 > 订阅归类 > 内置/同步时代精确价 > 目录 > provider 兜底 > 通用兜底**，
+  返回值新增 `source` 字段（`override|plan|synced|exact|catalog|provider|generic`）；
+- 订阅归类覆盖（`planOverrides`：`provider/*` 或 `provider/model` → `plan|api`）解决
+  「模型 id 带日期后缀、套餐白名单永远追不上」的误标问题。
+
+### 六、Plan 与按量双轨 + 「含 Plan 总额」开关（前后端）
+
+- 服务端 `buildDashboard` 的 `byDay` 新增每天 `sub`（订阅等值）金额，且**不再跳过订阅记录**；
+- 客户端工具栏新增「含 Plan 总额」开关：关闭（默认）金额卡只显示按量、订阅以附注展示；
+  打开则金额 = 按量 + 订阅等值，图表按天并入「订阅等值」段（峰谷图第 4 段、模型图带「（订阅）」后缀）；
+- 取值优先级：本机 `localStorage` → 服务端配置；改一次同时写两处（跨设备一致）；
+  **修掉一个真实缺陷**：原先每次 `sync` 轮询都会用服务端值覆盖用户刚切的口径
+  （`localStorage` 被禁用时尤其明显），现在用 state 记录「用户已手动改过」后不再覆盖。
+
+### 七、设置集中 + 配置卡片重设计（`client.js`）
+
+- `设置 → 插件 → 插件配置 → 花费统计` 成为**唯一**设置入口，七个折叠分组
+  （多机汇总 / 峰谷计价与提示 / 订阅套餐与配额 / 计价与价格目录 / 历史导入 / 数据与界面 / 安全与凭据）
+  + 顶部状态摘要条（云端同步 / 已记账 / 待上报 / 上次同步 / 计价时代 / 历史导入 / 金额口径）；
+- 约定：**只有「界面显示」三开关勾选即刻生效**，其余分组「改草稿 → 点该组保存」，
+  避免误触即写盘；分组折叠只切 CSS 显隐、不卸载内容（展开不重新取数、不丢草稿），
+  且不依赖 React 的 `props.children` 注入（配置卡是自绘的，普通函数 + 显式参数更稳）；
+- 看板上的「峰谷计价与提示」面板改为**只读**（回显档位与生效配置，保留弹窗预览），
+  避免两处都能改造成口径不一致；
+- 新增路由：`billing-config`、`import-config`、`import-status`、`import-run`、
+  `prices-config`、`prices-sync`、`reset`；`prices` 回显目录、同步状态与覆盖价；
+  `sync` 回显计费/导入/同步配置与凭据布尔。
+
+### 八、测试与文档
+
+- 新增 4 个测试文件：
+  - `test/import.test.js`：用 `zstdCompressSync` 合成**多帧**会话日志，覆盖帧边界扫描、
+    截断尾帧、跨帧残行拼接、`(turn,step)` 去重、全零用量丢弃、fork 种子段跳过、
+    覆盖判定（安装前 / 跨安装点 / 缺口日 / 已覆盖日）、幂等重跑、日志追加后只补新增，
+    以及宿主面 `import-run` / `import-status` 端到端（落库标记、seq、看板读数）；
+  - `test/price-sync.test.js`：解析正确性（含同行标签、脚注分行、三列对齐）、
+    六类脏数据必须抛错、时代生效与历史隔离、差异比对、抓取入口，
+    并在本机留存真实抓取页时额外跑一遍真实数据；
+  - `test/vendor-catalog.test.js`：目录数据、别名归一、匹配模式、汇率、跨厂商唯一命中、
+    以及目录接入 `priceFor` 的优先级与异常回退；
+  - `test/credstore.test.js`：封套后端选择、旧明文迁移（含幂等与不覆盖）、
+    出站白名单、`safeFetch` 的 3xx 拒绝与头合并；
+- `test/client-render.test.js` 新增「金额口径开关」一节（默认仅按量 → 打开含 Plan → 关回），
+  并继续守住「只有 3 个即时提交 checkbox」与卡片分组文案；
+- `test/volcengine-host.test.js` 两处断言按新语义更新：SK 不再落配置文件（改落凭据库）、
+  来源标记为 `credentials`；
+- README（中/英）与 CHANGELOG 增补上述能力；`package.json` 登记 4 个新模块与
+  `docs/provider-pricing.json`、版本升到 1.9.0。
+
 ## v1.8.15(2026-09-26)
 
 **修复：火山方舟配额面板「没有配置入口」+「拿推理 Key 当 AK」+ 两个失败路径缺陷**
