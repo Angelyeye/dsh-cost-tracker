@@ -340,6 +340,27 @@ Example: `curl -X POST http://127.0.0.1:3080/api/cost-tracker/summary -d '{}'`
 
 > Highlights only — the full version-by-version history lives in [`CHANGELOG.md`](./CHANGELOG.md) (Chinese).
 
+### v1.9.4 (2026-09-24)
+
+**Fix "Volcengine Ark quota response is not valid JSON": the host's global fetch stops decompressing gzip once the `undici` package is loaded, so the plugin now decodes bodies itself**
+
+- **Root cause (reproduced locally)**: as soon as any plugin in the host process imports the npm `undici`
+  package (`dshmarket` does it statically here; `dsh-http-proxy` / `dsh-web-fetch-http` dynamically), Node's
+  **built-in** `fetch` no longer decompresses gzip — the response has no `content-encoding` and the body is
+  raw compressed bytes (measured: 560 B of plain JSON without the import, 326 B starting with `1f 8b` with it).
+  `JSON.parse(await res.text())` therefore always fails, which is exactly the quota-panel error; **the plugin
+  market reading every package's latest version as `null` shares the same root cause** (its no-proxy fallback
+  also uses the global fetch);
+- **Fix (two layers, transparent to callers)**: `safeFetch` now sends `accept-encoding: identity` to ask for
+  uncompressed bodies, and after receiving the body it decompresses by **bytes** (gzip `1f8b` / zlib `78xx` /
+  `br`, `deflate` when the header says so); any decompression failure returns the original bytes untouched.
+  Every plugin egress (Volcengine/Kimi quota, cloud sync and reads, official pricing-page fetch) goes through
+  this wrapper, so all of them are covered;
+- **Verification**: live end-to-end — with the process polluted by `import('undici')` the old path reproduces
+  the exact error, while the fixed path returns the three real windows (100% / 27.08% / 14.77%); new
+  `credstore` [5] and `volcengine-host` [6] regressions; all 18 test files pass;
+- **Takes effect** after a `dsh web` restart (host-half change).
+
 ### v1.9.3 (2026-09-24)
 
 **DSH 0.1.7-alpha.2 support: the configuration entry moved into the Cost Tracker page (gear icon + back control); the old card entry is kept for compatibility**
@@ -600,6 +621,15 @@ Example: `curl -X POST http://127.0.0.1:3080/api/cost-tracker/summary -d '{}'`
 ---
 
 ## FAQ
+
+**Q: The quota panel says "Volcengine Ark quota response is not valid JSON (GetCodingPlanUsage)" — what now?**
+Upgrade to **v1.9.4 or later** and restart `dsh web`. The cause is neither Volcengine nor your credentials:
+once any plugin in the host process does `import('undici')` (on this machine `dshmarket` does), Node's
+**built-in `fetch`** stops decompressing gzip — the response carries no `content-encoding` and the body is
+raw compressed bytes, so `JSON.parse` always fails. From v1.9.4 the plugin decompresses bodies itself
+inside its outbound wrapper and asks for `accept-encoding: identity` by default, so it is immune.
+Related: **the plugin market showing no updates (every package "up to date") has the same root cause**, but
+that path is owned by `dshmarket` itself and needs a fix there.
 
 **Q: Where is my data? Is it safe?**
 Everything stays on your machine in `~/.dsh/storages/cost-tracker-records.json`; nothing is uploaded. The API binds to loopback but has no authentication — **do not expose the DSH port to the public internet**.

@@ -2,16 +2,20 @@
 // dsh-cost-tracker 火山方舟配额（宿主面）契约测试
 //   node test/volcengine-host.test.js
 //
-// 这组断言拦的是「模块单测全绿、接进宿主却不好使」这一类缺陷，共五层：
+// 这组断言拦的是「模块单测全绿、接进宿主却不好使」这一类缺陷，共六层：
 //   ① volcengine-usage 路由真的注册进了 HTTP 面，且老配置下可用；
 //   ② 凭据发现链：.credentials.yaml → 发出**已签名**的请求（不是 Bearer）；
 //   ③ 端到端形状：真实响应 → 解析 → windowList（客户端直接渲染的形状）；
 //   ④ **SecretAccessKey 绝不出现在任何响应里**（写进配置也不回显）；
 //   ⑤ 失败路径软件降级：无凭据 / 401 / 结构变化都只回 ok:false + 中文原因，
-//      不抛异常、不 500、不影响其它路由。
+//      不抛异常、不 500、不影响其它路由；
+//   ⑥ v1.9.4 回归：宿主全局 fetch 被 undici 包污染（不解压 gzip、且不给
+//      content-encoding）时，配额查询仍须成功 —— 现场就是面板上的
+//      「配额查询不可用：火山方舟配额响应不是合法 JSON（GetCodingPlanUsage）」。
 //
 // 全程打桩 fetch，**绝不发真实网络请求**（真发出去也只会拿到 403）。
 // ============================================================
+import * as zlib from 'node:zlib'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -50,6 +54,8 @@ const realFetch = globalThis.fetch
 /** 打桩 fetch：记录每次请求，按可配置的应答模式返回 */
 let fetchCalls = []
 let respond = () => ({ status: 200, body: { Result: { QuotaUsage: [] } } })
+/** v1.9.4 回归开关：true = 模拟被 undici 包污染的宿主 —— 正文是原始 gzip 且不给 content-encoding */
+let compressRaw = false
 globalThis.fetch = async (url, init) => {
   const u = String(url)
   fetchCalls.push({ url: u, init })
@@ -58,11 +64,20 @@ globalThis.fetch = async (url, init) => {
   }
   const r = respond(u, init) || {}
   const status = r.status ?? 200
+  const json = typeof r.body === 'string' ? r.body : JSON.stringify(r.body ?? {})
+  if (compressRaw) {
+    return {
+      status,
+      ok: status >= 200 && status < 300,
+      headers: { get: () => null },
+      arrayBuffer: async () => zlib.gzipSync(Buffer.from(json, 'utf8')),
+    }
+  }
   return {
     status,
     ok: status >= 200 && status < 300,
     headers: { get: () => null },
-    text: async () => (typeof r.body === 'string' ? r.body : JSON.stringify(r.body ?? {})),
+    text: async () => json,
   }
 }
 
@@ -353,6 +368,42 @@ console.log('[5] 缓存与无凭据')
   check('force=true 绕过缓存', fetchCalls.length === 1, `count=${fetchCalls.length}`)
 
   try { rmSync(home2, { recursive: true, force: true }) } catch (e) {}
+}
+
+// ---------- 6. v1.9.4 回归：宿主全局 fetch 不解压 gzip ----------
+// 现场（2026-09-24 真实故障）：DSH 宿主进程里 dshmarket 静态 import 了 npm 的 undici 包，
+// 此后 Node 内置 fetch 不再解压 gzip —— 响应既没有 content-encoding，正文也是原始压缩字节。
+// 插件面板因此报「配额查询不可用：火山方舟配额响应不是合法 JSON（GetCodingPlanUsage）」。
+// 修法在 credstore.js：请求带 accept-encoding: identity + 按字节自解压；这一节端到端验证。
+console.log('[6] 回归：宿主 fetch 返回未解压 gzip（无 content-encoding）时仍可用')
+{
+  respond = () => ({
+    status: 200,
+    body: {
+      ResponseMetadata: { RequestId: 'gz-live', Action: 'GetCodingPlanUsage' },
+      Result: { Status: 'Running', QuotaUsage: [
+        { Level: 'session', Percent: 0.41, ResetTimestamp: 1782226478 },
+        { Level: 'weekly', Percent: 3.2, ResetTimestamp: 1782658478 },
+        { Level: 'monthly', Percent: 12.5, ResetTimestamp: 1784746800 },
+      ] },
+    },
+  })
+  compressRaw = true
+  const v = await api('volcengine-usage', { force: true })
+  check('未解压 gzip 下配额查询成功（不再是「不是合法 JSON」）',
+    v.ok === true && !/不是合法 JSON/.test(v.error || ''), JSON.stringify({ ok: v.ok, error: v.error }))
+  check('三档窗口都解析出来',
+    !!(v.windows && v.windows.fiveHour && v.windows.weekly && v.windows.monthly),
+    JSON.stringify(v.windows))
+  check('窗口百分比未被放大（0.41% 仍是 0.41）',
+    v.windows && v.windows.fiveHour && v.windows.fiveHour.percent === 0.41,
+    JSON.stringify(v.windows && v.windows.fiveHour))
+  check('命中 CodingPlan 官方 Action', v.action === 'GetCodingPlanUsage', String(v.action))
+  check('请求侧要的是未压缩正文（accept-encoding: identity）',
+    fetchCalls.length > 0 && String(fetchCalls[0].init.headers['accept-encoding'] || '').toLowerCase() === 'identity',
+    JSON.stringify(fetchCalls[0] && fetchCalls[0].init.headers))
+  compressRaw = false
+  respond = () => ({ status: 200, body: { Result: { QuotaUsage: [] } } })
 }
 
 globalThis.fetch = realFetch

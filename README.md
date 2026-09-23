@@ -341,6 +341,25 @@ POST /api/cost-tracker/export       导出 CSV
 
 > 这里只列重要版本;逐版完整记录见 [`CHANGELOG.md`](./CHANGELOG.md)。
 
+### v1.9.4(2026-09-24)
+
+**修复「火山方舟配额响应不是合法 JSON」：宿主全局 fetch 被 undici 包污染后不解压 gzip，插件改为自带解压兜底**
+
+- **根因（本机复现）**：宿主进程里只要有插件 `import` 了 npm 的 `undici` 包（本机是
+  `dshmarket` 静态引入，另有 `dsh-http-proxy` / `dsh-web-fetch-http`），Node **内置** `fetch`
+  就不再解压 gzip —— 响应既没有 `content-encoding`，正文也是原始压缩字节
+  （实测：未 import 时 560B 明文 JSON；import 后 326B 且以 `1f 8b` 开头）。于是
+  `JSON.parse(await res.text())` 必然失败，面板报「配额查询不可用：火山方舟配额响应不是合法 JSON」；
+  **插件市场把所有包的新版本读成 `null` 也是同一个根因**（它无代理时回退用的同样是全局 fetch）；
+- **修法（两层，对调用方透明）**：`safeFetch` 默认补 `accept-encoding: identity` 从源头要未压缩正文；
+  收到正文后按**字节**判断（gzip `1f8b` / zlib `78xx` / 响应头明说的 `br`、`deflate`）自行解压，
+  解压异常一律原样返回。插件所有出站请求（火山/Kimi 配额、云端同步与读取、官方定价页抓取）
+  都走这里，因此一并兜住；
+- **验证**：真机端到端 —— 先 `import('undici')` 污染进程，旧路径复现同一条错误，
+  修复后 `GetCodingPlanUsage` 正常返回三档窗口（实测 100% / 27.08% / 14.77%）；
+  新增 `credstore` [5] 与 `volcengine-host` [6] 两组回归，全量 18 个测试文件通过；
+- **生效条件**：改动在宿主半端，需重启 `dsh web`。
+
 ### v1.9.3(2026-09-24)
 
 **适配 DSH 0.1.7-alpha.2：配置入口内迁到「花费统计」页头齿轮（旧卡片入口保留兼容）**
@@ -599,6 +618,13 @@ POST /api/cost-tracker/export       导出 CSV
 ---
 
 ## 常见问题
+
+**Q:配额面板提示「火山方舟配额响应不是合法 JSON（GetCodingPlanUsage）」怎么办?**
+先升级到 **v1.9.4 或更高**并重启 `dsh web`。根因不在火山侧，也不在凭据：宿主进程里只要有插件
+`import` 了 npm 的 `undici` 包（本机是 `dshmarket`），Node **内置 `fetch`** 就不再解压 gzip ——
+响应没有 `content-encoding`、正文是原始压缩字节，`JSON.parse` 必然失败。v1.9.4 起插件在出站封套里
+自带解压（并默认请求 `accept-encoding: identity`），因此不再受影响。附带说明：**插件市场看不到新版本
+（所有包都显示已是最新）是同一个根因**，但那条路径由 `dshmarket` 自己发起，需在其侧修复。
 
 **Q:数据存在哪里?安全吗?**
 全部数据只存在你本机的 `~/.dsh/storages/cost-tracker-records.json`,不会上传到任何服务器。API 只监听本机回环地址,但无鉴权——**不要把 DSH 端口暴露到公网**。

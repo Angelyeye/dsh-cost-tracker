@@ -2,6 +2,65 @@
 
 本文件用中文记录 dsh-cost-tracker 的版本变更。
 
+## v1.9.4(2026-09-24)
+
+**修复「配额查询不可用：火山方舟配额响应不是合法 JSON（GetCodingPlanUsage）」—— 宿主全局 fetch 被 undici 包污染后不解压 gzip，插件改为自带解压兜底**
+
+### 一、根因（已在本机复现并定位到机制）
+
+DSH 宿主进程里只要有插件 `import` 了 **npm 的 `undici` 包**，Node **内置 `fetch`** 就不再解压
+gzip：响应**既没有 `content-encoding`，正文也是原始压缩字节**。本机引入方：`dshmarket/lib/net.js`
+（静态 import）、`dsh-http-proxy` 与 `dsh-web-fetch-http`（动态 import）。
+
+矩阵实测（同一进程、同一凭据、真实接口）：
+
+| 阶段 | npmjs `/latest` | 火山 `GetCodingPlanUsage` |
+| --- | --- | --- |
+| 纯 Node（未 import undici） | 200 · `ce=gzip` · 3055B · JSON OK | 200 · `ce=gzip` · 560B · 解析 OK（三档窗口） |
+| `await import('undici')` 之后（不装 dispatcher 也一样） | 200 · `ce=null` · 1506B · **原始 gzip（`1f8b`）· FAIL** | 200 · `ce=null` · 326B · **原始 gzip · FAIL** |
+
+两条现场症状同源：
+- 本插件配额面板：`safeFetch` → 全局 fetch → 拿到压缩字节 → `JSON.parse` 失败 → 面板报
+  「配额查询不可用：火山方舟配额响应不是合法 JSON（GetCodingPlanUsage）」；
+- 插件市场把所有包的新版本读成 `null`（它的 `marketFetch` 在无代理时回退的也是全局 fetch，
+  日志里的 `… is not valid JSON` 就是同一形态的乱码）。
+
+补充对照：`web_fetch` 工具一直正常，因为它用的是 undici 包自己的 `fetch`（解压正常）；
+`content-encoding: gzip` 存在时同样会中招 —— 关键在「谁解压」，不在响应长什么样。
+
+### 二、修法（两层，都在 `credstore.js` 的出站封套里，对调用方透明）
+
+1. **请求侧**：`safeFetch` 默认补 `accept-encoding: identity`，从源头要未压缩正文
+   （调用方显式指定过就尊重调用方）；
+2. **响应侧**：新增 `decodeCompressedBody()` + `withDecodedBody()`，按**字节**判断（gzip `1f8b`、
+   zlib `78xx`、响应头明说的 `br`/`deflate`）自行解压，绝不只看响应头 —— 服务端忽略 `identity`
+   时同样能正确解析；解压异常一律**原样返回**，不因为猜测丢内容。
+   `withDecodedBody()` 只实现调用方真正用到的成员（`status`/`ok`/`url`/`redirected`/`headers`/
+   `text`/`json`/`arrayBuffer`），正文只读取一次并缓存，且对「只有 `text()` 的 fetch 替身」保持兼容。
+
+影响面：插件全部出站请求都走 `safeFetch`（火山配额、Kimi 配额、云端同步与读取、官方定价页抓取），
+因此这一处修复同时给这些路径兜住了同一个坑。
+
+### 三、验证
+
+- 真机端到端（先 `import('undici')` 污染进程，再走 `index.js` 的真实接线）：
+  - 旧行为（裸全局 fetch）→ 报出与用户完全一致的错误；
+  - 修复后（`safeFetch` + 白名单）→ `action=GetCodingPlanUsage`，三档窗口
+    `fiveHour / weekly / monthly` 全部解析（实测 100% / 27.08% / 14.77%）；
+- `test/credstore.test.js` 新增 [5]：坏宿主（无 `content-encoding` 的 gzip 正文）可解析、
+  健康宿主（头写 gzip 但正文已解压）不二次解压、deflate 兜底、纯文本替身兼容、
+  非压缩内容原样返回、`accept-encoding` 默认值与调用方覆盖；
+- `test/volcengine-host.test.js` 新增 [6]：端到端 —— 宿主返回未解压 gzip 时配额路由仍 `ok:true`、
+  三档窗口齐全、百分比不被放大、请求确带 `accept-encoding: identity`；
+- 全量 18 个测试文件通过。
+
+### 四、说明
+
+- 这是**环境韧性**修复，不改变任何计费/同步口径：HTTP 面、配置键、落盘路径、云端契约零改动；
+- 需要重启 `dsh web` 才生效（改动在宿主半端 `index.js`/`credstore.js`）；
+- 插件市场那条不属于本插件可控范围（其自身回退路径同样依赖全局 fetch），
+  可在 `dshmarket` 侧改为始终使用 undici 包的 fetch 或自行解压；本插件侧的同类风险已消除。
+
 ## v1.9.3(2026-09-24)
 
 **适配 DSH 0.1.7-alpha.2：配置入口内迁到「花费统计」页头齿轮（带返回键），旧插件配置卡片入口保留兼容**

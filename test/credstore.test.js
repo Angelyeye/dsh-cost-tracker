@@ -8,9 +8,12 @@
 //      并从配置对象里清除（幂等；凭据库已有值时不覆盖）；
 //   ③ assertAllowedHost：白名单 / https 强制 / 非法 URL；
 //   ④ safeFetch：3xx 拒绝跟随（防重定向把 Authorization 带去别处）、
-//      白名单外拒发、init.headers 与 opts.headers 正确合并。
+//      白名单外拒发、init.headers 与 opts.headers 正确合并；
+//   ⑤ 响应体自解压（v1.9.4）：宿主进程 import 了 undici 包后全局 fetch 不解压
+//      gzip，插件必须按字节自行解压（真实故障：火山配额「响应不是合法 JSON」）。
 // ============================================================
-import { createCredSeam, migrateLegacySecrets, safeFetch, assertAllowedHost, hostnameOf, CRED_REFS } from '../credstore.js'
+import * as zlib from 'node:zlib'
+import { createCredSeam, migrateLegacySecrets, safeFetch, assertAllowedHost, hostnameOf, CRED_REFS, decodeCompressedBody } from '../credstore.js'
 
 let failures = 0
 function check(name, condition, detail) {
@@ -260,6 +263,69 @@ console.log('[4b] 回归：fetch 原生签名不得丢失 method / body / header
     await fetchLikeEvil('https://tokencost.example.com/api/v1/ingest/records', { method: 'POST', headers: { authorization: 'Bearer dshc_x' }, body: '{}' })
   } catch (e) { err = String(e.message) }
   check('fetch 签名下跨主机重定向仍被拒', /跨主机重定向/.test(err), err)
+}
+
+// ---------- 5. 响应体自解压（v1.9.4：宿主 undici 污染全局 fetch 的真实故障） ----------
+// 现场：宿主进程里只要有插件 `import` 了 npm 的 undici 包（本机是 dshmarket 静态引入），
+// Node 内置 fetch 就不再解压 gzip —— 响应既没有 content-encoding，正文也是原始压缩字节。
+// 后果一：火山方舟配额面板报「配额响应不是合法 JSON（GetCodingPlanUsage）」；
+// 后果二：插件市场把所有包的新版本读成 null（它回退用的也是全局 fetch）。
+// 这组断言把「按字节自解压」钉死：坏宿主（头丢失 + gzip 正文）必须照样能解析。
+console.log('[5] 响应体自解压：宿主 fetch 不解压 gzip 时的回归')
+{
+  const JSON_TEXT = '{"ResponseMetadata":{"RequestId":"gz1"},"Result":{"Status":"Running"}}'
+  const gz = zlib.gzipSync(Buffer.from(JSON_TEXT, 'utf8'))
+  const zl = zlib.deflateSync(Buffer.from(JSON_TEXT, 'utf8'))
+
+  // 坏宿主形态：正文是原始 gzip，响应头没说编码（undici 包进进程后的真实形态）
+  const brokenHostFetch = async () => ({
+    status: 200,
+    ok: true,
+    headers: { get: () => null },
+    arrayBuffer: async () => gz,
+  })
+  const r1 = await safeFetch('https://open.volcengineapi.com/', { allowHosts: ['open.volcengineapi.com'], fetchFn: brokenHostFetch })
+  const parsed1 = await r1.json()
+  check('坏宿主（无 content-encoding 的 gzip 正文）→ json() 正常解析',
+    parsed1 && parsed1.Result && parsed1.Result.Status === 'Running', JSON.stringify(parsed1))
+  check('同一响应 text() 拿到明文（正文只读一次、可重复消费）',
+    (await r1.text()).includes('"Running"'), 'text() 不是明文')
+
+  // 健康宿主：fetch 已解压，但响应头仍写 gzip —— 不得二次解压（否则报错或乱码）
+  const healthyFetch = async () => ({
+    status: 200,
+    ok: true,
+    headers: { get: (k) => (String(k).toLowerCase() === 'content-encoding' ? 'gzip' : null) },
+    arrayBuffer: async () => Buffer.from(JSON_TEXT, 'utf8'),
+  })
+  const r2 = await safeFetch('https://open.volcengineapi.com/', { allowHosts: ['open.volcengineapi.com'], fetchFn: healthyFetch })
+  check('健康宿主（头写 gzip 但正文已解压）→ 不二次解压，仍可解析',
+    (await r2.json()).Result.Status === 'Running', '二次解压把正文弄坏了')
+
+  // deflate（zlib 魔数）同样兜住
+  const deflateFetch = async () => ({ status: 200, ok: true, headers: { get: () => null }, arrayBuffer: async () => zl })
+  const r3 = await safeFetch('https://open.volcengineapi.com/', { allowHosts: ['open.volcengineapi.com'], fetchFn: deflateFetch })
+  check('deflate 正文（zlib 魔数）→ 照样解析', (await r3.json()).Result.Status === 'Running')
+
+  // 朴素 fetch 替身（只有 text()，没有 arrayBuffer）：既有的 20 多个替身都是这个形态
+  const textOnlyFetch = async () => ({ status: 200, ok: true, headers: { get: () => null }, text: async () => JSON_TEXT })
+  const r4 = await safeFetch('https://open.volcengineapi.com/', { allowHosts: ['open.volcengineapi.com'], fetchFn: textOnlyFetch })
+  check('仅有 text() 的替身仍可用（兼容既有测试与自定义 fetchFn）', (await r4.json()).Result.Status === 'Running')
+
+  // 不是压缩流也不是 JSON：原样交出，绝不因为「猜测」丢掉内容
+  const plain = Buffer.from('<!DOCTYPE html><html>oops</html>', 'utf8')
+  check('非压缩内容原样返回（不误判、不丢内容）',
+    decodeCompressedBody(plain, '').toString('utf8') === plain.toString('utf8'))
+
+  // 请求侧：默认要未压缩正文，调用方显式指定时尊重调用方
+  const seen = []
+  const spy = async (url, init) => { seen.push(init.headers); return { status: 200, ok: true, headers: { get: () => null }, text: async () => '{}' } }
+  await safeFetch('https://open.volcengineapi.com/', { allowHosts: ['open.volcengineapi.com'], fetchFn: spy })
+  check('默认带上 accept-encoding: identity（从源头避免压缩）',
+    seen[0]['accept-encoding'] === 'identity', JSON.stringify(seen[0]))
+  await safeFetch('https://open.volcengineapi.com/', { allowHosts: ['open.volcengineapi.com'], fetchFn: spy, headers: { 'Accept-Encoding': 'gzip' } })
+  check('调用方显式指定 accept-encoding 时不覆盖',
+    seen[1]['Accept-Encoding'] === 'gzip' && seen[1]['accept-encoding'] === undefined, JSON.stringify(seen[1]))
 }
 
 console.log('')

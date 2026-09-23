@@ -33,7 +33,7 @@ import { createCredSeam, migrateLegacySecrets, safeFetch, CRED_REFS, hostnameOf 
 import { listSessionLogs, planAndBuildImports, loadManifest, IMPORT_SOURCE } from './import.js'
 
 /** 插件版本（写入上报信封，便于云端排查版本差异） */
-const PLUGIN_VERSION = '1.9.3'
+const PLUGIN_VERSION = '1.9.4'
 setPluginVersion(PLUGIN_VERSION)
 
 /** 配置面板可写的字段（与 settings 命名空间一致）。

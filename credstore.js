@@ -16,7 +16,18 @@
 //      redirect:'manual' + 自管跳转（最多 3 跳）：**携带凭据的请求不跨主机跟随**
 //      （防重定向把凭据带去别处），不带凭据的请求可在白名单内跟随
 //      （官方定价页 `/pricing` → `/pricing/` 这种同站加斜杠的 302 必须放行）。
+//   4. 响应体自解压（v1.9.4）：**不依赖宿主 fetch 的解压**。宿主进程里只要有任何
+//      插件 `import` 了 npm 的 `undici` 包（本机实测：`dshmarket/lib/net.js` 静态引入，
+//      `dsh-http-proxy` / `dsh-web-fetch-http` 动态引入），Node 内置 `fetch` 就不再
+//      解压 gzip —— 响应既不带 `content-encoding`，body 也是原始压缩字节，于是
+//      `JSON.parse(await res.text())` 必然失败。真实故障：火山方舟配额面板报
+//      「配额响应不是合法 JSON（GetCodingPlanUsage）」，插件市场把所有包的新版本
+//      读成 null（它回退用的也是全局 fetch）。修法有两层：
+//        · 请求默认带 `accept-encoding: identity`，从源头要未压缩正文；
+//        · 收到正文后按**字节**（gzip 1f8b / zlib 78xx / brotli 头）自行解压，
+//          绝不只看响应头 —— 服务端忽略 identity 时同样能正确解析。
 // ============================================================
+import * as zlib from 'node:zlib'
 
 /** 本插件占用的凭据引用名（POSIX shell 标识符风格，宿主凭据库通用） */
 export const CRED_REFS = {
@@ -26,6 +37,95 @@ export const CRED_REFS = {
 
 function isLoopbackHost(host) {
   return /^(localhost|127\.0\.0\.1|\[::1?\]|::1)$/i.test(String(host || ''))
+}
+
+/** gzip 魔数（1f 8b）—— 压缩流的第一、二字节 */
+function looksGzip(buf) {
+  return buf.length > 2 && buf[0] === 0x1f && buf[1] === 0x8b
+}
+/** zlib 魔数（78 01 / 78 9c / 78 da）—— 即 `deflate` 头 */
+function looksZlib(buf) {
+  return buf.length > 2 && buf[0] === 0x78 && (buf[1] === 0x01 || buf[1] === 0x9c || buf[1] === 0xda)
+}
+
+/**
+ * 响应体字节 → 明文 Buffer（v1.9.4）。
+ *
+ * 判定顺序刻意「先看字节、再看响应头」：宿主全局 fetch 被 undici 包污染后，
+ * 响应头里的 `content-encoding` 会消失而正文仍是压缩流，只看头会漏掉；
+ * 反过来服务端若已按 `identity` 返回明文，字节判定也不会误伤。
+ * 任何解压异常都**原样返回**原始字节 —— 宁可让上层报「不是合法 JSON」，
+ * 也不能因为这里的猜测把可读内容弄丢。
+ *
+ * @param {Buffer} buf - 原始响应体
+ * @param {string} contentEncoding - 响应头里声明的编码（可能为空）
+ * @returns {Buffer}
+ */
+export function decodeCompressedBody(buf, contentEncoding) {
+  if (!Buffer.isBuffer(buf) || buf.length === 0) return buf
+  const ce = String(contentEncoding || '').trim().toLowerCase()
+  try {
+    if (looksGzip(buf)) return zlib.gunzipSync(buf)
+    if (looksZlib(buf)) return zlib.inflateSync(buf)
+    // brotli / 其它编码没有稳定魔数：只在响应头明说、且确实是压缩流时才尝试
+    if (ce === 'br' || ce === 'brotli') return zlib.brotliDecompressSync(buf)
+    if (ce === 'deflate') return zlib.inflateSync(buf)
+    if (ce === 'gzip' || ce === 'x-gzip') return zlib.gunzipSync(buf)
+  } catch (e) {
+    return buf // 已经解压过 / 截断 / 不是压缩流：交回原样
+  }
+  return buf
+}
+
+/**
+ * 把 Response 包成「自带解压」的等价物（v1.9.4）。
+ *
+ * 只实现调用方真正用到的成员（status / ok / url / redirected / headers /
+ * text / json / arrayBuffer），因此对既有接线是透明的；正文只读取一次并缓存，
+ * `text()` 与 `json()` 复用同一份解码结果。
+ * @param {Response|object} res
+ * @returns {object}
+ */
+export function withDecodedBody(res) {
+  let cached = null
+  const bytes = () => {
+    if (cached === null) {
+      cached = (async () => {
+        let raw = Buffer.alloc(0)
+        try {
+          if (typeof res.arrayBuffer === 'function') {
+            raw = Buffer.from(await res.arrayBuffer())
+          } else if (typeof res.text === 'function') {
+            raw = Buffer.from(String(await res.text()), 'utf8')
+          }
+        } catch (e) {
+          raw = Buffer.alloc(0)
+        }
+        const ce = res && res.headers && typeof res.headers.get === 'function' ? res.headers.get('content-encoding') : ''
+        return decodeCompressedBody(raw, ce)
+      })()
+    }
+    return cached
+  }
+  return {
+    status: res.status,
+    ok: res.ok,
+    statusText: res.statusText,
+    url: res.url,
+    redirected: res.redirected,
+    headers: res.headers,
+    text: async () => (await bytes()).toString('utf8'),
+    json: async () => JSON.parse((await bytes()).toString('utf8')),
+    arrayBuffer: async () => {
+      const b = await bytes()
+      return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength)
+    },
+  }
+}
+
+/** 判断请求头里是否已经指定了 accept-encoding（大小写不敏感） */
+function hasAcceptEncoding(headers) {
+  return Object.keys(headers || {}).some((k) => k.toLowerCase() === 'accept-encoding')
 }
 
 /** 从 URL 提取 hostname（不含端口）；非法 URL 返回 '' */
@@ -95,6 +195,9 @@ export async function safeFetch(url, opts) {
   }
   // init.headers 在前、opts.headers 在后：调用方经 init 传的签名头不被覆盖
   const headers = Object.assign({}, init.headers || {}, o.headers || {})
+  // v1.9.4：从源头要未压缩正文（宿主全局 fetch 可能已不解压，见文件头「响应体自解压」）。
+  // 调用方显式指定过 accept-encoding 时尊重调用方。
+  if (!hasAcceptEncoding(headers)) headers['accept-encoding'] = 'identity'
   const credentialHeader = Object.keys(headers).find((k) => /^(authorization|proxy-authorization|x-api-key|api-key)$/i.test(k))
   let current = String(url)
   let method = init.method
@@ -111,9 +214,9 @@ export async function safeFetch(url, opts) {
     } finally {
       clearTimeout(timer)
     }
-    if (!(res.status >= 300 && res.status < 400)) return res
+    if (!(res.status >= 300 && res.status < 400)) return withDecodedBody(res)
     const loc = typeof res.headers.get === 'function' ? (res.headers.get('location') || '') : ''
-    if (!loc) return res // 3xx 但没给 Location：交给调用方按状态自行判断
+    if (!loc) return withDecodedBody(res) // 3xx 但没给 Location：交给调用方按状态自行判断
     let target
     try {
       target = new URL(loc, current).toString()
