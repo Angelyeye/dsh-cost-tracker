@@ -171,7 +171,7 @@ export function setSyncedEras(eras) {
 /** 当前注入的同步时代（只读副本，供状态回显） */
 export function getSyncedEras() { return SYNCED_ERAS.slice() }
 
-// ---------- 手动覆盖价（v1.9.0，插件配置卡维护） ----------
+// ---------- 手动覆盖价（v1.9.0，配置面板维护） ----------
 let PRICE_OVERRIDES = new Map()
 function overrideKey(np, model) {
   return normalizeModelName(np) + '/' + normalizeModelName(model)
@@ -407,7 +407,7 @@ export const VISION_IMAGE_MAX_TOKENS = 384
 //   · 2026 年：国办发明电〔2025〕7 号（2025-11-04 发布）
 //     https://www.gov.cn/zhengce/zhengceku/202511/content_7047091.htm
 // 调休补班的周六/周日**不计高峰**：定价规则只看「周一至周五」，调休不改变这一点。
-// 新一年度的安排通常在上一年 11 月公布，届时更新本表并随版本发布；也可在插件配置卡
+// 新一年度的安排通常在上一年 11 月公布，届时更新本表并随版本发布；也可在配置面板
 // 用 `peakHolidays` 覆盖（见 setPeakHolidays）。
 // ------------------------------------------------------------
 export const CN_HOLIDAYS = [
@@ -455,7 +455,7 @@ let PEAK_HOLIDAY_LIST = null
 let PEAK_HOLIDAY_SET = null // Set<string>（null 时按需从 CN_HOLIDAYS 构建）
 
 /**
- * 覆盖法定节假日列表（插件配置卡的「峰谷计价与提示」）。语义防呆：
+ * 覆盖法定节假日列表（配置面板的「峰谷计价与提示」）。语义防呆：
  *   · 传 null / undefined / ''  → 恢复内置表（默认）；config 里存空串即走这条；
  *   · 传 'none' / 'off' / '0'   → 显式停用（不排除任何节假日，等价于按「仅周末」计）；
  *   · 传数组或分隔字符串        → 用该列表**整体替换**内置表（不追加）；

@@ -206,7 +206,7 @@ cp .env.example .env      # fill SESSION_SECRET and ADMIN_PASSWORD_HASH (node sc
 docker compose up -d      # open http://<server>:8787 and generate a shared bootstrap token under Settings
 ```
 
-**Configure each device**: open **Settings → Plugins → Plugin configuration → Cost Tracker** and fill in:
+**Configure each device**: open **Settings → Cost Tracker → gear icon (top right)** → "Multi-machine aggregation (cloud sync)" and fill in:
 
 | Field | Meaning |
 | --- | --- |
@@ -235,22 +235,34 @@ The dimension selector adds per-device / per-agent / per-model breakdowns and a 
 
 ### Interface visibility (v1.8.12, optional)
 
-Don't want the plugin in your face? **Settings → Plugins → Plugin configuration → Cost Tracker → Interface visibility** has three independent switches that apply **the moment you tick them** (no Save, no `dsh` restart):
+Don't want the plugin in your face? **Settings → Cost Tracker → gear icon (top right) → Data & interface → Interface visibility** has three independent switches that apply **the moment you tick them** (no Save, no `dsh` restart):
 
 | Switch | What turning it off does |
 | --- | --- |
 | Composer cost pill | the per-session cost / model breakdown above the chat input disappears |
 | Sidebar peak bar | the phase / countdown strip at the bottom of the sidebar disappears (the peak-switch popup and web notifications go with it; if you only want the reminder without the strip, use the notice switch under "Peak/off-peak pricing & notices" instead) |
-| Settings dashboard | the "Cost Tracker" entry disappears from the Settings nav (accounting and cloud sync keep running; the page then shows a one-line hint on how to bring it back) |
+| Settings dashboard | the Settings nav entry keeps a one-line hint on how to bring the dashboard back (accounting and cloud sync keep running) |
 
 - **Display only**: accounting, persistence, cloud sync and the agent tools (`cost_stats` etc.) are unaffected;
-- **The plugin configuration card itself is never hidden by these switches** — otherwise you would have no way to turn them back on;
+- **The configuration entry itself is never hidden by these switches** — the header gear always stays (old hosts also keep the plugin configuration card), otherwise you would have no way to turn them back on;
 - Truth value is "hidden only on an explicit `false`", so a missing key means visible: **an existing config file looks exactly the same after upgrading**;
 - All three keys live in the same `~/.dsh/storages/cost-tracker-config.json` (`uiDockEnabled` / `uiPeakEnabled` / `uiDashboardEnabled`) and never overwrite the peak/cloud fields.
 
-### Plugin configuration card (v1.9.0 redesign: the single place for every setting)
+### Settings entry (v1.9.3: the gear in the Cost Tracker header; the only entry on new hosts)
 
-**Settings → Plugins → Plugin configuration → Cost Tracker** now carries **all** settings, laid out as collapsible groups under a status strip (cloud sync / records stored / pending / last sync / pricing era / history import / amount basis):
+**Settings → Cost Tracker → gear icon at the top right** (icon button, tooltip "花费统计设置") opens the configuration page; the **back** control at its top-left returns to the dashboard.
+
+| Entry | Host versions | Shape |
+| --- | --- | --- |
+| **Header gear → configuration page** (v1.9.3, recommended) | all versions | Settings → Cost Tracker → gear; the page is fully expanded, back control at the top left |
+| **Plugin configuration card** (v1.9.0, kept for compatibility) | only hosts that still declare `settings.plugin.item` (`dsh < 0.1.7-alpha.2`) | Settings → Plugins → Plugin configuration → Cost Tracker; collapsed by default, click the header to expand |
+
+> DSH `0.1.7-alpha.2` removed the `settings.plugin.item` slot (the Built-in plugins section became a read-only inventory),
+> so the card no longer shows on new hosts. The registration is **kept** (an undeclared slot simply never fires, so it costs
+> nothing) and old hosts keep working. Both entries share **one configuration component**, so fields, validation and write
+> paths are identical — only the shell differs; unsaved drafts are independent, just edit wherever you are.
+
+The configuration page carries **all** settings, laid out as collapsible groups under a status strip (cloud sync / records stored / pending / last sync / pricing era / history import / amount basis):
 
 | Group | Contents |
 | --- | --- |
@@ -327,6 +339,25 @@ Example: `curl -X POST http://127.0.0.1:3080/api/cost-tracker/summary -d '{}'`
 ## Changelog
 
 > Highlights only — the full version-by-version history lives in [`CHANGELOG.md`](./CHANGELOG.md) (Chinese).
+
+### v1.9.3 (2026-09-24)
+
+**DSH 0.1.7-alpha.2 support: the configuration entry moved into the Cost Tracker page (gear icon + back control); the old card entry is kept for compatibility**
+
+- **Why**: DSH `0.1.7-alpha.2` removed the `settings.plugin.item` slot (the old Settings → Plugins → Plugin configuration page);
+  the Built-in plugins section is now a read-only inventory, and `dsh-settings` no longer exposes `installSection` — so the
+  plugin's configuration card could never render on the new host;
+- **What**: the configuration UI now lives inside the plugin's own settings section —
+  **Settings → Cost Tracker → gear icon (top right)** opens the configuration page, whose **back** control returns to the
+  dashboard. The seven collapsible groups, the status strip and every per-group action (Save / Test / Sync now / price sync /
+  history import …) are unchanged;
+- **Why an in-page switch instead of a second nav entry**: the host settings shell renders a section with `close` only
+  (`renderSlot('settings.section', { close }, { only: active })`), so a section has no way to navigate the shell;
+- **Compatibility**: the `settings.plugin.item` registration is **kept** — on 0.1.7+ the slot does not exist, so the callback
+  never fires (zero cost), while older hosts keep showing the card. Both entries share one `ConfigPanel` (only the shell
+  differs), so fields, validation and write paths are identical; unsaved drafts stay independent;
+- **No more dead end**: when the dashboard is turned off, the header and gear remain, with a one-line hint pointing to
+  "Data & interface → Settings dashboard" (the old card entry no longer exists on new hosts, so this guard is required).
 
 ### v1.9.2 (2026-09-20)
 
@@ -592,7 +623,7 @@ Quota is read from the Ark **control-plane** OpenAPI (`open.volcengineapi.com`, 
 1. Volcengine console → **IAM → Users → Keys**, create an AccessKeyID / SecretAccessKey pair;
 2. Grant that sub-user **`ArkReadOnlyAccess`** and **`BillingCenterReadOnlyAccess`** (read-only is enough to query usage);
 3. Let the plugin obtain the pair (any one of these, in priority order):
-   - fill in **Volcengine AccessKeyID / SecretAccessKey** under **Settings → Plugins → Plugin config → Cost Tracker** (the secret is never echoed back); or
+   - fill in **Volcengine AccessKeyID / SecretAccessKey** under **Settings → Cost Tracker → gear icon → Subscriptions & quota** (the secret is never echoed back); or
    - put them in the `refs:` section of `~/.dsh/.credentials.yaml` under `VOLC_ACCESSKEY` / `VOLC_SECRETKEY` (variants such as `VOLCENGINE_ACCESS_KEY_ID` and `ARK_ACCESS_KEY_ID` also work); or
    - export them as environment variables with the same names.
 

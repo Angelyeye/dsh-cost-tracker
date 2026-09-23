@@ -6,7 +6,7 @@
 // sourceUrl / checkedAt 以便溯源；条目单价为 **USD / 1M tokens**。
 //
 // 本插件账本恒以人民币（CNY）入账，因此目录价在计费时按 `catalogFxRate`
-// （默认 7.2，可在插件配置卡修改）折算为 CNY。缓存写入价沿用目录约定：
+// （默认 7.2，可在配置面板修改）折算为 CNY。缓存写入价沿用目录约定：
 // 与缓存命中价（cachedInput）同价。
 //
 // 匹配规则（catalogEntryFor）：

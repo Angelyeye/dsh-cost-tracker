@@ -195,12 +195,16 @@ console.log('\n[5] pending queue 模式（loader 尚未就绪）')
   check('未破坏原有的入队行为', queue.length === 1 && typeof queue[0].factory === 'function')
 }
 
-// ---------- [6] 插件配置卡片：必须以 settings 命名空间为键，且无条件注册 ----------
+// ---------- [6] 配置入口的两种外壳：兼容卡片必须保留，齿轮页必须存在 ----------
 // v1.8.0 缺陷：拿 `slots.entries("settings.plugin.item").length > 0` 当"宿主是否声明了该插槽"
 // 的探测。entries 返回的是**已经注册进该槽的条目**，而条目正是由各插件在插槽声明之后才注册的，
-// 所以在插件 apply 阶段它恒为空 → 卡片永远注册不上（设置 → 插件 → 插件配置 里看不到）。
+// 所以在插件 apply 阶段它恒为空 → 卡片永远注册不上（旧宿主的「设置 → 插件 → 插件配置」里看不到）。
 // 宿主的官方卡片（dsh-client-ui-settings-plugins）与 dsh-context 都是无条件 slots.inject。
-console.log('[6] 插件配置卡片注册方式')
+//
+// v1.9.3：DSH 0.1.7-alpha.2 删除了该插槽（「内置插件」分区改成只读清单），配置入口内迁到
+// 本插件自己的「设置 → 花费统计」分区（页头齿轮 → 配置页 → 返回键）。卡片注册**保留**：
+// 插槽不存在时回调不触发即自动失效，仍声明它的旧宿主照旧可用；两处共用同一个 ConfigPanel。
+console.log('[6] 配置入口外壳（兼容卡片 + 分区内齿轮页）')
 {
   check('无条件 inject "settings.plugin.item"（不得再用 entries 探测）',
     /slots\.inject\(\s*pluginItemKey\s*,/.test(source) && !/entries\(\s*pluginItemKey\s*\)/.test(source),
@@ -210,6 +214,17 @@ console.log('[6] 插件配置卡片注册方式')
     '宿主按命名空间为键派发 settings.plugin.item，键必须与 installSection 的 ns 一致')
   check('与宿主 installSection 的命名空间一致',
     /installSection\([^,]+,\s*'cost-tracker'/.test(readFileSync(join(root, 'index.js'), 'utf8')))
+  check('两种外壳来自同一个配置组件（mode 只有 card / page 两条分支）',
+    /slots\.inject\(pluginItemKey, \(\) => slots\.register\(\s*\{[^}]*\},\s*\(\) => e\(ConfigPanel, \{ mode: "card" \}\),?/.test(source) &&
+    /e\(ConfigPanel, \{ mode: "page", onBack:/.test(source),
+    '未找到 ConfigPanel 的 card / page 两种注册方式')
+  check('齿轮入口与返回键都在（图标 + 可访问名）',
+    /className: "cost-gear"/.test(source) && /"aria-label": "花费统计设置"/.test(source) &&
+    /className: "cost-back"/.test(source) && /"aria-label": "返回花费统计看板"/.test(source),
+    '缺少齿轮或返回键标记')
+  check('分区入口渲染的是路由壳（看板 ⇄ 配置页），不是直接渲染看板',
+    /\(\) => e\(CostSection, \{\}\)/.test(source) && !/\(\) => e\(Dashboard, \{\}\)/.test(source),
+    'settings.section 应渲染 CostSection（内部切换视图）')
 }
 
 // ---------- [7] 版本号单一事实源：package.json 与 index.js 的 PLUGIN_VERSION 必须一致 ----------

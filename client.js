@@ -244,6 +244,19 @@ window.__ModuleLoader__.load({
 .cost-pcard-chevron { color: var(--dsw-alias-label-tertiary, #8b93a1); flex: none; transition: transform .16s; }
 .cost-pcard-chevron.is-open { transform: rotate(180deg); }
 .cost-pcard-body { border-top: .5px solid var(--dsw-alias-border-l2, #e5e7eb); margin: 0 16px; padding: 12px 0 10px; }
+/* ---------- 设置入口 v1.9.3：页头齿轮 + 分区内配置页（宿主 0.1.7 起插件配置插槽下线） ---------- */
+/* 页头右侧的操作位：把齿轮推到行尾，不影响既有的标题与图标 */
+.cost-h1-actions { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; }
+.cost-gear { appearance: none; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: .5px solid var(--dsw-alias-border-l2, #d1d5db); border-radius: 8px; background: var(--dsw-alias-bg-layer-1, #fff); color: var(--dsw-alias-label-secondary, #5b6472); cursor: pointer; transition: background .16s, border-color .16s, color .16s; }
+.cost-gear:hover { background: var(--dsw-alias-bg-layer-2, #f3f4f6); color: var(--dsw-alias-label-primary, #171a1f); }
+.cost-gear:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary, #2563eb); outline-offset: 2px; }
+.cost-gear-icon { display: block; }
+.cost-cfg-page { padding-top: 2px; }
+.cost-cfg-page-head { display: flex; align-items: center; gap: 10px; margin: 2px 0 10px; }
+.cost-back { appearance: none; display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; font: inherit; font-size: 12px; border-radius: 6px; border: .5px solid var(--dsw-alias-border-l2, #d1d5db); background: var(--dsw-alias-bg-layer-1, #fff); color: var(--dsw-alias-label-primary, #171a1f); cursor: pointer; }
+.cost-back:hover { background: var(--dsw-alias-bg-layer-2, #f3f4f6); }
+.cost-back:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary, #2563eb); outline-offset: 2px; }
+.cost-cfg-page-title { display: inline-flex; align-items: center; gap: 8px; font-size: 16px; font-weight: 600; }
 /* ---------- 插件配置卡片 v1.9.0：顶部状态条 + 折叠分组 ---------- */
 .cost-cfg-top { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 2px 0 10px; }
 .cost-cfg-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; line-height: 1.6; padding: 2px 9px; border-radius: 999px; border: .5px solid var(--dsw-alias-border-l2, #e5e7eb); background: var(--dsw-alias-bg-layer-3, transparent); color: var(--dsw-alias-label-secondary, #5b6472); white-space: nowrap; }
@@ -290,6 +303,42 @@ window.__ModuleLoader__.load({
 					e("path", { d: "M12.3 7.2 L12.3 10.9" }),
 					e("path", { d: "M10.9 7.8 L13.7 7.8" }),
 					e("path", { d: "M10.9 9.5 L13.7 9.5" })));
+		}
+
+		/**
+		 * 设置齿轮（v1.9.3）：自绘 —— 外环 + 内孔 + 8 根径向齿。
+		 * 不用第三方图标字体/路径，避免额外许可负担；齿由极坐标循环生成，
+		 * 15px 下仍能看清是「齿轮」而不是圆点。
+		 */
+		function gearIcon(size) {
+			const s = size || 15;
+			const teeth = [];
+			for (let i = 0; i < 8; i++) {
+				const a = (Math.PI / 4) * i;
+				teeth.push(e("line", {
+					key: "gt" + i,
+					x1: (8 + 4.6 * Math.cos(a)).toFixed(2), y1: (8 + 4.6 * Math.sin(a)).toFixed(2),
+					x2: (8 + 6.4 * Math.cos(a)).toFixed(2), y2: (8 + 6.4 * Math.sin(a)).toFixed(2),
+					stroke: "currentColor", strokeWidth: 1.3, strokeLinecap: "round",
+				}));
+			}
+			return e("svg", {
+				className: "cost-gear-icon", width: s, height: s, viewBox: "0 0 16 16",
+				fill: "none", xmlns: "http://www.w3.org/2000/svg", "aria-hidden": "true",
+			},
+				e("circle", { cx: 8, cy: 8, r: 4.6, stroke: "currentColor", strokeWidth: 1.3 }),
+				e("circle", { cx: 8, cy: 8, r: 1.7, stroke: "currentColor", strokeWidth: 1.3 }),
+				e("g", null, teeth));
+		}
+
+		/** 返回箭头（配置页左上角），与本插件其它内联 SVG 同款线宽与端点 */
+		function backIcon(size) {
+			const s = size || 13;
+			return e("svg", {
+				className: "cost-back-icon", width: s, height: s, viewBox: "0 0 14 14",
+				fill: "none", xmlns: "http://www.w3.org/2000/svg", "aria-hidden": "true",
+			},
+				e("path", { d: "M8.75 3.5 5.25 7l3.5 3.5", stroke: "currentColor", strokeWidth: 1.5, strokeLinecap: "round", strokeLinejoin: "round" }));
 		}
 
 		function fmtInt(n) { return String(Math.round(Number(n) || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, ","); }
@@ -1519,7 +1568,8 @@ window.__ModuleLoader__.load({
 		// 设置面板：峰谷计价与提示
 		/**
 		 * 「峰谷计价与提示」看板面板（v1.9.0 起**只读**）。
-		 * 设置入口统一到「设置 → 插件 → 插件配置 → 花费统计 → 峰谷计价与提示」，
+		 * 设置入口统一到「设置 → 花费统计 → 右上角齿轮 → 峰谷计价与提示」
+		 * （旧宿主也可在「设置 → 插件 → 插件配置 → 花费统计」卡片里改，同一份配置），
 		 * 这里只回显当前档位与生效配置，避免两处都能改造成口径不一致。
 		 * 预览按钮保留：它只是本地弹窗预览，不改任何持久化状态。
 		 */
@@ -1567,8 +1617,8 @@ window.__ModuleLoader__.load({
 
 		// ============================================================
 		// 云端同步（只读回显）—— 花费统计设置页
-		// 编辑入口在「设置 → 插件 → 插件配置 → 花费统计」卡片，这里只回显当前状态，
-		// 避免两处都能改造成口径不一致。
+		// 编辑入口在「设置 → 花费统计 → 右上角齿轮」（旧宿主：插件配置卡片里的同一份设置），
+		// 这里只回显当前状态，避免两处都能改造成口径不一致。
 		// ============================================================
 		function SyncReadonlyCard(props) {
 			const [st, setSt] = useState(props && props.sync ? props.sync : null);
@@ -1597,15 +1647,25 @@ window.__ModuleLoader__.load({
 					line("上报项目", st.includePurpose ? "含 purpose" : "不含 purpose")),
 				st.lastError ? e("div", { className: "cost-err", style: { marginTop: "6px" } }, "最近错误：" + st.lastError) : null,
 				e("div", { className: "cost-hint", style: { marginTop: "8px" } },
-					"编辑入口：设置 → 插件 → 插件配置 → 花费统计" + (st.dataDir ? "（身份文件：" + st.identityFile + "）" : "")));
+					"编辑入口：设置 → 花费统计 → 右上角齿轮（设置）" + (st.dataDir ? "（身份文件：" + st.identityFile + "）" : "")));
 		}
 
 		// ============================================================
-		// 插件配置卡（设置 → 插件 → 插件配置）
-		// 卡片自绘内部结构、表单走本插件自己的 host API（/api/cost-tracker/sync-*），
+		// 配置面板（一份实现，两种外壳）
+		//   · mode 'card'（默认）：宿主「插件配置」列表里的可点开卡片
+		//     （settings.plugin.item，key = cost-tracker）。**兼容保留** ——
+		//     DSH 0.1.7-alpha.2 起宿主已不再声明该插槽，回调不触发即自动失效，
+		//     零成本；仍声明该插槽的旧宿主照旧有卡片。
+		//   · mode 'page'：本插件「设置 → 花费统计」分区内的配置页，由页头齿轮进入、
+		//     左上角返回键退出（宿主设置外壳没有分区间跳转能力，见 apply 处注释）。
+		// 两种外壳共用同一段正文（顶部状态条 + 七个折叠分组），因此不可能出现
+		// 「两处字段/口径不一致」——只有外壳不同。
+		// 表单走本插件自己的 host API（/api/cost-tracker/*），
 		// 不硬依赖 settings UI 包的内部实现，避免版本耦合。
 		// ============================================================
-		function PluginConfigCard() {
+		function ConfigPanel(props) {
+			const mode = props && props.mode === "page" ? "page" : "card";
+			const onBack = props && props.onBack;
 			const [st, setSt] = useState(null);
 			const [prices, setPrices] = useState(null);
 			const [imp, setImp] = useState(null);
@@ -2186,13 +2246,7 @@ window.__ModuleLoader__.load({
 				e("div", { className: "cost-hint", style: { marginTop: "6px" } },
 					"提示：AccessKeyID 属非敏感标识（控制台可见），会随看板回显以便预填；SecretAccessKey 与令牌在任何响应里都只有布尔标记。"));
 
-			// 卡片外壳对齐宿主 PluginCard：li.cost-pcard > button.cost-pcard-head（标题+副标题+箭头）> body
-			const head = e("button", { type: "button", className: "cost-pcard-head", "aria-expanded": open, onClick: () => setOpen(v => !v) },
-				e("span", { className: "cost-pcard-headtext" },
-					e("span", { className: "cost-pcard-name" }, "花费统计" + (st && st.enabled ? " · 云端同步已开启" : "")),
-					e("span", { className: "cost-pcard-desc" }, "全部设置集中于此：云端同步（多机汇总）、峰谷计价与提示、订阅套餐与配额、计价与价格目录、历史导入、数据与界面、安全与凭据。")),
-				e("svg", { className: "cost-pcard-chevron" + (open ? " is-open" : ""), width: 14, height: 14, viewBox: "0 0 14 14", fill: "none", "aria-hidden": "true" },
-					e("path", { d: "M3.5 5.25 7 8.75l3.5-3.5", stroke: "currentColor", strokeWidth: 1.4, strokeLinecap: "round", strokeLinejoin: "round" })));
+			// 正文（两种外壳共用）：顶部状态条 + 七个折叠分组。外壳只决定包在外面的 chrome。
 			const body = e("div", null,
 				topStrip,
 				!st ? e("div", { className: "cost-hint", style: { margin: "4px 0 8px" } }, "加载状态…") : null,
@@ -2203,6 +2257,31 @@ window.__ModuleLoader__.load({
 				cfgSection(Object.assign({ key: "s5" }, secProps("imp", "历史导入", (impDraft.autoImport !== false ? "开机自动" : "手动") + " · 已导入 " + fmtInt((imp && imp.totalImported) || 0) + " 条")), impBody),
 				cfgSection(Object.assign({ key: "s6" }, secProps("data", "数据与界面", "保留 180 天明细 · 界面落点 " + UI_SURFACES.filter(s => uiDraft[s.key] !== false).length + "/3")), dataBody),
 				cfgSection(Object.assign({ key: "s7" }, secProps("sec", "安全与凭据", "密钥零落盘 · 出站白名单")), secBody));
+
+			// ---------- 外壳①：分区内配置页（齿轮进入 / 返回键退出） ----------
+			// 页头自己画，因为宿主设置外壳只负责导航与内容列（见 apply 处注释）。
+			if (mode === "page") {
+				return e("div", { className: "cost-wrap cost-cfg-page" },
+					e("div", { className: "cost-cfg-page-head" },
+						e("button", {
+							type: "button", className: "cost-back", onClick: onBack,
+							"aria-label": "返回花费统计看板", title: "返回花费统计看板",
+						}, backIcon(13), e("span", null, "返回")),
+						e("span", { className: "cost-cfg-page-title" }, pluginIcon(18), "花费统计 · 设置")),
+					e("div", { className: "cost-hint", style: { margin: "0 0 8px" } },
+						"全部设置集中于此页：云端同步（多机汇总）、峰谷计价与提示、订阅套餐与配额、计价与价格目录、历史导入、数据与界面、安全与凭据。"
+						+ "旧版宿主（设置里仍显示「插件 → 插件配置」卡片）在那张卡片里打开的是同一份设置，就近改一处即可。"),
+					body);
+			}
+
+			// ---------- 外壳②：宿主「插件配置」列表里的卡片（兼容旧宿主） ----------
+			// 卡片外壳对齐宿主 PluginCard：li.cost-pcard > button.cost-pcard-head（标题+副标题+箭头）> body
+			const head = e("button", { type: "button", className: "cost-pcard-head", "aria-expanded": open, onClick: () => setOpen(v => !v) },
+				e("span", { className: "cost-pcard-headtext" },
+					e("span", { className: "cost-pcard-name" }, "花费统计" + (st && st.enabled ? " · 云端同步已开启" : "")),
+					e("span", { className: "cost-pcard-desc" }, "全部设置集中于此：云端同步（多机汇总）、峰谷计价与提示、订阅套餐与配额、计价与价格目录、历史导入、数据与界面、安全与凭据。")),
+				e("svg", { className: "cost-pcard-chevron" + (open ? " is-open" : ""), width: 14, height: 14, viewBox: "0 0 14 14", fill: "none", "aria-hidden": "true" },
+					e("path", { d: "M3.5 5.25 7 8.75l3.5-3.5", stroke: "currentColor", strokeWidth: 1.4, strokeLinecap: "round", strokeLinejoin: "round" })));
 			return e("li", { className: "cost-pcard" + (open ? " is-open" : "") },
 				head,
 				open ? e("div", { className: "cost-pcard-body" }, body) : null);
@@ -2330,12 +2409,21 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
-		 * 「花费统计」看板的插槽门卫。
-		 * 关掉界面显示时**不能注册成空渲染**（会留下一个点不开的空白导航项），
-		 * 所以这里保留设置项但只渲染一句说明 —— 用户随时能在插件配置卡片里改回来。
-		 * 宿主不重启插件、插槽注册也无法撤销，因此显隐必须在渲染期判定。
+		 * 「花费统计」设置分区的路由壳（v1.9.3）。
+		 *
+		 * 宿主 0.1.7-alpha.2 起，「内置插件」分区改成只读清单、`settings.plugin.item`
+		 * 插槽被删除（0.1.6 及更早的宿主仍声明它，插件侧保留注册做兼容），
+		 * 所以配置入口随页面内迁：看板页头右上角齿轮 → 本分区内的配置页 → 左上角返回键。
+		 * 之所以做成「分区内子视图」而不是第二个左侧导航项：宿主设置外壳渲染分区时
+		 * 只传入 close（见 dsh-client-ui-settings-general 的
+		 * renderSlot('settings.section', { close }, { only: active })），
+		 * 分区没有任何程序化切换导航的能力。
+		 *
+		 * ui 快照（peak 轮询 + UI_EVENT 广播）放在这一层：看板与配置页共用同一个快照，
+		 * 因此配置页里改完「界面显示」开关后，返回看板立刻生效。
 		 */
-		function DashGate() {
+		function CostSection() {
+			const [view, setView] = useState("dashboard");
 			const [ui, setUi] = useState(null);
 			useEffect(() => {
 				let alive = true;
@@ -2347,17 +2435,44 @@ window.__ModuleLoader__.load({
 				window.addEventListener(UI_EVENT, load);
 				return () => { alive = false; clearInterval(id); window.removeEventListener(UI_EVENT, load); };
 			}, []);
-			if (!uiOn(ui, "uiDashboardEnabled")) {
-				return e("div", { className: "cost-wrap" },
-					e("div", { className: "cost-h1" }, pluginIcon(18), "花费统计"),
-					e("div", { className: "cost-hint", style: { marginTop: "8px" } },
-						"花费统计看板已在设置里关闭显示。记账与云端同步不受影响；要重新打开：" +
-						"设置 → 插件 → 插件配置 → 花费统计 → 界面显示 → 打开「设置页花费统计看板」。"));
+			if (view === "config") {
+				return e(ConfigPanel, { mode: "page", onBack: () => setView("dashboard") });
 			}
-			return e(Dashboard, {});
+			return e(DashboardGate, { ui, onOpenConfig: () => setView("config") });
 		}
 
-		function Dashboard() {
+		/**
+		 * 看板门卫 + 看板关闭态。
+		 * 关掉界面显示时**不能注册成空渲染**（会留下一个点不开的空白导航项），
+		 * 也不能把齿轮一起藏起来（否则关掉后再没有入口能打开）：
+		 * 所以这里保留页头 + 齿轮，只把统计内容换成一句说明。
+		 * 宿主不重启插件、插槽注册也无法撤销，因此显隐必须在渲染期判定。
+		 */
+		function DashboardGate(props) {
+			const ui = props ? props.ui : null;
+			const openConfig = props && props.onOpenConfig;
+			if (!uiOn(ui, "uiDashboardEnabled")) {
+				return e("div", { className: "cost-wrap" },
+					e("div", { className: "cost-h1" }, pluginIcon(18), "花费统计",
+						e("span", { className: "cost-h1-actions" }, e(GearButton, { onClick: openConfig }))),
+					e("div", { className: "cost-hint", style: { marginTop: "8px" } },
+						"花费统计看板已在设置里关闭显示。记账与云端同步不受影响；要重新打开：" +
+						"点右上角齿轮 → 「数据与界面」→ 打开「设置页花费统计看板」。"));
+			}
+			return e(Dashboard, { onOpenConfig: openConfig });
+		}
+
+		/** 看板页头右上角的设置齿轮：进入本分区的配置页 */
+		function GearButton(props) {
+			return e("button", {
+				type: "button", className: "cost-gear",
+				"aria-label": "花费统计设置", title: "花费统计设置",
+				onClick: props && props.onClick,
+			}, gearIcon(15));
+		}
+
+		function Dashboard(props) {
+			const onOpenConfig = props && props.onOpenConfig;
 			const [days, setDays] = useState(7);
 			const [dash, setDash] = useState(null);
 			const [dashErr, setDashErr] = useState("");
@@ -2608,11 +2723,12 @@ window.__ModuleLoader__.load({
 			}
 
 			return e("div", { className: "cost-wrap" },
-				e("div", { className: "cost-h1" }, pluginIcon(18), "花费统计"),
+				e("div", { className: "cost-h1" }, pluginIcon(18), "花费统计",
+					e("span", { className: "cost-h1-actions" }, e(GearButton, { onClick: onOpenConfig }))),
 				filterRow(days, setDays, onExport, onRefresh, msg, busy, dash ? dash.peakWindows : "周一至周五 9:00-12:00 · 14:00-18:00（周末与法定节假日全天闲时）", viewCtl, openVolc, planTotal, setPlanTotal),
 				!cloudAvailable
 					? e("div", { className: "cost-hint", style: { marginTop: "4px" } },
-						"仅显示本机数据。在多台电脑/多个 Agent 之间汇总：到「设置 → 插件 → 插件配置 → 花费统计」填写云端服务地址与令牌。")
+						"仅显示本机数据。在多台电脑/多个 Agent 之间汇总：点右上角齿轮 → 「多机汇总（云端同步）」填写云端服务地址与令牌。")
 					: null,
 				sync && sync.enabled && sync.pending > 0 && view !== "local"
 					? e("div", { className: "cost-cloudnote" },
@@ -2623,7 +2739,7 @@ window.__ModuleLoader__.load({
 					? e("div", { className: "cost-err", style: { marginTop: "6px" } }, "云端数据不可用（已显示本机数据）：" + cloudErr)
 					: null,
 				sync && sync.needAuth
-					? e("div", { className: "cost-err", style: { marginTop: "6px" } }, "云端令牌无效：请在「设置 → 插件 → 插件配置 → 花费统计」更新令牌。")
+					? e("div", { className: "cost-err", style: { marginTop: "6px" } }, "云端令牌无效：请在「设置 → 花费统计 → 右上角齿轮 → 多机汇总」更新令牌。")
 					: null,
 				dashErr ? e("div", { className: "cost-err", style: { marginTop: "8px" } }, dashErr) : null,
 				(!viewDash && !dashErr) ? e("div", { className: "cost-hint", style: { marginTop: "12px" } }, "加载中…") : null,
@@ -2786,20 +2902,26 @@ window.__ModuleLoader__.load({
 			applyStyles(ctx);
 			const slots = ctx.get("slots");
 			if (slots === undefined) return;
+			// 「花费统计」设置分区：看板 + 页头齿轮进入的配置页（见 CostSection 注释）
 			slots.inject("settings.section", () => slots.register(
 				{ name: "settings.section", id: "cost-dashboard", order: 30, label: "花费统计" },
-				() => e(DashGate, {}),
+				() => e(CostSection, {}),
 			));
-			// 插件配置卡片（设置 → 插件 → 插件配置）：以 settings 命名空间为键。
+			// 插件配置卡片（设置 → 插件 → 插件配置）：以 settings 命名空间为键，**兼容入口**。
 			// 这里必须**无条件** inject，不能拿 slots.entries(key).length 当"插槽是否存在"的探测：
 			// entries 数的是"已经注册进该槽的条目"，而条目正是由各插件在插槽声明后才注册的，
 			// 所以在插件 apply 阶段它恒为空 —— 用探测就会把卡片永远挡在门外（1.8.0 的缺陷）。
 			// 宿主的官方卡片（dsh-client-ui-settings-plugins）与 dsh-context 都是无条件 inject：
 			// 插槽未声明时回调不触发、声明时自动触发，既不会误判也不需要重试。
+			//
+			// v1.9.3：DSH 0.1.7-alpha.2 起宿主已删除该插槽（「内置插件」分区改为只读清单），
+			// 回调自然不触发 ⇒ 保留注册在 0.1.7+ 上是零成本的空操作；
+			// 仍声明该插槽的旧宿主照旧显示这张卡片，且它与分区内配置页共用 ConfigPanel，
+			// 字段、校验、写接口完全一致（只是外壳不同）。
 			const pluginItemKey = "settings.plugin.item";
 			slots.inject(pluginItemKey, () => slots.register(
 				{ name: pluginItemKey, key: "cost-tracker" },
-				() => e(PluginConfigCard, {}),
+				() => e(ConfigPanel, { mode: "card" }),
 			));
 			slots.inject("conversation.composer.dock", () => slots.register(
 				{ name: "conversation.composer.dock", id: "cost", order: 1 },

@@ -2,6 +2,78 @@
 
 本文件用中文记录 dsh-cost-tracker 的版本变更。
 
+## v1.9.3(2026-09-24)
+
+**适配 DSH 0.1.7-alpha.2：配置入口内迁到「花费统计」页头齿轮（带返回键），旧插件配置卡片入口保留兼容**
+
+### 一、背景：新宿主上原配置入口已经消失
+
+- DSH `0.1.7-alpha.2` **删除了 `settings.plugin.item` 插槽**（在 0.1.7-alpha.2 全部宿主包的 JS 里该字符串零命中），
+  原「设置 → 插件 → 插件配置」页由 `dsh-client-ui-settings-plugins` 承担，现在该分区只托管
+  `settings.plugins.tab`，唯一贡献者是**只读清单** `dsh-client-ui-settings-plugin-inventory`
+  （只显示完整名称 / 配置状态 / 启用于），**没有任何表单**；
+- 同时 `dsh-settings` 的 `installSection` 也已下线（grep 零命中），即 `index.js` 的
+  `installSettingsSection()` 现在只会静默返回 false；配置值实际只来自
+  `~/.dsh/storages/cost-tracker-config.json` + 插件自己的 `/api/cost-tracker/*` —— 所以修复完全落在客户端；
+- 结论：v1.9.2 及更早版本在新宿主上「设置 → 插件 → 插件配置」里**再也看不到本插件的配置卡片**，
+  而插件的配置又只在那张卡片里 —— 用户实际上失去了全部设置入口（本次修复的动机）。
+
+### 二、改法：配置 UI 内迁到本插件自己的设置分区
+
+- 新增 `CostSection`（`settings.section` 的渲染函数）：持有 `view`（`dashboard` / `config`）与 `ui` 快照
+  （`peak` 轮询 + `UI_EVENT` 监听，从原 `DashGate` 上移，看板与配置页共用同一快照）；
+- `Dashboard` 页头 `.cost-h1` 右侧新增**齿轮按钮** `button.cost-gear`（自绘齿轮图标、`aria-label="花费统计设置"`、
+  `title` 同文案，不带可见文字）；点击进入配置页；
+- 配置页 = `ConfigPanel({ mode: "page" })`：根节点 `div.cost-wrap.cost-cfg-page`，
+  页头为 **返回键** `button.cost-back`（‹ 图标 + 「返回」+ `aria-label="返回花费统计看板"`）
+  + 标题「花费统计 · 设置」+ 兼容说明；正文**常驻展开**（无外层折叠），
+  顶部状态条与七个折叠分组（多机汇总 / 峰谷计价与提示 / 订阅套餐与配额 / 计价与价格目录 /
+  历史导入 / 数据与界面 / 安全与凭据）与各分组动作**逐项不变**；
+- **为什么是分区内子视图而不是第二个左侧导航项**：宿主设置外壳渲染分区时只传入 `close`
+  （`dsh-client-ui-settings-general` 的 `renderSlot('settings.section', { close }, { only: active })`），
+  分区没有任何程序化切换导航的能力；`settings.section` 的 label 与 order 也只能在注册时决定；
+- **关闭看板不再可能成为死亡入口**：`uiDashboardEnabled=false` 时仍渲染页头 + 齿轮，
+  只把统计内容换成「点右上角齿轮 → 数据与界面 → 打开」的指引（原卡片入口在新宿主上已不存在，
+  这条护栏是必须的）。
+
+### 三、兼容：`settings.plugin.item` 卡片入口保留
+
+- 注册**原样保留**（`slots.inject(pluginItemKey, ...)` 无条件注入，未声明该插槽时回调不触发 ⇒ 零成本）；
+  仍声明它的旧宿主（`dsh < 0.1.7-alpha.2`）照旧显示卡片；
+- 两个入口**共用同一个 `ConfigPanel`**（`mode: "card"` 折叠卡片外壳 / `mode: "page"` 配置页外壳），
+  正文同一段渲染 ⇒ 字段、字典、校验、写接口不可能漂移；两处的未保存草稿各自独立；
+- 卡片外壳（`li.cost-pcard` > `button.cost-pcard-head` > 折叠 body、默认收起、`aria-expanded`）
+  与 `.cost-pcard*` 样式**逐字未改**，原有卡片测试原样通过（`client-render` 的 [3] 组断言未动）。
+
+### 四、文案路径统一
+
+- 插件内与 HTTP/Agent 错误里的路径统一为「设置 → 花费统计 → 右上角齿轮 → 分组名」：
+  `client.js`（峰谷只读面板、云端同步只读卡、看板关闭提示、云端未配置提示、令牌失效提示）、
+  `index.js`（`NOT_CONFIGURED`、共享引导令牌失效）、`sync.js`（`TOKEN_INVALID` message）；
+- 注释同步更新（`config.js`、`pricing.js`、`vendor-catalog.js`、`index.js`、`schema.js` 相关段），
+  旧宿主兼容路径只在配置页页脚与 README 里说明。
+
+### 五、测试
+
+- `test/client-render.test.js`：新增 **[3b] 齿轮入口**（齿轮存在 / 可访问名 / 图标 / 挂在页头操作位 /
+  点击进入配置页 / 页头有返回键 / 七个分组齐 / 两视图互斥 / 点返回回到看板）与
+  **[3c] 两入口一致性**（配置页与兼容卡片的分组标题、状态摘要、关键字段集合必须相同）；
+  [8] 组新增「关闭态仍渲染齿轮 → 点击进入配置页 → 能重新打开看板」的完整闭环；
+  原 [3] 卡片外壳断言保持不变（兼容入口的护栏）；
+- `test/ui-display.test.js`：关闭提示断言改为指向齿轮，新增「分区内配置入口不受三个界面开关控制」
+  「齿轮挂在页头操作位」两条；[5] 改为断言四个插槽无条件注册（含兼容卡片）；
+- `test/client-registration.test.js`：[6] 组扩充为「两种外壳来自同一个 ConfigPanel」
+  「齿轮与返回键都在（图标 + 可访问名）」「settings.section 渲染的是 CostSection 而不是直接渲染看板」；
+- 全量 18 个测试文件通过。
+
+### 六、行为差异与注意
+
+- **从配置页点「返回」会丢弃未点保存的草稿**（每个分组仍是「改草稿 → 点该组保存」；
+  折叠分组之间的切换不丢草稿，与卡片折叠语义一致）；
+- 切换左侧设置分区 / 关闭设置面板时组件卸载，下次进入回到看板视图（宿主只挂载当前分区）；
+- 本次为**纯客户端 UI 重组**：HTTP 面、配置键、落盘路径、云端契约（`dsh-cost-cloud`）、
+  计费/定价/导入/同步逻辑**零改动**，老配置零迁移。
+
 ## v1.9.2(2026-09-20)
 
 **定价口径修正：V4-Pro 不再路由到 Flash（官方撤销下线计划）+ 新增「法定节假日全天闲时」**

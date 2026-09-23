@@ -252,13 +252,31 @@ function render(component, props) {
 }
 const describeErrors = (errors) => errors.map((e) => `${e.comp}@${e.path}: ${e.message}`).join(' | ')
 
-/** 取节点子树里的全部文本（用于按按钮文案定位可点击节点） */
+/**
+ * 取节点子树里的全部文本（用于按按钮文案定位可点击节点）
+ */
 function flatText(node) {
   if (node === null || node === undefined || typeof node === 'boolean') return ''
   if (typeof node === 'string' || typeof node === 'number') return String(node)
   if (Array.isArray(node)) return node.map(flatText).join('')
   return flatText(node.children)
 }
+
+/** 子树里是否含有某个标签（用于断言「按钮里画了图标」这类结构） */
+function hasTag(node, tag) {
+  if (node === null || node === undefined || typeof node !== 'object') return false
+  if (Array.isArray(node)) return node.some((child) => hasTag(child, tag))
+  if (String(node.type) === tag) return true
+  return hasTag(node.children, tag)
+}
+
+/** 按 className 片段找 DOM 节点（齿轮 / 返回键 / 卡片头这类壳节点） */
+function byClass(state, tag, cls) {
+  return state.nodes.find((n) => n.name === tag && String(n.props.className || '').includes(cls))
+}
+
+/** 配置面板的七个折叠分组标题（两处入口必须逐一一致） */
+const CFG_GROUPS = ['多机汇总（云端同步）', '峰谷计价与提示', '订阅套餐与配额', '计价与价格目录', '历史导入', '数据与界面', '安全与凭据']
 
 /**
  * 带副作用的一轮挂载：渲染 → 执行 useEffect（触发 apiCall）→ 等微任务落地 → 再渲染。
@@ -284,7 +302,9 @@ console.log('[1] bundle 加载与 apply')
 const mod = makeModule({ view: null, syncView: 'local' })
 check('模块以 scoped 包名注册', mod.bundleId === '@angelyeye/dsh-cost-tracker', `id=${mod.bundleId}`)
 check('apply() 不抛错', mod.applyError === '', mod.applyError)
-check('无条件 inject settings.plugin.item（插件配置卡片）', mod.injected.includes('settings.plugin.item'), `injected=${JSON.stringify(mod.injected)}`)
+// 兼容入口：DSH 0.1.7-alpha.2 起宿主不再声明该插槽（内置插件页改成只读清单），
+// 回调不触发即自动失效；仍声明它的旧宿主照旧显示卡片。因此这条注册必须保留。
+check('无条件 inject settings.plugin.item（旧宿主兼容入口）', mod.injected.includes('settings.plugin.item'), `injected=${JSON.stringify(mod.injected)}`)
 check('卡片条目键 = cost-tracker', !!mod.cardMeta && mod.cardMeta.key === 'cost-tracker', JSON.stringify(mod.cardMeta))
 check('注册了 settings.section（左侧「花费统计」入口）', typeof mod.section === 'function')
 
@@ -301,7 +321,7 @@ check('已同步状态下渲染「上次同步」时间标签（timeLabel 必须
   /上次同步\s*(刚刚|\d+\s*(分钟|小时)前|\d{2}-\d{2} \d{2}:\d{2})/.test(dash.text.replace(/\s+/g, ' ')),
   JSON.stringify(dash.text.replace(/\s+/g, ' ').slice(0, 200)))
 
-console.log('[3] 插件配置卡片外壳（li > 可点击 header > 折叠 body）')
+console.log('[3] 兼容入口：插件配置卡片外壳（li > 可点击 header > 折叠 body）')
 if (typeof mod.card !== 'function') {
   check('卡片渲染函数已注册', false, 'settings.plugin.item 未注册渲染函数')
 } else {
@@ -385,6 +405,102 @@ if (typeof mod.card !== 'function') {
       check('找到「停用」按钮', false, '渲染树中未找到')
     }
   }
+}
+
+// ---------- [3b] v1.9.3 内迁的配置入口：看板页头齿轮 → 配置页 → 返回键 ----------
+// 背景：DSH 0.1.7-alpha.2 删除了「插件配置」插槽（内置插件分区改成只读清单），
+// 原卡片在新宿主上永远不显示 ⇒ 配置入口内迁到本插件自己的设置分区。
+// 宿主设置外壳渲染分区时只传 close（renderSlot('settings.section', { close }, { only: active })），
+// 分区没有程序化切换导航的能力 ⇒ 只能是分区内子视图 + 返回键，而不是第二个左侧导航项。
+// 这组断言钉住：齿轮可达、配置页完整、返回键可用、两个视图互斥（不是同时渲染）。
+console.log('[3b] 齿轮入口：看板 ⇄ 配置页（含返回键）')
+{
+  hookSlots.clear()
+  const modGear = makeModule({ view: REAL_VIEW, syncView: 'local' })
+  const dashView = await renderAsync(modGear.section, {}, 3)
+  check('看板渲染无异常', dashView.errors.length === 0, describeErrors(dashView.errors))
+
+  const gear = byClass(dashView, 'button', 'cost-gear')
+  check('看板页头渲染出设置齿轮', !!gear, dashView.nodes.slice(0, 6).map((n) => n.name + '.' + String(n.props.className || '')).join(' | '))
+  check('齿轮带可访问名与悬浮说明（图标按钮，无可见文字）',
+    !!gear && gear.props['aria-label'] === '花费统计设置' && gear.props.title === '花费统计设置' && flatText(gear).trim() === '',
+    JSON.stringify(gear && { aria: gear.props['aria-label'], title: gear.props.title, text: flatText(gear) }))
+  check('齿轮是图标按钮（内部画了 svg）', !!gear && hasTag(gear, 'svg'), '齿轮子树里没有 svg')
+  check('齿轮挂在页头标题行（cost-h1 的右侧操作位）',
+    !!gear && (() => {
+      const actions = dashView.nodes.find((n) => n.name === 'span' && String(n.props.className || '').includes('cost-h1-actions'))
+      // 操作位里挂的是 <GearButton/> 组件节点（函数型 children），说明齿轮确实在标题行右侧，
+      // 而不是被渲染到页面别处
+      return !!actions && Array.isArray(actions.children) && actions.children.some((c) => c && typeof c.type === 'function')
+    })(),
+    '未找到 .cost-h1-actions 包裹的齿轮')
+
+  if (!gear) {
+    check('齿轮可点击并进入配置页', false, '没有齿轮节点，后续断言无法进行')
+  } else {
+    gear.props.onClick()
+    const cfg = await renderAsync(modGear.section, {}, 3)
+    check('点齿轮后进入配置页且渲染无异常', cfg.errors.length === 0, describeErrors(cfg.errors))
+    check('配置页不再渲染看板统计内容（两视图互斥，不是同时渲染）',
+      !cfg.text.includes('Token 用量统计'), JSON.stringify(cfg.text.replace(/\s+/g, ' ').slice(0, 160)))
+
+    const back = byClass(cfg, 'button', 'cost-back')
+    check('配置页有返回键（真按钮 + 可访问名 + 含图标）',
+      !!back && typeof back.props.onClick === 'function' && back.props['aria-label'] === '返回花费统计看板' && hasTag(back, 'svg'),
+      JSON.stringify(back && { aria: back.props['aria-label'], text: flatText(back) }))
+    check('配置页标题标明是设置', cfg.text.includes('花费统计 · 设置'), JSON.stringify(cfg.text.replace(/\s+/g, ' ').slice(0, 120)))
+    check('配置页渲染出全部七个折叠分组',
+      CFG_GROUPS.every((t) => cfg.text.includes(t)),
+      JSON.stringify(CFG_GROUPS.filter((t) => !cfg.text.includes(t))))
+    check('配置页说明点明旧宿主卡片的同一份设置（兼容提示）',
+      cfg.text.includes('插件配置') && cfg.text.includes('同一份设置'),
+      JSON.stringify(cfg.text.replace(/\s+/g, ' ').slice(0, 240)))
+
+    if (back && typeof back.props.onClick === 'function') {
+      back.props.onClick()
+      const dashBack = await renderAsync(modGear.section, {}, 3)
+      check('点返回键回到看板（统计内容回来，无渲染异常）',
+        dashBack.text.includes('Token 用量统计') && dashBack.errors.length === 0,
+        describeErrors(dashBack.errors))
+      check('返回后齿轮仍在（可再次进入配置页）', !!byClass(dashBack, 'button', 'cost-gear'))
+    }
+  }
+}
+
+// ---------- [3c] 两个入口同源：配置页与旧卡片渲染同一套分组 ----------
+// 一处实现两种外壳（ConfigPanel mode='page' | 'card'），这里把两边的分组标题集合对起来：
+// 将来加字段只改一处，若有人给其中一边单独加分组/字段，这条会立刻报红。
+console.log('[3c] 两入口一致性：配置页与兼容卡片的分组集合相同')
+{
+  hookSlots.clear()
+  const modBoth = makeModule({ view: REAL_VIEW, syncView: 'local' })
+
+  const dashForPage = await renderAsync(modBoth.section, {}, 3)
+  const gearBtn = byClass(dashForPage, 'button', 'cost-gear')
+  if (gearBtn) gearBtn.props.onClick()
+  const pageView = await renderAsync(modBoth.section, {}, 3)
+  check('配置页渲染无异常', pageView.errors.length === 0, describeErrors(pageView.errors))
+
+  hookSlots.clear()
+  const cardFirst = render(modBoth.card, {})
+  const cardHead = byClass(cardFirst, 'button', 'cost-pcard-head')
+  if (cardHead && typeof cardHead.props.onClick === 'function') cardHead.props.onClick()
+  const cardView = await renderAsync(modBoth.card, {}, 3)
+  check('兼容卡片展开后渲染无异常', cardView.errors.length === 0, describeErrors(cardView.errors))
+
+  const pageText = pageView.text.replace(/\s+/g, ' ')
+  const cardText = cardView.text.replace(/\s+/g, ' ')
+  check('七个分组标题在两边都存在',
+    CFG_GROUPS.every((t) => pageText.includes(t) && cardText.includes(t)),
+    JSON.stringify({
+      page: CFG_GROUPS.filter((t) => !pageText.includes(t)),
+      card: CFG_GROUPS.filter((t) => !cardText.includes(t)),
+    }))
+  check('顶部状态条在两边都存在（同一份摘要）',
+    pageText.includes('已记账') && pageText.includes('待上报') && cardText.includes('已记账') && cardText.includes('待上报'),
+    JSON.stringify({ page: pageText.slice(0, 120), card: cardText.slice(0, 120) }))
+  check('两边的多机汇总字段一致（服务地址 / 共享令牌）',
+    pageText.includes('服务地址') && cardText.includes('服务地址') && pageText.includes('共享令牌') && cardText.includes('共享令牌'))
 }
 
 console.log('[4] 三态视图一致性：取不到 view 模块时的内联实现必须与 view.js 完全等价')
@@ -527,8 +643,37 @@ uiFlags = { uiDockEnabled: true, uiPeakEnabled: true, uiDashboardEnabled: false 
 const dashOff = await (async () => { hookSlots.clear(); return renderAsync(mod7.section, {}, 3) })()
 const dashOffText = dashOff.text.replace(/\s+/g, ' ')
 check('关掉 uiDashboardEnabled 后看板不再渲染统计内容', !dashOffText.includes('Token 用量统计') && !dashOffText.includes('总花费'), JSON.stringify(dashOffText.slice(0, 160)))
-check('看板位置改为提示如何重新打开（不静默白屏）', dashOffText.includes('关闭显示') && dashOffText.includes('插件配置'), JSON.stringify(dashOffText.slice(0, 200)))
-check('关闭看板时渲染无异常', dashOff.errors.length === 0, describeErrors(dashOff.errors))
+check('看板位置改为提示如何重新打开（不静默白屏，指向齿轮）', dashOffText.includes('关闭显示') && dashOffText.includes('齿轮'), JSON.stringify(dashOffText.slice(0, 200)))
+check('关闭态渲染无异常', dashOff.errors.length === 0, describeErrors(dashOff.errors))
+
+// 关闭态**必须**留着齿轮：原「插件配置」入口在 0.1.7-alpha.2 上已消失，
+// 若齿轮也跟着看板一起藏起来，用户就再也打不开了（死亡入口）。
+const offGear = byClass(dashOff, 'button', 'cost-gear')
+check('关闭态仍渲染齿轮入口（否则关掉后无法再打开）', !!offGear, dashOff.nodes.map((n) => n.name + '.' + String(n.props.className || '')).slice(0, 8).join(' | '))
+if (offGear) {
+  offGear.props.onClick()
+  const cfgFromOff = await renderAsync(mod7.section, {}, 3)
+  check('关闭态下点齿轮仍能进配置页', cfgFromOff.text.includes('花费统计 · 设置') && cfgFromOff.errors.length === 0, describeErrors(cfgFromOff.errors))
+  // 配置页「数据与界面」里的看板开关能真的写回服务端（真实服务端会落盘并回显）
+  const boxes = cfgFromOff.nodes.filter((n) => n.name === 'input' && n.props && n.props.type === 'checkbox' && typeof n.props.onChange === 'function')
+  let wroteUi = null
+  for (const box of boxes) {
+    const probe = mod7.apiLog.length
+    box.props.onChange({ target: { checked: true } })
+    for (let i = 0; i < 3; i++) await new Promise((r) => setImmediate(r))
+    const call = mod7.apiLog.slice(probe).filter((c) => c.name === 'ui-config').pop()
+    if (call && call.args && call.args.uiDashboardEnabled === true) wroteUi = call
+  }
+  check('配置页里能把「设置页花费统计看板」重新打开（ui-config）', !!wroteUi, JSON.stringify(mod7.apiLog.filter((c) => c.name === 'ui-config').slice(-2)))
+  // 点返回键回到看板，再让服务端落盘回显（uiFlags）——看板与齿轮一起恢复
+  const backFromCfg = byClass(cfgFromOff, 'button', 'cost-back')
+  if (backFromCfg && typeof backFromCfg.props.onClick === 'function') backFromCfg.props.onClick()
+  uiFlags = { uiDockEnabled: true, uiPeakEnabled: true, uiDashboardEnabled: true }
+  const reopened = await renderAsync(mod7.section, {}, 3)
+  check('重新打开后看板恢复（统计内容回来）', reopened.text.includes('Token 用量统计'), JSON.stringify(reopened.text.replace(/\s+/g, ' ').slice(0, 160)))
+} else {
+  check('关闭态下点齿轮仍能进配置页', false, '关闭态没有齿轮入口')
+}
 
 uiFlags = { uiDockEnabled: true, uiPeakEnabled: true, uiDashboardEnabled: true }
 const dashBack = await (async () => { hookSlots.clear(); return renderAsync(mod7.section, {}, 3) })()

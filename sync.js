@@ -240,7 +240,7 @@ function classifyStatus(status, body) {
   if (status === 200 && body && body.ok) return { ok: true }
   const code = (body && body.code) || ''
   if (status === 401 || code === 'TOKEN_INVALID' || code === 'TOKEN_MISSING') {
-    return { ok: false, code: 'TOKEN_INVALID', needAuth: true, message: '云端令牌无效，请在插件配置里更新' }
+    return { ok: false, code: 'TOKEN_INVALID', needAuth: true, message: '云端令牌无效，请在「设置 → 花费统计 → 右上角齿轮 → 多机汇总」更新' }
   }
   if (status === 403) {
     return { ok: false, code, needAuth: false, message: (body && body.error) || '云端拒绝：设备被禁用或未开启自注册' }

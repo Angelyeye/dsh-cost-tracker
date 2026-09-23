@@ -33,12 +33,14 @@ import { createCredSeam, migrateLegacySecrets, safeFetch, CRED_REFS, hostnameOf 
 import { listSessionLogs, planAndBuildImports, loadManifest, IMPORT_SOURCE } from './import.js'
 
 /** 插件版本（写入上报信封，便于云端排查版本差异） */
-const PLUGIN_VERSION = '1.9.2'
+const PLUGIN_VERSION = '1.9.3'
 setPluginVersion(PLUGIN_VERSION)
 
-/** 「设置 → 插件 → 插件配置」里的卡片字段（与 settings 命名空间一致）。
- *  v1.9.0 起配置卡承载**全部**设置（峰谷/订阅/计费/目录/导入/同步/界面显示），
- *  这里声明的是卡片可写的字段全集；密钥类字段 role('secret') 只进凭据库。 */
+/** 配置面板可写的字段（与 settings 命名空间一致）。
+ *  v1.9.0 起配置面板承载**全部**设置（峰谷/订阅/计费/目录/导入/同步/界面显示）；
+ *  v1.9.3 起入口内迁到「设置 → 花费统计 → 右上角齿轮」（旧宿主仍可用
+ *  「设置 → 插件 → 插件配置」卡片，两处同一组件），这里声明的是字段全集；
+ *  密钥类字段 role('secret') 只进凭据库。 */
 const SyncSchema = Schema.object({
   deviceName: Schema.string().default(undefined).description('本机在看板上显示的名字'),
   cloudEnabled: Schema.boolean().default(undefined).description('启用云端同步'),
@@ -272,8 +274,8 @@ export default {
     // ---------- plugin config（峰谷计价 + 云端同步） ----------
     // 与记录分开存储：$DSH_HOME/storages/cost-tracker-config.json。
     // 提供读写与校验（默认值见 config.js），写失败不阻断（下次改设置重试）。
-    // 若部署里存在 @deepseek-ai/dsh-settings（本机 DSH 自带），另外注册一个
-    // `cost-tracker` 命名空间：用户在「设置 → 插件 → 插件配置」里改的字段
+    // 若部署里存在 @deepseek-ai/dsh-settings（旧宿主；0.1.7 起该服务已无 installSection），
+    // 另外注册一个 `cost-tracker` 命名空间：旧宿主设置面里改的字段
     // 通过 settings/updated 回灌到本文件，保证两个入口读写同一份配置。
     const CONFIG_FILE = join(process.env.DSH_HOME || join(homedir(), '.dsh'), 'storages', 'cost-tracker-config.json')
     /** 官方价格同步产物（同步时代 + 最近核对结果），与配置/账本分开存 */
@@ -1798,7 +1800,7 @@ export default {
       // 令牌在凭据库（v1.9.0 起配置文件不落明文）；此处只做「有没有配置」的快速判定，
       // 真正取值在下方 resolveCloudToken()（异步，凭据服务可能晚于本插件注册）
       if (!cloudConfig.cloudEnabled || !cloudConfig.cloudUrl) {
-        return { ok: false, error: '云端同步未配置（在「设置 → 插件 → 插件配置 → 花费统计」填写服务地址与令牌）', code: 'NOT_CONFIGURED' }
+        return { ok: false, error: '云端同步未配置（在「设置 → 花费统计 → 右上角齿轮 → 多机汇总」填写服务地址与令牌）', code: 'NOT_CONFIGURED' }
       }
       const key = JSON.stringify(query)
       const hit = cloudCache.get(key)
@@ -2257,7 +2259,7 @@ export default {
             '待上报：' + st.pending + ' 条 · 已上报水位 seq=' + st.watermark + ' · 日汇总已同步 ' + st.rollupsSent + ' 项',
           ]
           if (st.lastError) lines.push('最近错误：' + st.lastError + (st.backoffMs ? '（退避 ' + Math.round(st.backoffMs / 1000) + 's）' : ''))
-          if (st.needAuth) lines.push('⚠ 令牌无效：请在「设置 → 插件 → 插件配置 → 花费统计」更新共享引导令牌')
+          if (st.needAuth) lines.push('⚠ 令牌无效：请在「设置 → 花费统计 → 右上角齿轮 → 多机汇总」更新共享引导令牌')
           if (v.action === 'now' && v.result) {
             lines.push('本次同步：新增 ' + (v.result.accepted || 0) + ' 条 · 去重 ' + (v.result.duplicates || 0) + ' 条 · 日汇总 ' + (v.result.rollups || 0) + ' 项' + (v.result.error ? ' · 失败：' + v.result.error : ''))
           }
@@ -2320,7 +2322,9 @@ export default {
     if (!settingsOk) {
       // settings 是可选服务（宿主未组合时不报错、不阻断启动），但不能像 1.8.0 那样只探一次：
       // 它晚于本插件就绪时，那一次 ctx.get('settings') 必然落空 → 命名空间永不注册 →
-      // 「设置 → 插件 → 插件配置」里永远没有本插件的卡片。
+      // 旧宿主的「设置 → 插件 → 插件配置」里永远没有本插件的卡片。
+      // （0.1.7-alpha.2 起宿主已移除 settings.installSection 与插件配置插槽，本路径自然 inert；
+      //  配置入口改由客户端「设置 → 花费统计 → 右上角齿轮」承担，见 client.js 的 CostSection。）
       // 与 dsh-context 的 installSettings 同款写法：ctx.inject 等它就绪后再装，始终缺席则自然 inert。
       try {
         ctx.inject(['settings'], (sctx) => {

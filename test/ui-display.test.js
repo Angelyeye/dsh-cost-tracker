@@ -176,29 +176,40 @@ console.log('[4] 客户端：三个落点各自读自己的开关')
   check('时段条按 uiPeakEnabled 判定',
     /uiOn\(snap && snap\.ui,\s*"uiPeakEnabled"\)/.test(client), '未找到 PeakSidebar 的 uiPeakEnabled 判定')
   check('看板按 uiDashboardEnabled 判定（渲染期判定，不是只在注册期）',
-    /uiOn\(ui,\s*"uiDashboardEnabled"\)/.test(client), '未找到 DashGate 的 uiDashboardEnabled 判定')
-  check('看板关闭时不是静默空渲染，而是给出重新打开的路径',
-    /关闭显示/.test(client) && /插件配置/.test(client), '缺少关闭后的操作提示')
-  check('配置卡片提供三开关的写入口（ui-config）',
-    /apiCall\("ui-config"/.test(client), '配置卡片没有调用 ui-config')
+    /uiOn\(ui,\s*"uiDashboardEnabled"\)/.test(client), '未找到 DashboardGate 的 uiDashboardEnabled 判定')
+  check('看板关闭时不是静默空渲染，而是给出重新打开的路径（指向齿轮）',
+    /关闭显示/.test(client) && /齿轮/.test(client), '缺少关闭后的操作提示')
+  check('配置面板提供三开关的写入口（ui-config）',
+    /apiCall\("ui-config"/.test(client), '配置面板没有调用 ui-config')
   check('保存后广播事件，已挂载的部件立即响应',
     /new CustomEvent\(UI_EVENT\)/.test(client) && /addEventListener\(UI_EVENT/.test(client),
     '缺少 UI_EVENT 广播或监听')
-  // 插件配置卡片本身不受这三个开关控制 —— 否则关掉看板后就没有入口再打开。
-  // 断言"注册这一步与开关无关"：卡片注册块里不得出现任何 ui* 开关判定。
+  // 两个配置入口本身都不受这三个开关控制 —— 否则关掉看板后就没有入口再打开。
+  // 断言"注册这一步与开关无关"：两处注册块里不得出现任何 ui* 开关判定。
   const regAt = client.indexOf('const pluginItemKey')
   const regBlock = regAt < 0 ? '' : client.slice(regAt, regAt + 320)
-  check('插件配置卡片不受界面开关控制（注册时不读开关）',
+  check('插件配置卡片（旧宿主兼容入口）不受界面开关控制（注册时不读开关）',
     /slots\.inject\(pluginItemKey/.test(regBlock) && !/ui(Dock|Peak|Dashboard)Enabled/.test(regBlock),
     regBlock.replace(/\s+/g, ' ').slice(0, 200))
+  // v1.9.3：宿主 0.1.7-alpha.2 删除了插件配置插槽，配置入口内迁到「花费统计」分区内的配置页；
+  // 该分区的注册同样不得读开关（显隐必须在渲染期判定，交给 DashboardGate）。
+  const secAt = client.indexOf('slots.inject("settings.section"')
+  const secBlock = secAt < 0 ? '' : client.slice(secAt, secAt + 260)
+  check('分区内配置入口不受界面开关控制（注册时不读开关）',
+    /slots\.inject\("settings\.section"/.test(secBlock) && !/ui(Dock|Peak|Dashboard)Enabled/.test(secBlock),
+    secBlock.replace(/\s+/g, ' ').slice(0, 200))
+  check('关闭态下齿轮入口仍在同一渲染层（齿轮与看板内容互斥但同层）',
+    /cost-gear/.test(client) && /className: "cost-h1-actions"/.test(client),
+    '未找到页头齿轮 / 操作位')
 }
 
 console.log('[5] 安装辅助面：注册名与注册方式不受影响')
 {
   const client = readFileSync(join(root, 'client.js'), 'utf8')
   check('bundle 注册 id 仍是 scoped 包名', /id:\s*"@angelyeye\/dsh-cost-tracker"/.test(client))
-  check('三个插槽仍在 apply 里无条件注册',
-    ['settings.section', 'conversation.composer.dock', 'sidebar.footer.action'].every((s) => client.includes(`slots.inject("${s}"`)),
+  check('四个插槽仍在 apply 里无条件注册（含旧宿主兼容的插件配置卡片）',
+    ['settings.section', 'conversation.composer.dock', 'sidebar.footer.action'].every((s) => client.includes(`slots.inject("${s}"`))
+      && /slots\.inject\(pluginItemKey/.test(client),
     '某个落点的插槽注册被条件化了')
 }
 
