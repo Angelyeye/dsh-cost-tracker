@@ -61,7 +61,7 @@ on:
         default: false
 
 permissions:
-  contents: read
+  contents: write # 发布成功后创建 GitHub Release 与 tag（2026-09-24 起）
   id-token: write # OIDC 换取 npm 发布凭据所必需
 
 jobs:
@@ -141,3 +141,45 @@ jobs:
       - name: Publish
         if: ${{ !inputs.dry_run }}
         run: env -u NODE_AUTH_TOKEN -u NODE_AUTH -u NPM_TOKEN -u NPM_AUTH_TOKEN npm publish --access public --provenance --loglevel verbose
+
+      # 2026-09-24 新增：发布成功后自动建 GitHub Release（此前本工作流只做 npm publish，
+      # Releases 页因此从手动建的 v1.7.0 之后一直空着：1.7.1–1.9.2 共 18 个版本没有 Release）。
+      # 备注取自 CHANGELOG.md 中该版本的章节（scripts/release-notes.mjs）；章节缺失时回落
+      # 到 GitHub 自动生成备注并打 warning —— 已经发布成功的事实不该因此变成一次红色失败。
+      - name: Create GitHub Release
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # 用 node 直接读 package.json：npm pkg get 在部分 shell 下可能取不到值，
+          # 一旦退化成空串就会去建一个名为 "v" 的非法 tag（本地模拟时真实踩到过，被 GitHub 422 挡下）。
+          # `|| true` 是必要的：读取失败不能因 set -e 让「已经发布成功」的这次运行变成红色失败，
+          # 失败会在下面的版本号守卫里被判出来并只打告警。
+          VERSION="$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync("package.json","utf8")).version)' 2>/dev/null || true)"
+          TAG="v$VERSION"
+          # 版本号守卫：不合规就只告警跳过 —— 发布已经成功，不该因此变成红色失败。
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-+].*)?$'; then
+            echo "::warning::package.json 里的版本号异常（'$VERSION'），跳过 Release 创建"
+            exit 0
+          fi
+          NOTES=/tmp/release-notes.md
+          TITLE="v$VERSION"
+          if node scripts/release-notes.mjs --version "$VERSION" > "$NOTES"; then
+            NOTES_ARGS=(--notes-file "$NOTES")
+            # 标题取章节首行（形如 `**修复……**`），去掉加粗标记；过长时截断并加省略号
+            HEADLINE_FULL="$(head -n 1 "$NOTES" | sed 's/^\*\*//; s/\*\*$//' | tr -d '\r')"
+            HEADLINE="$(printf '%s' "$HEADLINE_FULL" | cut -c1-60)"
+            if [ -n "$HEADLINE" ] && [ "$HEADLINE" != "$HEADLINE_FULL" ]; then HEADLINE="$HEADLINE…"; fi
+            if [ -n "$HEADLINE" ]; then TITLE="v$VERSION — $HEADLINE"; fi
+          else
+            echo "::warning::CHANGELOG.md 缺少 v$VERSION 的章节，改用 GitHub 自动生成的备注"
+            NOTES_ARGS=(--generate-notes)
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG 已存在，更新备注"
+            gh release edit "$TAG" --title "$TITLE" "${NOTES_ARGS[@]}"
+          else
+            gh release create "$TAG" --title "$TITLE" --target "$GITHUB_SHA" "${NOTES_ARGS[@]}"
+          fi
+          gh release view "$TAG" --json tagName,name,url,isDraft,isPrerelease
