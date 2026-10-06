@@ -340,6 +340,32 @@ Example: `curl -X POST http://127.0.0.1:3080/api/cost-tracker/summary -d '{}'`
 
 > Highlights only — the full version-by-version history lives in [`CHANGELOG.md`](./CHANGELOG.md) (Chinese).
 
+### v1.9.5 (2026-10-07)
+
+**Fix "the whole Cost dashboard renders as unstyled native controls in the Desktop (Electron) app": the plugin's own `<style>` lacked a `data-plugin` ownership tag, so another module claimed it and HMR cleanup deleted it along with its own styles**
+
+- **Root cause (reproduced)**: DSH 0.2's `@deepseek-ai/dsh-client-modules` calls `claimStyles(ownerId)`,
+  which claims **every `<style>` that has no `data-plugin`** for whichever module is materializing at that
+  moment, and `removeOwnedStyles(id)` deletes all tags tagged `id` when that module is invalidated,
+  reloaded or pruned. The plugin only set `data-plugin-css`, so its stylesheet was claimed by
+  `@deepseek-ai/dsh-api-remotes` — and when that module's styles were torn down, all 170 dashboard CSS
+  rules went with it: card borders, control skins and chart grid vanished, leaving raw
+  `<select>`/`<button>` chrome;
+- **Why Desktop only**: the Electron shell serves the raw `apps/web` vite dist from `dsh-app://app/` and
+  applies the boot graph (ModuleLoader bootstrap, plugin preloads, contact config) **at runtime** over IPC;
+  the manifest `dsh-client-hmr` then pushes gives non-managed rows a different `rev`, which is exactly what
+  triggers that teardown path. `dsh web` inlines the boot graph into index.html, so materialization order
+  and revisions differ and the bug never fires there;
+- **Fix**: `client.js` now has a single source of truth `DSH_BUNDLE_ID`, and `applyStyles()` sets
+  `data-plugin` **before** appending the tag (byte-for-byte the convention the host's own packages use),
+  plus the host's duplicate-tag guard;
+- **Verification**: desktop-equivalent host + headless Edge/CDP at the same viewport as the report — before
+  the fix the emulated teardown removed the stylesheet and the dashboard became native controls; after the
+  fix the tag survives, `cssRules.length = 170` and all 6 cards keep their styling. 12 new assertions in
+  `client-render` [11] and `client-registration` [3b]; all 19 test files pass;
+- **How it takes effect**: client half only — a **hard refresh** is enough; the host half's version is
+  bumped to 1.9.5 as well.
+
 ### v1.9.4 (2026-09-24)
 
 **Fix "Volcengine Ark quota response is not valid JSON": the host's global fetch stops decompressing gzip once the `undici` package is loaded, so the plugin now decodes bodies itself**

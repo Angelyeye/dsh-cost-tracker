@@ -206,7 +206,13 @@ console.log('[4] 客户端：三个落点各自读自己的开关')
 console.log('[5] 安装辅助面：注册名与注册方式不受影响')
 {
   const client = readFileSync(join(root, 'client.js'), 'utf8')
-  check('bundle 注册 id 仍是 scoped 包名', /id:\s*"@angelyeye\/dsh-cost-tracker"/.test(client))
+  // 注册 id 现在只有一个字面量（DSH_BUNDLE_ID 常量），注册调用与自建 <style> 的
+  // data-plugin 归属标记都读它 —— 所以断言「常量本身是 scoped 包名 + 注册复用它」，
+  // 而不是断言调用点又写了一遍字面量（那样恰恰是我们要消灭的漂移源）。
+  check('bundle 注册 id 仍是 scoped 包名（单一事实源 DSH_BUNDLE_ID）',
+    /var DSH_BUNDLE_ID = "@angelyeye\/dsh-cost-tracker"/.test(client)
+      && /__ModuleLoader__\.load\(\{\s*\n\s*id: DSH_BUNDLE_ID,/.test(client)
+      && /setAttribute\("data-plugin", DSH_BUNDLE_ID\)/.test(client))
   check('四个插槽仍在 apply 里无条件注册（含旧宿主兼容的插件配置卡片）',
     ['settings.section', 'conversation.composer.dock', 'sidebar.footer.action'].every((s) => client.includes(`slots.inject("${s}"`))
       && /slots\.inject\(pluginItemKey/.test(client),

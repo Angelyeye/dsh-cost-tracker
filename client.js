@@ -6,8 +6,28 @@
 //   React         → require('react')
 // 输出为浏览器 ModuleLoader bundle：exports.apply / exports.inject
 // ============================================================
+/**
+ * 单一事实源：本 bundle 的模块 id（= package.json 的 name）。
+ * 两处消费它：
+ *   1. `__ModuleLoader__.load({ id })` —— 加载器按模块图里的 row.id 取 bundle，
+ *      注册名必须逐字一致（见文件末尾的注册名护栏）。
+ *   2. 运行时注入的 <style> 上的 `data-plugin` 归属标记（见 applyStyles）。
+ *      DSH 0.2 的客户端模块系统（@deepseek-ai/dsh-client-modules）用
+ *      `claimStyles(ownerId)` 认领样式：「已带 data-plugin 的按标注归属，
+ *      没带的一律算到当前正在物化的那个插件头上（HMR 记账）」，随后
+ *      `removeOwnedStyles(id)` 会把这些标记为 id 的 <style> 整片删除。
+ *      所以自建 <style> 必须**先**打上自己的 data-plugin 再插入，否则会被
+ *      别的模块认领，并在该模块 HMR/失效时连同我们自己的样式一起被删掉
+ *      （桌面端 Electron 外壳就是这条路径：启动期内核注入 + HMR 清单同步，
+ *      导致样式被连带清除 —— 整块看板退化为无样式的原生控件）。
+ * 注：文件末尾的注册名护栏另有一份**刻意独立**的字面量副本，见那里的说明。
+ */
+var DSH_BUNDLE_ID = "@angelyeye/dsh-cost-tracker";
+/** 本插件样式表的稳定标识（data-plugin-css 值，用于去重与盘点）。 */
+var DSH_STYLE_TAG_ID = "cost-tracker-plugin";
+
 window.__ModuleLoader__.load({
-	id: "@angelyeye/dsh-cost-tracker",
+	id: DSH_BUNDLE_ID,
 	factory: (require) => {
 		var module = { exports: {} };
 		var exports = module.exports;
@@ -283,8 +303,13 @@ window.__ModuleLoader__.load({
 .cost-subblock { border-top: .5px dashed var(--dsw-alias-border-l2, #e5e7eb); margin-top: 10px; padding-top: 10px; }
 .cost-list { font-size: 12px; color: var(--dsw-alias-label-secondary, #5b6472); line-height: 1.7; }
 `;
+			// 先打归属标记再插入：宿主在 style[data-plugin] 上做归属记账，
+			// 未标注的标签会被下一个物化的模块用 claimStyles() 认领走
+			// （随后 removeOwnedStyles() 会在该模块失效时连带删除）。
+			if (document.querySelector('style[data-plugin-css="' + DSH_STYLE_TAG_ID + '"]') !== null) return;
 			const tag = document.createElement("style");
-			tag.setAttribute("data-plugin-css", "cost-tracker-plugin");
+			tag.setAttribute("data-plugin", DSH_BUNDLE_ID);
+			tag.setAttribute("data-plugin-css", DSH_STYLE_TAG_ID);
 			tag.textContent = css;
 			document.head.appendChild(tag);
 			ctx.effect(() => () => { tag.remove(); }, "cost-tracker: styles");
@@ -2955,7 +2980,15 @@ window.__ModuleLoader__.load({
 // 同时若宿主将来改变约定，也能在控制台给出明确指引，而不是只留一句加载器报错。
 // ------------------------------------------------------------
 (function () {
-	/** 单一事实源：必须与 package.json 的 name 完全一致。 */
+	/**
+	 * 护栏自己的**独立**期望值：刻意不从 DSH_BUNDLE_ID 派生。
+	 *
+	 * 这里必须是第二份字面量：护栏的职责正是「注册名 ≠ 包名」时报警，
+	 * 若两个值来自同一个变量，注入故障后两者一起变错，护栏永远不会响
+	 * （test/client-registration.test.js 的 [4]/[5] 就是靠改写 DSH_BUNDLE_ID
+	 * 来注入故障，没有这份独立副本就测不出来）。
+	 * 三处必须逐字一致：本行、DSH_BUNDLE_ID、package.json 的 name。
+	 */
 	var _DSH_BUNDLE_ID = "@angelyeye/dsh-cost-tracker";
 	/** v1.7.0 发布时用过的旧裸名，仅用于给出针对性提示。 */
 	var _DSH_LEGACY_BARE_ID = "dsh-cost-tracker";

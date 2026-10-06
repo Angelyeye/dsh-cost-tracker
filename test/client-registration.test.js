@@ -24,6 +24,25 @@ const source = readFileSync(join(root, 'client.js'), 'utf8')
 /** 与宿主 @deepseek-ai/dsh-client-modules/lib/client.js 的 stripClientSuffix 保持一致的语义 */
 const stripClientSuffix = (spec) => String(spec).replace(/\/client$/, '')
 
+/**
+ * 故障注入：把「模块 id 的单一事实源」换成别的值。
+ *
+ * client.js 里模块 id 只有一个字面量（`var DSH_BUNDLE_ID = "<包名>"`），
+ * `__ModuleLoader__.load({ id: DSH_BUNDLE_ID })` 与自建 <style> 的 data-plugin
+ * 归属标记都复用它 —— 所以注入点也只有这一处，注入后两个消费点同时变错，
+ * 正是要复现的 v1.7.0 事故形态。
+ *
+ * @param text - client.js 源码。
+ * @param id - 要写进去的错误 id。
+ * @returns 替换后的源码。
+ * @throws 当源码里找不到唯一事实源声明时（防「测试悄悄失去注入能力」）。
+ */
+function corruptBundleId(text, id) {
+  const patched = text.replace(/(var DSH_BUNDLE_ID = )"[^"]*"/, `$1"${id}"`)
+  if (patched === text) throw new Error('未能替换 client.js 中的 DSH_BUNDLE_ID 字面量')
+  return patched
+}
+
 let failures = 0
 function check(name, condition, detail) {
   if (condition) {
@@ -130,14 +149,29 @@ console.log('\n[3] 尾部 "/client" 写法同样通过')
   check(`"${pkg.name}/client" strip 后命中包名`, factories.has(pkg.name))
 }
 
+// ---- 3b. 归属标记（data-plugin）与注册 id 共用同一个事实源 ----
+// client.js 里模块 id 只有一个字面量（var DSH_BUNDLE_ID），注册与 <style> 的
+// data-plugin 都读它；护栏那行是**刻意独立**的第二份副本（见 client.js 注释），
+// 两份都必须等于 package.json 的 name，否则运行期 HMR 会误删本插件样式。
+console.log('\n[3b] data-plugin 归属标记与注册 id 同源')
+{
+  const m = /var DSH_BUNDLE_ID = "([^"]*)"/.exec(source)
+  check('存在模块 id 单一事实源 DSH_BUNDLE_ID', !!m, '未找到 var DSH_BUNDLE_ID = "..."')
+  check(`DSH_BUNDLE_ID 等于包名（${pkg.name}）`, !!m && m[1] === pkg.name, m ? m[1] : 'missing')
+  check('注册调用复用 DSH_BUNDLE_ID（不再手写第二份字面量）',
+    /__ModuleLoader__\.load\(\{\s*\n\s*id: DSH_BUNDLE_ID,/.test(source))
+  check('样式表 data-plugin 复用 DSH_BUNDLE_ID',
+    /setAttribute\("data-plugin", DSH_BUNDLE_ID\)/.test(source))
+  const g = /var _DSH_BUNDLE_ID = "([^"]*)"/.exec(source)
+  check('护栏的独立期望值同样等于包名',
+    !!g && g[1] === pkg.name, g ? g[1] : 'missing')
+}
+
 // ---- 4. 反向验证：裸名必须被判定为不一致（复现 v1.7.0 的故障） ----
 console.log('\n[4] 反向验证：注册名不等于包名时必须报警')
 {
   const bare = pkg.name.includes('/') ? pkg.name.split('/').pop() : `${pkg.name}-wrong`
-  const patched = source.replace(
-    /(id:\s*)"[^"]*"/,
-    `$1"${bare}"`,
-  )
+  const patched = corruptBundleId(source, bare)
   if (patched === source) {
     check('能够构造出错样本', false, '未能替换 client.js 中的 id 字面量')
   } else {
@@ -175,7 +209,7 @@ console.log('\n[4] 反向验证：注册名不等于包名时必须报警')
 console.log('\n[5] pending queue 模式（loader 尚未就绪）')
 {
   const bare = pkg.name.includes('/') ? pkg.name.split('/').pop() : `${pkg.name}-wrong`
-  const patched = source.replace(/(id:\s*)"[^"]*"/, `$1"${bare}"`)
+  const patched = corruptBundleId(source, bare)
   const errors = []
   const queue = []
   const sandbox = {

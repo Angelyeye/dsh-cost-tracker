@@ -341,6 +341,28 @@ POST /api/cost-tracker/export       导出 CSV
 
 > 这里只列重要版本;逐版完整记录见 [`CHANGELOG.md`](./CHANGELOG.md)。
 
+### v1.9.5(2026-10-07)
+
+**修复「桌面端（Electron 外壳）花费统计整块看板变成无样式原生控件」：自建 `<style>` 缺 `data-plugin` 归属标记，被别的模块认领后在 HMR 清理时连带删除**
+
+- **根因（已复现）**：DSH 0.2 的 `@deepseek-ai/dsh-client-modules` 用
+  `claimStyles(ownerId)` 把**所有没带 `data-plugin` 的 `<style>` 认领给当时正在物化的模块**，
+  再用 `removeOwnedStyles(id)` 在该模块 HMR 失效 / 重载 / 剪枝时整片删除。
+  插件旧实现只打了 `data-plugin-css`，实测样式表被 `@deepseek-ai/dsh-api-remotes` 认领，
+  该模块一被清理就带走看板的 170 条 CSS 规则 —— 卡片边框、控件皮肤、图表网格全部消失，
+  界面退化成浏览器默认的 `<select>`/`<button>` 排版；
+- **为什么只在桌面端**：Electron 外壳把 `apps/web` 的原始 vite dist 从 `dsh-app://app/` 提供，
+  启动图（ModuleLoader 引导、插件 preload、contact config）改由 IPC 取回后在**运行期注入**，
+  随后 `dsh-client-hmr` 推送的清单让非托管行的 `rev` 与初始值不一致，正好命中那条清理路径；
+  浏览器里的 `dsh web` 把启动图内联在 index.html 里，物化顺序与 rev 都不同，所以看不到；
+- **修法**：`client.js` 新增模块 id 单一事实源 `DSH_BUNDLE_ID`，`applyStyles()` 改为
+  **先 `setAttribute("data-plugin", DSH_BUNDLE_ID)` 再插入**（与宿主自带包 `tag.dataset.plugin = "<包名>"`
+  的约定逐字对齐），并补上宿主同款去重护栏；
+- **验证**：桌面端等价宿主 + 无头 Edge/CDP（与用户截图同视口）—— 修复前模拟该模块清理后样式表被删、
+  看板变原生控件；修复后同样清理，标签存活、`cssRules.length = 170`、6 张卡片样式完好。
+  新增 `client-render` [11] 与 `client-registration` [3b] 共 12 条断言，全量 19 个测试文件通过；
+- **生效条件**：只改客户端半端，**浏览器硬刷新**即可；宿主半端版本号同步升到 1.9.5。
+
 ### v1.9.4(2026-09-24)
 
 **修复「火山方舟配额响应不是合法 JSON」：宿主全局 fetch 被 undici 包污染后不解压 gzip，插件改为自带解压兜底**

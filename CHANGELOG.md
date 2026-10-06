@@ -2,6 +2,82 @@
 
 本文件用中文记录 dsh-cost-tracker 的版本变更。
 
+## v1.9.5(2026-10-07)
+
+**修复「桌面端（Electron 外壳）花费统计整块看板变成无样式原生控件」—— 自建 `<style>` 缺 `data-plugin` 归属标记，被 DSH 客户端模块系统认领给别的模块后在 HMR 清理时连带删除**
+
+### 一、根因（已复现并逐帧比对）
+
+DSH 0.2 的客户端模块系统 `@deepseek-ai/dsh-client-modules/lib/client.js` 用两个函数管理插件样式表：
+
+```js
+// 物化（materialize）一个模块的 factory 之后立刻盘点样式
+const claimStyles = (id) => {
+  for (const el of document.querySelectorAll("style:not([data-plugin])")) el.setAttribute("data-plugin", id); // ← 无主的全认领
+  ...
+};
+// 某个模块被 HMR 失效 / 重载 / 剪枝时清理它的样式
+function removeOwnedStyles(id) {
+  for (const el of document.querySelectorAll("style[data-plugin]")) if (el.getAttribute("data-plugin") === id) el.remove();
+}
+```
+
+**没打 `data-plugin` 的 `<style>` 会被「当时正在物化的那个模块」认领走。** 插件旧实现只打了
+`data-plugin-css`，于是自己的样式表被登记在别的模块名下（本机实测被
+`@deepseek-ai/dsh-api-remotes` 认领）。该模块一旦走到 `removeOwnedStyles(id)`
+（HMR 清单里 `rev` 变化 → `updateManifest` 的 invalidate 分支、`reload()` 的非托管分支、
+entry 重载、`prune()` 剪枝、factory 抛错的 catch），**连带把整块花费统计看板的 170 条
+CSS 规则一起删掉**，界面退化成浏览器默认的 `<select>`/`<button>`/复选框排版：卡片边框、
+38 处自定义控件皮肤、图表网格与图例全部消失。
+
+为什么只在桌面端出现：Electron 外壳把 `apps/web` 的**原始 vite dist** 从
+`dsh-app://app/` 提供（`resources/app.asar/dsh/node_modules/@deepseek-ai/dsh-web-frontend/dist`），
+启动图（`__ModuleLoader__` 队列引导、插件 `<link rel=preload>`、`__DSH_CONTACT_CONFIG__`）
+改由 IPC 取回 `ctx.webServer.collectIndexInjections()` 后**在运行期注入**；`dsh-client-hmr`
+随后推送的清单会让若干非托管行的 `rev` 与初始值不一致，触发上面那条清理路径。
+浏览器里的 `dsh web` 是宿主直接把启动图内联进 index.html，物化顺序不同、清单 rev 与本次启动一致，
+所以看不到 —— 这也解释了「同一个插件、同一份 client.js，网页版正常、桌面端无样式」。
+
+**归属标记在插入前就要写好**：`claimStyles` 只认「当前是否已带 `data-plugin`」，
+插入后再补标会留下一个未被认领的窗口。
+
+### 二、修法（`client.js`）
+
+1. 新增模块 id 单一事实源 `var DSH_BUNDLE_ID = "@angelyeye/dsh-cost-tracker"`，
+   `__ModuleLoader__.load({ id })` 与样式归属标记共用它；
+2. `applyStyles()` 改为**先打标再插入**：
+   ```js
+   tag.setAttribute("data-plugin", DSH_BUNDLE_ID);
+   tag.setAttribute("data-plugin-css", DSH_STYLE_TAG_ID);
+   ```
+   与宿主自带包的写法（`tag.dataset.plugin = "<包名>"`）逐字对齐；
+3. 顺带加上宿主同款去重护栏（`style[data-plugin-css="cost-tracker-plugin"]` 已存在就不再插第二张）；
+4. 文件末尾注册名护栏保留它**刻意独立**的字面量副本（若与 `DSH_BUNDLE_ID` 同源，
+   故障注入测试就永远测不出「注册名 ≠ 包名」了）。
+
+### 三、验证
+
+- 真机复现（桌面端 profile 的等价宿主 + 无头 Edge/CDP，1280×820，与用户截图同视口）：
+  - 修复前：插件样式表 `data-plugin = "@deepseek-ai/dsh-api-remotes"`（被误认领），
+    模拟该模块的 `removeOwnedStyles` → 样式标签 1 张被删、看板立刻变成无样式原生控件，
+    与用户截图逐项一致；
+  - 修复后：`data-plugin = "@angelyeye/dsh-cost-tracker"`，同样触发
+    `@deepseek-ai/dsh-api-remotes` 的清理 → 标签存活、`sheet.cssRules.length = 170`、
+    6 张卡片仍在（`border-radius: 10px`、数值 `font-size: 24px`），截图正常。
+  - 极端对照：把 47 个无关模块的 168 张样式全删，本插件看板依然保持有样式。
+- `test/client-render.test.js` 新增 [11]（7 条断言）：恰好注入一张样式表、
+  `data-plugin` 等于 bundle 注册名、`data-plugin-css` 保留、正文含关键规则、
+  打标早于 `head.appendChild`、注册 id 与归属标记同源；
+- `test/client-registration.test.js` 新增 [3b]（5 条断言）钉住单一事实源与独立护栏副本，
+  故障注入改为改写 `DSH_BUNDLE_ID`（同时覆盖注册与归属标记两个消费点）；
+- 全量 19 个测试文件通过。
+
+### 四、说明
+
+- 只改客户端半端 `client.js`：不动任何计费/同步口径，HTTP 面、配置键、落盘路径、云端契约零改动；
+- 客户端半端换版后**浏览器硬刷新**即可生效；另需确认宿主半端也已是新版（`index.js`/`PLUGIN_VERSION`）；
+- 同生态插件若自建 `<style>` 且只打 `data-plugin-css`，会踩同一个坑（本仓库的 `dshmarket` 已按约定打标）。
+
 ## v1.9.4(2026-09-24)
 
 **修复「配额查询不可用：火山方舟配额响应不是合法 JSON（GetCodingPlanUsage）」—— 宿主全局 fetch 被 undici 包污染后不解压 gzip，插件改为自带解压兜底**

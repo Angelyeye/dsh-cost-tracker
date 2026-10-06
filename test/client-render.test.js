@@ -165,6 +165,7 @@ const React = {
 function makeModule({ view = null, syncView = 'local' } = {}) {
   let captured = null
   const apiLog = []
+  const styleTags = []
   const sandbox = {
     window: {
       __ModuleLoader__: { load: (reg) => { captured = reg } },
@@ -174,7 +175,16 @@ function makeModule({ view = null, syncView = 'local' } = {}) {
       location: { search: '' },
     },
     document: {
-      createElement: () => ({ style: {}, set textContent(v) {}, appendChild() {}, setAttribute() {}, click() {}, remove() {} }),
+      createElement: (tagName) => {
+        const el = {
+          tagName, style: {}, attrs: {}, textContent: '',
+          setAttribute(n, v) { this.attrs[n] = String(v) },
+          getAttribute(n) { return n in this.attrs ? this.attrs[n] : null },
+          appendChild() {}, click() {}, remove() { el.removed = true },
+        }
+        if (String(tagName).toLowerCase() === 'style') styleTags.push(el)
+        return el
+      },
       head: { appendChild() {} },
       body: { appendChild() {}, removeChild() {} },
       querySelector: () => null,
@@ -199,7 +209,7 @@ function makeModule({ view = null, syncView = 'local' } = {}) {
     throw new Error('未预期的模块: ' + spec)
   }
 
-  const out = { bundleId: captured && captured.id, section: null, card: null, cardMeta: null, injected: [], applyError: '', surfaces: {}, apiLog }
+  const out = { bundleId: captured && captured.id, section: null, card: null, cardMeta: null, injected: [], applyError: '', surfaces: {}, apiLog, styleTags }
   const slots = {
     entries: () => [],
     inject: (name, cb) => { out.injected.push(name); try { cb() } catch (e) { out.injected.push('!!' + name + ':' + e.message) } return () => {} },
@@ -786,6 +796,45 @@ console.log('[10] 法定节假日相位文案')
     JSON.stringify(legacySide.text.replace(/\s+/g, ' ').slice(0, 120)))
 
   peakPhaseOverride = null
+}
+
+// ---------- [11] 自建 <style> 的归属标记（桌面端样式整片消失的根因护栏） ----------
+// 事故背景：DSH 0.2 的客户端模块系统（@deepseek-ai/dsh-client-modules）用
+//   claimStyles(ownerId)：把「没有 data-plugin 的 <style>」一律认领给当时正在
+//   物化的那个插件；随后 removeOwnedStyles(id) 会把标记为 id 的 <style> 整片删除。
+// 插件旧实现只打了 data-plugin-css、没打 data-plugin，于是自己的样式表被
+// @deepseek-ai/dsh-api-remotes 之类的无关模块认领；该模块在 HMR/失效路径上
+// 被 removeOwnedStyles 清理时，连带把整块花费统计看板的样式一起删掉，
+// 表现为桌面端（Electron 外壳）看板退化成原生控件的无样式排版。
+// 宿主自带包的写法是 tag.dataset.plugin = "<包名>" —— 本断言钉住同一约定。
+console.log('[11] 自建样式表的 data-plugin 归属标记')
+{
+  const styleMod = makeModule({ view: REAL_VIEW, syncView: 'local' })
+  check('apply 期间注入了恰好一张样式表',
+    styleMod.styleTags.length === 1, `styleTags=${styleMod.styleTags.length}`)
+  const tag = styleMod.styleTags[0]
+  check('样式表带 data-plugin 归属标记（宿主 claimStyles 的认领前置条件）',
+    tag && tag.getAttribute('data-plugin') === '@angelyeye/dsh-cost-tracker',
+    tag ? String(tag.getAttribute('data-plugin')) : 'no tag')
+  check('data-plugin 与 bundle 注册名逐字一致（否则仍会被 removeOwnedStyles 误删）',
+    !!tag && tag.getAttribute('data-plugin') === styleMod.bundleId,
+    `${tag && tag.getAttribute('data-plugin')} vs ${styleMod.bundleId}`)
+  check('data-plugin-css 仍保留（盘点/去重标识）',
+    !!tag && tag.getAttribute('data-plugin-css') === 'cost-tracker-plugin',
+    tag ? String(tag.getAttribute('data-plugin-css')) : 'no tag')
+  check('样式正文非空且含关键规则',
+    !!tag && tag.textContent.includes('.cost-card-value') && tag.textContent.includes('.cost-wrap'),
+    tag ? `len=${tag.textContent.length}` : 'no tag')
+  // 归属必须在插入 document.head 之前就写好：模块系统在物化返回时才盘点，
+  // 插入后再补标会有一个「未被认领」的窗口。
+  check('源码里 data-plugin 的赋值早于 head.appendChild',
+    source.indexOf('setAttribute("data-plugin", DSH_BUNDLE_ID)') !== -1
+      && source.indexOf('setAttribute("data-plugin", DSH_BUNDLE_ID)') < source.indexOf('document.head.appendChild(tag)'),
+    'client.js 必须先打标再插入')
+  check('bundle 注册 id 与 data-plugin 共用同一个事实源 DSH_BUNDLE_ID',
+    /var DSH_BUNDLE_ID = "@angelyeye\/dsh-cost-tracker";/.test(source)
+      && /id: DSH_BUNDLE_ID,/.test(source),
+    '不要在两处各写一份字面量')
 }
 
 console.log('')
