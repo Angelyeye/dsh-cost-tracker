@@ -373,10 +373,18 @@ export function subscriptionPlanFor(np, model) {
   return null
 }
 
-/** Provider 兜底单价（估算）；缓存写入按缓存命中价计。
- *  deepseek 兜底已同步至 V4.1 Flash 档（2.0/8.0/0.04），未知模型不再按旧价高估。 */
+/** DeepSeek 官方渠道的兜底单价（含峰谷 tiered）。
+ *  兜底已同步至 V4.1 Flash 档（2.0/8.0/0.04），未知模型不再按旧价高估。 */
+const DEEPSEEK_PROVIDER_RATES = { rates: { input: 2.0, output: 8.0, cacheRead: 0.04, cacheWrite: 0.04 }, tiered: true }
+
+/** Provider 兜底单价（估算）；缓存写入按缓存命中价计。 */
 export const PROVIDER_RATES = {
-  deepseek: { rates: { input: 2.0, output: 8.0, cacheRead: 0.04, cacheWrite: 0.04 }, tiered: true },
+  deepseek: DEEPSEEK_PROVIDER_RATES,
+  // DSH 0.2.x「DeepSeek 账号登录」的推理 provider 名是 `deepseek-account`
+  // （鉴权走 x-dsh-auth-token，模型与官方单价仍是同一套）。不登记它的话，
+  // 精确价表之外的模型会落到 GENERIC_RATES（缓存价 0.5 而非 0.04、且无峰谷半价），
+  // 账号态的新模型会被静默高估 —— 所以这里与 deepseek 共用同一份兜底价。
+  'deepseek-account': DEEPSEEK_PROVIDER_RATES,
   openai: { rates: { input: 10.0, output: 30.0, cacheRead: 5.0, cacheWrite: 5.0 }, tiered: false },
   anthropic: { rates: { input: 15.0, output: 75.0, cacheRead: 1.5, cacheWrite: 1.5 }, tiered: false },
   gemini: { rates: { input: 2.5, output: 10.0, cacheRead: 0.625, cacheWrite: 0.625 }, tiered: false },

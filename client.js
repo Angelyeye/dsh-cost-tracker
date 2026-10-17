@@ -927,6 +927,45 @@ window.__ModuleLoader__.load({
 					: e("span", { className: "cost-hint" }, "峰谷时段（北京时间）：" + peakWindows + " · 闲时半价"));
 		}
 
+		// 余额金额的展示格式化。
+		// 账号登录态的钱包金额是 Platform 原样返回的十进制字符串，实测**16 位小数**
+		// （例如 "1234.5600000000000000"）—— 直接拼进界面会显示成 16 位有效数字，
+		// 既难读也会让人误以为精度有意义。这里按 DSH 官方「账号与余额」页的口径：
+		// 正金额**截断**到分（不四舍五入，官方就是截断），不足一分的正金额显示 <0.01；
+		// 负数保留符号。API Key 态本来就是两位小数，走同一函数不改变结果。
+		function fmtBalanceAmount(v) {
+			let s = String(v === null || v === undefined ? "" : v).trim();
+			// 与运行时一致，接受省略整数/小数部分与十进制指数（Platform 会返回 "0E-16" 这类值）
+			const m = /^([+-]?)(\d*)(?:\.(\d*))?(?:[eE]([+-]?\d+))?$/.exec(s);
+			if (!m || (!m[2] && !m[3])) return s || "0";
+			const neg = m[1] === "-";
+			let intPart = m[2] || "";
+			let frac = m[3] || "";
+			const exp = m[4] ? parseInt(m[4], 10) : 0;
+			if (exp) {
+				// 展示用：把指数并进小数点位置；指数过大时不硬撑（返回原串，避免生成巨长字符串）
+				if (Math.abs(exp) > 30) return s;
+				const digits = intPart + frac;
+				const point = intPart.length + exp;
+				if (point <= 0) {
+					intPart = "0";
+					frac = "0".repeat(-point) + digits;
+				} else if (point >= digits.length) {
+					intPart = digits + "0".repeat(point - digits.length);
+					frac = "";
+				} else {
+					intPart = digits.slice(0, point);
+					frac = digits.slice(point);
+				}
+			}
+			intPart = intPart.replace(/^0+(?=\d)/, "") || "0";
+			const cents = (frac + "00").slice(0, 2);
+			const out = intPart + "." + cents;
+			// 正的不足一分：官方口径显示 <0.01（不能显示 0.00，那会被读成没余额）
+			if (!neg && out === "0.00" && /[1-9]/.test(frac)) return "<0.01";
+			return (neg ? "-" : "") + out;
+		}
+
 		function statCards(dash, balance, viewCtl, planTotal) {
 			const today = dash.today || { real: 0, calls: 0, tokens: 0, sub: 0, subCalls: 0, subTokens: 0 };
 			const month = dash.month || { real: 0, calls: 0, tokens: 0, sub: 0, subCalls: 0, subTokens: 0 };
@@ -943,11 +982,19 @@ window.__ModuleLoader__.load({
 				return base + (t.sub > 0 ? " · 订阅 ¥" + fmtMoney(t.sub) : "");
 			};
 			const planBadge = planTotal ? "（含 Plan）" : "";
-			// 余额卡
-			let balValue = "—", balSub = "查询中…";
+			// 余额卡：两种口径（v1.9.6）
+			//   · 账号登录态（DSH 0.2.1-rc.2+，source="account"）：Platform 钱包，
+			//     充值 / 赠金分离，没有官方的 is_available 标志（宿主 getBalance 不返回）；
+			//   · API Key 态（source="apikey"）：api.deepseek.com/user/balance，带 is_available。
+			let balValue = "—", balSub = "查询中…", balTitle = "总余额（CNY）";
 			if (balance && balance.ok) {
-				balValue = "¥" + (balance.total || "0");
-				balSub = (balance.available ? "可用" : "不可用") + " · 充值 ¥" + (balance.toppedUp || "0") + " · 赠送 ¥" + (balance.granted || "0") + " · " + (balance.keySource || "");
+				const isAccount = balance.source === "account";
+				const sym = balance.currency === "USD" ? "$" : "¥";
+				if (balance.currency) balTitle = "总余额（" + balance.currency + "）";
+				balValue = sym + fmtBalanceAmount(balance.total || "0");
+				balSub = isAccount
+					? "账号登录 · 充值 " + sym + fmtBalanceAmount(balance.toppedUp || "0") + " · 赠金 " + sym + fmtBalanceAmount(balance.granted || "0")
+					: (balance.available ? "可用" : "不可用") + " · 充值 " + sym + fmtBalanceAmount(balance.toppedUp || "0") + " · 赠送 " + sym + fmtBalanceAmount(balance.granted || "0") + " · " + (balance.keySource || "");
 			} else if (balance && balance.error) {
 				balSub = balance.error;
 			}
@@ -969,7 +1016,7 @@ window.__ModuleLoader__.load({
 					"按量 " + fmtInt(all.calls) + " · 订阅 " + fmtInt(all.subCalls)),
 				statCard("Tokens", fmtInt(all.tokens + all.subTokens),
 					"按量 " + fmtCompact(all.tokens) + " · 订阅 " + fmtCompact(all.subTokens)),
-				statCard("总余额（CNY）", balValue, balSub));
+				statCard(balTitle, balValue, balSub));
 		}
 
 		function mainPanel(dash, tab, setTab, scheme, setScheme, planTotal) {
@@ -1168,16 +1215,21 @@ window.__ModuleLoader__.load({
 			} else if (!balance.ok) {
 				body = e("div", { className: "cost-err" }, "余额查询失败：" + (balance.error || "未知错误"));
 			} else {
+				// 账号登录态：Platform 钱包（充值 / 赠金分开列示，与 DSH 官方「账号与余额」页口径一致）
+				const isAccount = balance.source === "account";
+				const sym = balance.currency === "USD" ? "$" : "¥";
 				body = e("div", { className: "cost-row", style: { gap: "4px" } },
-					kv("总余额", "¥" + balance.total),
-					kv("充值余额", "¥" + balance.toppedUp),
-					kv("赠送余额", "¥" + balance.granted),
-					kv("状态", balance.available ? "可用" : "不可用"),
-					e("span", { className: "cost-hint" }, "Key 来源：" + balance.keySource));
+					kv(isAccount ? "账号总余额" : "总余额", sym + fmtBalanceAmount(balance.total)),
+					kv("充值余额", sym + fmtBalanceAmount(balance.toppedUp)),
+					kv(isAccount ? "赠金余额" : "赠送余额", sym + fmtBalanceAmount(balance.granted)),
+					kv("状态", isAccount ? "账号登录" : (balance.available ? "可用" : "不可用")),
+					e("span", { className: "cost-hint" }, isAccount ? "来源：DeepSeek 账号登录（Platform 钱包）" : "Key 来源：" + balance.keySource));
 			}
 			return e("div", { className: "cost-panel" },
 				e("div", { className: "cost-row" }, e("span", { className: "cost-panel-title" }, "账户余额 · DeepSeek")),
 				e("div", { style: { marginTop: "8px" } }, body),
+				e("div", { className: "cost-hint", style: { marginTop: "6px" } },
+					"已登录 DeepSeek 账号时显示 Platform 钱包（充值 / 赠金）；手动填入 API Key 则按 api.deepseek.com 的账户余额查询。"),
 				e("div", { className: "cost-row", style: { marginTop: "10px" } },
 					e("input", { className: "cost-input", placeholder: "手动输入 DeepSeek API Key（sk-…）", value: manualKey, onChange: ev => setManualKey(ev.target.value) }),
 					e("button", { className: "cost-btn", onClick: () => onQuery(manualKey) }, "查询")));
@@ -2669,8 +2721,16 @@ window.__ModuleLoader__.load({
 					else setUsageErr(v && v.error ? String(v.error) : "数据加载失败");
 				}).catch(err => setUsageErr(String(err && err.message ? err.message : err)));
 			}
+			// 账号余额查询的 client 元数据：DSH 0.2.1-rc.2 的 deepseekAccount.getBalance(client)
+			// 把这三个字段直接拼进 x-client-* 请求头，缺一个就抛 TypeError。
+			// locale 用浏览器语言、时区偏移用浏览器时区（宿主侧也有兜底，这里给更准的值）。
+			function balanceClientMeta() {
+				let locale = "";
+				try { locale = (window.navigator && window.navigator.language) || ""; } catch (e) {}
+				return { locale: locale, timezoneOffsetSeconds: -new Date().getTimezoneOffset() * 60 };
+			}
 			function loadBalance(key) {
-				apiCall("balance", key ? { apiKey: key } : {}).then(v => setBalance(v)).catch(() => {});
+				apiCall("balance", Object.assign(balanceClientMeta(), key ? { apiKey: key } : {})).then(v => setBalance(v)).catch(() => {});
 			}
 			function onExport() {
 				setBusy(true); setMsg("导出中…");
@@ -2689,7 +2749,7 @@ window.__ModuleLoader__.load({
 				apiCall("kimi-usage", { force: false }).then(v => setKimi(v)).catch(() => {});
 				apiCall("volcengine-usage", { force: false }).then(v => setVolc(v)).catch(() => {});
 				loadCloudUsage(view);
-				apiCall("balance", {}).then(v => { setBalance(v); setBusy(false); }).catch(() => setBusy(false));
+				apiCall("balance", balanceClientMeta()).then(v => { setBalance(v); setBusy(false); }).catch(() => setBusy(false));
 			}
 
 			useEffect(() => { loadDash(days); }, [days]);

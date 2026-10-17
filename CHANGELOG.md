@@ -2,6 +2,59 @@
 
 本文件用中文记录 dsh-cost-tracker 的版本变更。
 
+## v1.9.6(2026-10-17)
+
+**新增：余额查询兼容 DSH「DeepSeek 账号登录」——账号态改走宿主 `deepseekAccount.getBalance()`，读取 Platform 钱包（充值 / 赠金）；API Key 路径原样保留**
+
+### 一、问题：账号登录用户查不到余额
+
+DSH 的浏览器 PKCE 账号登录（`@deepseek-ai/dsh-deepseek-account` + `dsh-deepseek-account-platform`，0.1.7-alpha.1 起引入）把授权写进 credentials 的 **record** `deepseek-account-platform/default`（`{version, token, issuer}`），**从不写 ref**。而 `credentials.resolve()` 只查 refs 半区 —— 所以：
+
+- 账号 token 没有 ref 名，`resolve('DEEPSEEK_API_KEY')` 取不到它；
+- 账号态推理用 `x-dsh-auth-token` 走 Platform 网关，运行时 `dsh-llm-deepseek-account` 与 `dsh-llm-deepseek` 的 README 都写明「**不会回退到 API key**」，两条路由互斥；
+- 全 asar 扫描中 `api.deepseek.com/user/balance`、`total_balance`、`granted_balance`、`topped_up_balance` 命中数均为 0 —— 说明「登录后拿 key 去查 api.deepseek.com」这条路在 0.2.x 里根本不存在。
+
+结论：只认 `DEEPSEEK_API_KEY` 的旧实现，在纯账号态下必然报「未找到 DeepSeek API Key」，不是配置问题。
+
+### 二、改法：新增账号余额来源，优先级三级
+
+```
+面板手填 API Key  >  账号登录态（宿主服务）  >  配置/环境里的 API Key
+```
+
+- **账号登录态**：`ctx.get('deepseekAccount').getBalance(client)`，数据源为 Platform 的 `GET /api/v0/users/get_user_summary`，返回 `null`（未登录/凭据失效换代）| `{status:'failed'}`（网络/超时/协议）| `{status:'ready', value:[充值钱包], bonusWallets:[赠金钱包]}`。
+- **client 元数据三字段必填**：`version` / `locale` / `timezoneOffsetSeconds` 会被运行时直接拼进 `x-client-*` 请求头，缺一个就抛 `TypeError`（实测：无参 → `reading 'version'`，`{}` → `reading 'toLowerCase'`）。宿主侧一律补齐，浏览器半端再把 `navigator.language` 与本机时区传上来覆盖。
+- **手填 Key 仍最高优先**：那是用户显式动作，意图最强。
+- **账号态失败不回退 API Key**：账号已登录时回退会显示**另一个账户**的数字，比报错更误导；失败信息里直接给出出路（手动填 Key）。
+- **旧宿主零影响**：没有 `deepseekAccount` 服务的 DSH 自动走原路径，文案与 v1.9.5 逐字一致，不做版本号判断。
+
+### 三、口径与字段
+
+- 账号态「总余额」= 同币种充值钱包合计 + 同币种赠金合计，用 **BigInt 精确十进制加法**（不经 `Number`，`0.1+0.2` 不出现 `0.30000000000000004`；Platform 返回的 `0E-16` 这类零值统一显示为 `0`）。
+- 账号态 `available` 返回 **null**（Platform 摘要没有 `is_available`，不把「未知」渲染成「不可用」）；API Key 态仍为布尔。
+- 多币种：卡片按 `CNY > USD > 其它` 选主币种，符号与标题跟随币种（USD 不再一律显示 `¥`），完整钱包列表放在 `wallets` / `currencies` 里。
+- **展示精度**：Platform 钱包金额实测是 **16 位小数**（形如 `1234.5600000000000000`）。界面按 DSH 官方「账号与余额」页口径**截断到分**（不四舍五入）、正的不足一分显示 `<0.01`、零显示 `0.00`、负数保留符号；同时兼容 `0E-16` 这类指数写法（指数 > 30 时不硬展开）。**接口返回值保持原始精度不截断**，展示与数据分离。
+- 响应新增 `source: 'account' | 'apikey' | 'none'`；`total` / `granted` / `toppedUp` / `currency` / `keySource` 等旧字段全部保留（`keySource` 账号态为 `account`）。
+
+### 四、顺带修复（同一轮 0.2.x 兼容审计发现）
+
+- **历史导入对 v4 会话静默失效**：0.2.x 起宿主把新会话写成 `session.v4.jsonl.zstd`，而 `import.js` 只枚举 `session.v3.jsonl.zstd` / `session.v3.jsonl` / `session.jsonl.zstd` / `session.jsonl` 四个硬编码名字 —— v4 及以后的新会话被**静默跳过**（导入清单里 0 个 v4、无任何报错，只表现为「历史导入不再补录新会话」）。本机实测：`.dsh\sessions` 下 68 个 v4 + 20 个 v3 + 10 个 legacy，修复前 `listSessionLogs()` 只返回 29 个。**内容层本来是兼容的**（抽样实测 v4 日志能正常回放出调用（Lead 样本 1160 事件 → 132 调用；verifier 另证与同目录 v3 的调用集合一致），`usage` / `message.source` 形状未变），断点只在文件名。现改为按 `session[.vN].jsonl[.zstd]` 正则识别，**版本号高者优先、同版本 zstd 优先**，宿主将来升 v5/v6 不需要再改枚举；新增 `test/session-log-v4.test.js`（含 v5 前瞻与真实目录交叉核对）。
+- **账号态 provider 的兜底价**：账号登录的推理 provider 名是 `deepseek-account`，原先不在 `PROVIDER_RATES` 里。现役模型能命中 provider 无关的精确价表（实测 100% 命中、`estimated:false`），但**表外的新模型**会落到 `GENERIC_RATES`（缓存价 0.5 而非 0.04、且无峰谷半价）→ 费用被静默高估。现把 `deepseek-account` 登记为与 `deepseek` 共用同一份兜底价（`pricing.js`）。
+- **`settings` 读取迁移到 0.2.x 的 `describe()`（原为静默降级）**：0.2.x 的 `SettingsForms` 已无 `get()`（只剩 `configure/describe/update/replace/mutate/write/prepareDocument`），插件原来的 `deepseekKeyEnv()` / `kimiKeyEnv()` / 火山 AK 候选链会抛 TypeError 并被各自 try/catch 吞掉 → **恒走硬编码默认名**。默认名与官方一致，标准部署看不出问题；但**自定义 `apiKeyEnv`** 的部署会去查一个不存在的 Key 名（表现为「明明配了 Key 却报未找到」）。0.2.x 的正确读法是 `settings.describe()` —— 它返回全部条目的表单描述，`row.value` 即该条目 volatile 字段的**生效值**（`apiKeyEnv` 正是 `.volatile()` 字段）。新增 `settings.js` 做「describe() 优先、get() 兜底」的双 API 兼容读，并按 settings 实例做 10s 短缓存（describe 是全量投影，余额/Kimi/火山三个入口一次刷新会各调一次）。旧宿主行为完全不变；新增 `test/settings-compat.test.js`（两套 API、优先级、缓存、边界，以及「0.2.x 自定义 ref 真的被用来查 Key」的端到端断言）。
+- **修掉既有测试腐化**：`test/import.test.js` 的「看板读到导入记录的总花费」用 `dashboard {days:30}`（相对当前时间）去断言固定日期 fixture（2026-09-15 起），2026-10-15 之后必然假失败 —— 它断言的是**口径**（导入记录要进看板）而非时间窗口，改为足够宽的窗口覆盖 fixture。这是 `npm test` 在 CI 上变红、进而挡住发布的根因。
+
+### 五、新增测试
+
+`test/balance-account.test.js`：用真实文件 + 真实 HTTP 处理器跑，不打模块内桩：账号 ready 投影、未登录回退 Key、手填 Key 优先（且不调用账号服务）、账号失败不静默回退、`getBalance` 返回 `undefined` 按契约外失败处理（**不**当作未登录回退，否则会显示另一个账户的余额）、旧宿主文案不变、`client` 三字段必填、精确十进制加法、客户端来源判定与币种显示、展示格式化（从 bundle 源码取函数在 VM 里求值）、账号态 provider 兜底价、settings 双 API 端到端。
+
+`test/session-log-v4.test.js`：`session[.vN].jsonl[.zstd]` 全版本枚举（v3/v4/v5/无版本/plain/zstd/空目录/非会话文件），并对照本机真实 `.dsh\sessions` 校验「磁盘上的 v4 全部被枚举到」。
+
+`test/settings-compat.test.js`：`readSettingsSection()` 的双 API 兼容读（旧宿主 `get()` / 0.2.x `describe()` / 两者都在时 describe 优先 / 都不可用 / 抛错 / 非数组 / 非对象 / ns 非法）、10s 缓存与显式失效、不同 settings 实例互不串味。
+
+> 测试口径：全仓 **22 个测试文件逐文件运行全绿**，`npm test`（CI 用的 `&&` 链）同样全绿 —— 发布工作流的 "Run tests" 关卡因此恢复可用。
+
+> 说明：账号登录**不会**下发 API Key，因此「用账号登录直接请求 api.deepseek.com/user/balance」不可行；能查的是 **Platform 钱包**（与 DSH 官方「设置 → 账号与余额」同源），两者是同一 DeepSeek 账号的不同接口口径。
+
 ## v1.9.5(2026-10-07)
 
 **修复「桌面端（Electron 外壳）花费统计整块看板变成无样式原生控件」—— 自建 `<style>` 缺 `data-plugin` 归属标记，被 DSH 客户端模块系统认领给别的模块后在 HMR 清理时连带删除**

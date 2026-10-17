@@ -115,6 +115,45 @@ export function readSessionRecords(path) {
 }
 
 /**
+ * 会话日志文件名：`session[.vN].jsonl[.zstd]`。
+ *
+ * **不写死版本号**（v1.9.6 修）：0.2.x 起宿主把新会话写成
+ * `session.v4.jsonl.zstd`，而旧实现只枚举
+ * `['session.v3.jsonl.zstd','session.v3.jsonl','session.jsonl.zstd','session.jsonl']`
+ * —— 于是 v4 及以后的新会话被**静默跳过**（导入清单里 0 个 v4、也没有任何报错，
+ * 表现为「历史导入突然不再补录新会话」）。内容层其实兼容（实测 v4 日志的事件与
+ * usage/source 形状未变，回放能正常重建调用），断点只在文件名。
+ */
+const SESSION_LOG_NAME_RE = /^session(?:\.v(\d+))?\.jsonl(\.zstd)?$/
+
+/**
+ * 从一个会话目录里挑一份日志：版本号高者优先（v5 > v4 > v3 > 无版本号），
+ * 同版本 zstd 优先。这样宿主再升 v5/v6 时不需要再改枚举。
+ * @param {string} dir - 单个会话目录
+ * @returns {string} 命中的文件名；没有则返回空串
+ */
+function pickSessionLogName(dir) {
+  let entries
+  try { entries = readdirSync(dir, { withFileTypes: true }) } catch (e) { return '' }
+  let best = ''
+  let bestVersion = -1
+  let bestZstd = -1
+  for (const entry of entries) {
+    if (!entry.isFile()) continue
+    const m = SESSION_LOG_NAME_RE.exec(entry.name)
+    if (!m) continue
+    const version = m[1] ? Number(m[1]) : 0
+    const zstd = m[2] ? 1 : 0
+    if (version > bestVersion || (version === bestVersion && zstd > bestZstd)) {
+      best = entry.name
+      bestVersion = version
+      bestZstd = zstd
+    }
+  }
+  return best
+}
+
+/**
  * 枚举会话根目录下全部会话日志（<root>/<项目>/<会话>/session*.jsonl[.zstd]）。
  * @param {string} root - 会话根目录（$DSH_HOME/sessions）
  */
@@ -128,12 +167,9 @@ export function listSessionLogs(root) {
     try { sessions = readdirSync(join(root, project.name), { withFileTypes: true }) } catch (e) { continue }
     for (const session of sessions) {
       if (!session.isDirectory()) continue
-      for (const name of ['session.v3.jsonl.zstd', 'session.v3.jsonl', 'session.jsonl.zstd', 'session.jsonl']) {
-        const path = join(root, project.name, session.name, name)
-        try {
-          if (statSync(path).isFile()) { paths.push(path); break } // 同一会话多种编码互斥，取先命中者
-        } catch (e) { /* 继续尝试另一后缀 */ }
-      }
+      const dir = join(root, project.name, session.name)
+      const name = pickSessionLogName(dir)
+      if (name) paths.push(join(dir, name)) // 同一会话多种编码互斥，只取最优的一份
     }
   }
   return paths

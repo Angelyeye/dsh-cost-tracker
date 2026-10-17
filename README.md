@@ -38,7 +38,7 @@
 | 🧭 | **多机汇总(云端同步)** | 可对接**自建云端服务**(独立仓库 `dsh-cost-cloud`,零运行时依赖):多台电脑的用量汇总到一处,看板顶部出现 **本机 / 本机+云端 / 仅云端** 三态开关,并支持**设备 × Agent 矩阵**(行合计 = 列合计 = 总计);上报内容仅 token 数、费用、时间戳与标识符,可选会话脱敏 |
 | 🔥 | **用量热力图** | 设置页新增「Token 用量统计」:类 Codex 的 **26 周日用量方格热图**,按天着色(输入 / 缓存 / 输出 / 费用),悬停看当日明细、今天高亮描边,顶部显示全时段累计;**跟随三态视图**——「本机+云端 / 仅云端」下自动并入云端按天用量(卡片标题右侧标注当前口径) |
 | 📈 | **订阅配额监控** | Kimi Coding Plan、**火山方舟 Coding Plan** 等订阅套餐:配额进度条、重置倒计时、等效按量费用参考。火山方舟走管控面 OpenAPI(HMAC 签名),需 AccessKeyID + SecretAccessKey |
-| 💳 | **余额查询** | 一键查询 DeepSeek 官方账户余额(总余额 / 充值 / 赠送 / 状态) |
+| 💳 | **余额查询** | 一键查询 DeepSeek 官方账户余额(总余额 / 充值 / 赠送 / 状态);**已登录 DSH 账号时直接读 Platform 钱包(充值 / 赠金),不再需要 API Key(v1.9.6)** |
 | 🤖 | **Agent 工具** | 直接在对话里问:"我现在花了多少钱?"——Agent 会调用 `cost_stats` / `cost_prices` 等工具回答 |
 | 🔻 | **状态栏** | 聊天输入框下方实时显示:**本会话花费**(胶囊分段:本会话 / 订阅套餐 / 分模型),按会话实际用到的模型与订阅拆分,**多模型默认折叠只显示 top2,点击展开全部明细**;订阅显示具体套餐名,不再展示配额与调用次数 |
 | 👁️ | **界面显示开关** | 输入框上方的花费胶囊、侧边栏峰谷时段条、设置页「花费统计」看板**三个落点各自可关**(设置 → 花费统计 → 右上角齿轮 → 数据与界面 → 界面显示),勾选即刻生效;**只影响显示**,记账、云端同步与 Agent 工具照常,配置入口(齿轮页)本身不受开关控制 |
@@ -279,7 +279,7 @@ docker compose up -d      # 打开 http://<服务器>:8787 ，在「设置」页
 
 ### 历史导入（v1.9.0）
 
-装上插件之前的对话也能补进账本：插件回放宿主会话日志（`$DSH_HOME/sessions/<项目>/<会话>/session.v3.jsonl.zstd`，多 zstd frame 逐帧解压、逐帧切片），把其中的模型调用按**当时时间戳**的计费口径入账。
+装上插件之前的对话也能补进账本：插件回放宿主会话日志（`$DSH_HOME/sessions/<项目>/<会话>/session[.vN].jsonl[.zstd]`，多 zstd frame 逐帧解压、逐帧切片；v1.9.6 起按 `vN` 自动识别版本，v4/v5 无需改代码），把其中的模型调用按**当时时间戳**的计费口径入账。
 
 - 默认**开机自动导入**（延迟 8 秒，不阻塞启动），也可在配置页点「立即导入」或关掉自动（`autoImport`）；
 - **只补「插件不可能记到」的调用**：早于本机最早一条实时记录，或所在日完全没有实时覆盖（停机缺口）；
@@ -301,6 +301,26 @@ docker compose up -d      # 打开 http://<服务器>:8787 ，在「设置」页
 - **任何响应都不回显密钥**：状态接口只给布尔与「存储位置」（凭据库 / 进程内存），`AccessKeyID` 属非敏感标识才会回显以便预填；
 - **出站防护**：携带凭据的请求必须命中主机白名单（DeepSeek / Kimi / 火山管控面 / 配置的云端地址 / 定价页主机），非本机地址强制 https，`redirect: 'manual'` —— 3xx 一律按失败处理，防止重定向把 `Authorization` 头带去别处。
 
+### 余额来源与账号登录（v1.9.6）
+
+余额查询按以下优先级选来源，**账号登录不需要也不接受 API Key**：
+
+1. **面板手填 API Key**（最高优先，用户显式动作）→ 请求 `https://api.deepseek.com/user/balance`；
+2. **DSH 账号登录态** → 调宿主服务 `deepseekAccount.getBalance()`，读 Platform 钱包
+   （`normal_wallets` = 充值钱包、`bonus_wallets` = 赠金钱包，币种 CNY / USD），
+   与官方「设置 → 账号与余额」同源；
+3. **配置 / 环境里的 API Key**（`DEEPSEEK_API_KEY`）→ 同 1。
+
+为什么必须分两条：DSH 的账号登录用 PKCE 授权把 token 写进凭据库的 **record**
+（`deepseek-account-platform/default`），**不会下发 API Key**；账号态推理用
+`x-dsh-auth-token` 走 Platform 网关、API Key 态用 `x-api-key`，运行时文档明确两条路由
+**互不回退**。因此「登录后拿 key 去查 api.deepseek.com」这条路在 0.2.x 里不存在。
+
+口径差异：账号态展示的是 **Platform 钱包**（充值 / 赠金分开列示，总额 = 同币种两者之和，
+精确十进制相加）；API Key 态沿用 `total_balance` / `granted_balance` /
+`topped_up_balance` 与 `is_available`。没有 `deepseekAccount` 服务的旧宿主自动走原路径，
+行为与 v1.9.5 一致。
+
 ### HTTP API(供其他工具调用)
 
 全部为 `POST` + JSON,监听本机地址:
@@ -320,7 +340,7 @@ POST /api/cost-tracker/cloud        云端只读聚合(route/days/excludeSelf/de
 POST /api/cost-tracker/kimi-usage   Kimi 订阅配额
 POST /api/cost-tracker/volcengine-usage  火山方舟 Coding Plan 配额(5 小时/周/月窗口)
 POST /api/cost-tracker/volcengine-config 保存火山方舟 AK/SK(只回显「是否已配置」,不回显密钥)
-POST /api/cost-tracker/balance      账户余额
+POST /api/cost-tracker/balance      账户余额(账号登录态优先;传 {"apiKey":"sk-…"} 可手填覆盖)
 POST /api/cost-tracker/prices       单价表(按计费时代分版 + 同步时代 + 多厂商目录 + 覆盖价)
 POST /api/cost-tracker/recompute    按计费时代重算已入库记录(默认只试算,传 {"apply":true} 落盘)
 POST /api/cost-tracker/billing-config  双轨计费与目录配置(金额口径/订阅归类/匹配与汇率/覆盖价)
@@ -340,6 +360,36 @@ POST /api/cost-tracker/export       导出 CSV
 ## 更新记录
 
 > 这里只列重要版本;逐版完整记录见 [`CHANGELOG.md`](./CHANGELOG.md)。
+
+### v1.9.6(2026-10-17)
+
+**新增：余额查询兼容 DSH「DeepSeek 账号登录」—— 账号态改走宿主 `deepseekAccount.getBalance()` 读 Platform 钱包（充值 / 赠金），API Key 路径原样保留**
+
+- **为什么之前查不到**：0.1.7 起 DSH 支持浏览器 PKCE 账号登录，授权只写进凭据库的 **record**
+  `deepseek-account-platform/default`（`{version, token, issuer}`），**从不写 ref**，而
+  `credentials.resolve()` 只查 refs 半区 —— 账号 token 没有 ref 名；同时账号态推理用
+  `x-dsh-auth-token`、API Key 态用 `x-api-key`，运行时文档明确两者「互不回退」，且整个运行时里
+  `api.deepseek.com/user/balance` 零命中。于是只认 `DEEPSEEK_API_KEY` 的旧实现，在纯账号态下
+  必然报「未找到 DeepSeek API Key」；
+- **新优先级**：面板手填 Key > 账号登录态 > 配置/环境 API Key。账号态**失败不回退** API Key
+  （回退会显示另一个账户的数字），错误信息直接给出「手动填 Key」的出路；
+- **必填契约**：`getBalance(client)` 的 `client` 三字段（`version` / `locale` /
+  `timezoneOffsetSeconds`）会被运行时直接拼进 `x-client-*` 头，缺一个就抛 `TypeError`；
+  宿主侧一律补齐，浏览器半端再用 `navigator.language` 与本机时区覆盖；
+- **口径**：账号钱包「总余额 = 同币种充值 + 同币种赠金」，用 BigInt 精确十进制相加；
+  账号态 `available` 为 `null`（Platform 摘要没有 `is_available`，不把未知渲染成不可用）；
+  多币种按 CNY > USD 选主币种，符号与标题跟随币种；
+- **零影响**：没有 `deepseekAccount` 服务的旧宿主自动走原路径，文案与 v1.9.5 逐字一致；
+- **顺带修复（同一轮 0.2.x 兼容审计）**：① 历史导入现在识别 `session[.vN].jsonl[.zstd]` ——
+  0.2.x 起新会话写成 `session.v4.jsonl.zstd`，旧实现只认 v3/legacy 名字，导致新会话被**静默跳过**
+  （本机 68 个 v4 会话全部漏掉；内容层其实兼容）；② 账号态 provider `deepseek-account` 补上
+  DeepSeek 兜底价，精确价表之外的新模型不再落到 generic 缓存价（0.5 → 0.04）且保留峰谷半价；
+  ③ 设置读取迁移到 0.2.x 的 `settings.describe()`（`get()` 已被移除）：新增 `settings.js` 做
+  「describe 优先、get 兜底」的兼容读，**自定义 `apiKeyEnv` 的部署不再取错 Key 名**；
+- **测试**：新增 `test/balance-account.test.js`、`test/session-log-v4.test.js`、
+  `test/settings-compat.test.js`；全仓 **22 个测试文件逐文件运行全绿**，`npm test`（CI 用的 `&&` 链）
+  同样全绿（同时修掉了 `test/import.test.js` 里因固定日期 fixture 造成的既有假失败 —— 它正是
+  `npm test` 变红、挡住发布的根因）。
 
 ### v1.9.5(2026-10-07)
 

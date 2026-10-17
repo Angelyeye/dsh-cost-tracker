@@ -37,7 +37,7 @@
 | 📊 | **Visual dashboard** | A new "Cost Statistics" page in Settings: overview cards, cost bar charts (by peak period / by model), per-model request & token charts — **all with hover tooltips** |
 | 🧭 | **Multi-machine aggregation (cloud sync)** | Point it at your own **self-hosted cloud service** (separate `dsh-cost-cloud` repo, zero runtime dependencies) to merge usage from several computers; the dashboard then offers a **This machine / This machine + cloud / Cloud only** switcher plus a **device × Agent matrix** (row totals = column totals = grand total). Only token counts, cost, timestamps and identifiers are uploaded, with optional session-id masking |
 | 📈 | **Subscription quota** | Kimi Coding Plan and **Volcengine Ark Coding Plan**: quota progress bars, reset countdowns and pay-as-you-go-equivalent cost for reference. Volcengine is queried through the Ark **control-plane OpenAPI** (HMAC-signed), requiring an AccessKeyID + SecretAccessKey pair |
-| 💳 | **Balance lookup** | One-click DeepSeek account balance (total / topped-up / granted / status) |
+| 💳 | **Balance lookup** | One-click DeepSeek account balance (total / topped-up / granted / status); **signed in to a DSH account it reads the Platform wallets (top-up / bonus) directly — no API key needed (v1.9.6)** |
 | 🤖 | **Agent tools** | Ask in any chat: "how much have I spent today?" — the agent answers via `cost_stats` / `cost_prices` |
 | 🔻 | **Status line** | A live line under the chat input: **session cost** (segmented pills: session / subscription plan / per-model), split by the models actually used in the session; multi-model collapses to top2 by default, click to expand. Subscription shows the plan name; no quota or call-count clutter |
 | 🔥 | **Usage heatmap** | A "Token Usage" panel in Settings: a Codex-style **26-week daily-usage grid**, colored per-day by input / cache / output / cost with hover details and a today outline; all-time totals shown on top |
@@ -278,7 +278,7 @@ Only the three interface switches apply instantly; every other group is "edit dr
 
 ### History import (v1.9.0)
 
-Conversations from **before you installed the plugin** can be backfilled: the plugin replays the host session logs (`$DSH_HOME/sessions/<project>/<session>/session.v3.jsonl.zstd`, decompressed frame by frame — the host appends one zstd frame per batch) and books each model call at the price era of **its own timestamp**.
+Conversations from **before you installed the plugin** can be backfilled: the plugin replays the host session logs (`$DSH_HOME/sessions/<project>/<session>/session[.vN].jsonl[.zstd]`, decompressed frame by frame — the host appends one zstd frame per batch; since v1.9.6 the `vN` version is detected automatically, so v4/v5 need no code change) and books each model call at the price era of **its own timestamp**.
 
 - **Auto-import on startup** by default (8 s delay, never blocks the boot), with an "Import now" button and an `autoImport` switch;
 - **Only calls the plugin could not have recorded**: earlier than this machine's first live record, or on a day with no live coverage at all (downtime gaps);
@@ -300,6 +300,27 @@ Conversations from **before you installed the plugin** can be backfilled: the pl
 - **No response ever echoes a secret**: status endpoints return only booleans plus the storage location (credential store / process memory). `AccessKeyID` is a non-sensitive identifier and is echoed so the form can be pre-filled;
 - **Egress protection**: any request carrying credentials must match the host allowlist (DeepSeek / Kimi / Volcengine control plane / your configured cloud URL / the pricing page host), non-loopback hosts must use https, and `redirect: 'manual'` is forced — any 3xx is treated as a failure so a redirect can never carry the `Authorization` header elsewhere.
 
+### Balance sources & account login (v1.9.6)
+
+The lookup picks a source in this priority order — **account login neither needs nor accepts an API key**:
+
+1. **API key typed into the panel** (highest priority, explicit user action) → `https://api.deepseek.com/user/balance`;
+2. **DSH account login** → the host service `deepseekAccount.getBalance()`, which reads the Platform
+   wallets (`normal_wallets` = topped-up, `bonus_wallets` = granted; CNY / USD) — the same data source
+   as the official Settings → Account page;
+3. **API key from settings / environment** (`DEEPSEEK_API_KEY`) → same as 1.
+
+Why two sources: DSH's account login stores its PKCE grant as a credentials **record**
+(`deepseek-account-platform/default`) and **never issues an API key**; account inference uses
+`x-dsh-auth-token` against the Platform gateway while API-key inference uses `x-api-key`, and the
+runtime documents that the two routes **never fall back to each other**. "Log in, then query
+api.deepseek.com with the token" is simply not a thing on 0.2.x.
+
+Semantics: the account path reports **Platform wallets** (top-up and bonus listed separately,
+total = the same-currency sum, added with exact decimal arithmetic); the API-key path keeps
+`total_balance` / `granted_balance` / `topped_up_balance` and `is_available`. Hosts without a
+`deepseekAccount` service fall back to the old path with v1.9.5 behaviour.
+
 ### HTTP API (for other tools)
 
 All endpoints are `POST` + JSON and listen on the loopback address:
@@ -319,7 +340,7 @@ POST /api/cost-tracker/cloud        Read-only cloud aggregation (route/days/excl
 POST /api/cost-tracker/kimi-usage   Kimi subscription quota
 POST /api/cost-tracker/volcengine-usage  Volcengine Ark Coding Plan quota (5-hour / weekly / monthly windows)
 POST /api/cost-tracker/volcengine-config Save Volcengine AK/SK (reports only whether keys are configured, never the keys)
-POST /api/cost-tracker/balance      Account balance
+POST /api/cost-tracker/balance      Account balance (account login first; pass {"apiKey":"sk-..."} to override)
 POST /api/cost-tracker/prices       Price table (by pricing era + synced eras + multi-vendor catalog + overrides)
 POST /api/cost-tracker/recompute    Re-price stored records by era (dry-run unless {"apply":true})
 POST /api/cost-tracker/billing-config  Billing basis & catalog config (amount basis / plan overrides / match & fx / price overrides)
@@ -339,6 +360,40 @@ Example: `curl -X POST http://127.0.0.1:3080/api/cost-tracker/summary -d '{}'`
 ## Changelog
 
 > Highlights only — the full version-by-version history lives in [`CHANGELOG.md`](./CHANGELOG.md) (Chinese).
+
+### v1.9.6 (2026-10-17)
+
+**Balance lookup now works with DSH "DeepSeek account login": under an account the plugin calls the host service `deepseekAccount.getBalance()` and reads the Platform wallets (top-up / bonus); the API-key path is unchanged**
+
+- **Why it used to fail**: since 0.1.7 DSH supports browser PKCE account login, whose grant is stored
+  as a credentials **record** (`deepseek-account-platform/default` — `{version, token, issuer}`) and
+  **never as a ref**, while `credentials.resolve()` only reads the refs half. Account inference also
+  uses `x-dsh-auth-token` versus `x-api-key` for API keys, the runtime documents that the two routes
+  **never fall back to each other**, and `api.deepseek.com/user/balance` appears nowhere in the
+  runtime. An implementation that only knew `DEEPSEEK_API_KEY` therefore always reported
+  "DeepSeek API key not found" under a pure account login;
+- **New priority**: API key typed in the panel > account login > configured/environment API key.
+  A failed account read does **not** fall back to an API key (that would show a different account's
+  numbers); the error tells the user to type a key instead;
+- **Required contract**: the `client` argument's three fields (`version` / `locale` /
+  `timezoneOffsetSeconds`) are spliced into `x-client-*` headers by the runtime and a missing field
+  throws `TypeError`; the host always fills them in and the browser half overrides locale/time zone;
+- **Semantics**: account "total" = same-currency top-up + bonus, added with exact decimal arithmetic;
+  `available` is `null` under an account (the Platform summary has no `is_available`, so "unknown" is
+  never rendered as "unavailable"); multi-currency picks CNY > USD and the symbol/title follow it;
+- **No regression**: hosts without a `deepseekAccount` service take the old path with v1.9.5 wording;
+- **Also fixed (same compatibility audit)**: (1) history import now recognises `session[.vN].jsonl[.zstd]`
+  — 0.2.x writes `session.v4.jsonl.zstd`, while the old code only enumerated v3/legacy names, so new
+  sessions were silently skipped (68 v4 sessions on this machine were missed; the content itself is
+  compatible); (2) the account provider `deepseek-account` now has a DeepSeek fallback price, so models
+  outside the exact table no longer fall to generic cache pricing (0.5 → 0.04) and keep peak/off-peak;
+  (3) settings reads migrated to 0.2.x's `settings.describe()` (`get()` was removed): the new
+  `settings.js` does "describe first, get as fallback", so **deployments with a custom `apiKeyEnv` no
+  longer resolve the wrong key name**;
+- **Tests**: new `test/balance-account.test.js`, `test/session-log-v4.test.js` and
+  `test/settings-compat.test.js`; all **22 test files pass**, and `npm test` (the `&&` chain CI runs) is
+  green as well — this also fixes the pre-existing fake failure in `test/import.test.js` (fixed-date
+  fixture vs a relative `days` window), which was the reason CI's test gate went red.
 
 ### v1.9.5 (2026-10-07)
 

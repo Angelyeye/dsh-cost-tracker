@@ -299,7 +299,12 @@ console.log('[4] 宿主面：import-run / import-status')
   check('重复执行后明细条数不变', store2.details.length === store.details.length, String(store2.details.length))
 
   // 仪表盘把导入记录也计入（且按量与订阅分开）
-  const dash = await api('dashboard', { days: 30 })
+  // 注意：本文件 fixture 的时间轴是**固定日期**（2026-09-15 起，见文件头），
+  // 而 dashboard 的 days 是「相对当前时间」的窗口。用 days:30 时，只要运行日期
+  // 越过 fixture 之后 30 天，这条断言就会因为窗口不含 fixture 而假失败
+  // （2026-10-17 起实测）。它断言的是**口径**（导入记录要进看板），不是时间窗口，
+  // 所以用足够宽的窗口覆盖 fixture。
+  const dash = await api('dashboard', { days: 3650 })
   check('看板读到导入记录的总花费', dash.ok === true && dash.realCost > 0, JSON.stringify({ real: dash.realCost, calls: dash.realCalls }))
   check('看板 byDay 带 sub 字段（含 Plan 开关用）', Array.isArray(dash.byDay) && dash.byDay.every((d) => typeof d.sub === 'number'), JSON.stringify(dash.byDay.slice(0, 2)))
 

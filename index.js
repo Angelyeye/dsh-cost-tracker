@@ -30,10 +30,14 @@ import { Schema } from './schema.js'
 import { catalogEntryFor, CATALOG_META, catalogProviders, catalogFingerprint, CATALOG_FX_DEFAULT } from './vendor-catalog.js'
 import { fetchOfficialPrices, buildSyncedEra, diffAgainstEra } from './price-sync.js'
 import { createCredSeam, migrateLegacySecrets, safeFetch, CRED_REFS, hostnameOf } from './credstore.js'
+// 账号登录态（DSH 0.2.1-rc.2+）余额投影：纯函数，单独成文件便于单测
+import { accountClientMeta, mapAccountBalance, accountBalanceFailure } from './account.js'
+// 跨版本读取 settings（0.2.x 的 SettingsForms 已无 get()，改走 describe()）
+import { readSettingsSection } from './settings.js'
 import { listSessionLogs, planAndBuildImports, loadManifest, IMPORT_SOURCE } from './import.js'
 
 /** 插件版本（写入上报信封，便于云端排查版本差异） */
-const PLUGIN_VERSION = '1.9.5'
+const PLUGIN_VERSION = '1.9.6'
 setPluginVersion(PLUGIN_VERSION)
 
 /** 配置面板可写的字段（与 settings 命名空间一致）。
@@ -728,16 +732,14 @@ export default {
     function kimiKeyEnv() {
       const settings = ctx.get('settings')
       if (settings) {
-        try {
-          const v = settings.get('llm-pi-ai')
-          const providers = v && v.providers
-          if (providers) {
-            const kc = providers['kimi-coding']
-            if (kc && kc.apiKeyEnv) return String(kc.apiKeyEnv)
-            const k = providers['kimi']
-            if (k && k.apiKeyEnv) return String(k.apiKeyEnv)
-          }
-        } catch (e) {}
+        const v = readSettingsSection(settings, 'llm-pi-ai')
+        const providers = v && v.providers
+        if (providers) {
+          const kc = providers['kimi-coding']
+          if (kc && kc.apiKeyEnv) return String(kc.apiKeyEnv)
+          const k = providers['kimi']
+          if (k && k.apiKeyEnv) return String(k.apiKeyEnv)
+        }
       }
       return 'KIMI_CODING_API_KEY'
     }
@@ -745,15 +747,11 @@ export default {
     function deepseekKeyEnv() {
       const settings = ctx.get('settings')
       if (settings) {
-        try {
-          const v = settings.get('llm-deepseek')
-          if (v && v.apiKeyEnv) return String(v.apiKeyEnv)
-        } catch (e) {}
-        try {
-          const v = settings.get('llm-pi-ai')
-          const p = v && v.providers && v.providers['deepseek']
-          if (p && p.apiKeyEnv) return String(p.apiKeyEnv)
-        } catch (e) {}
+        const v = readSettingsSection(settings, 'llm-deepseek')
+        if (v && v.apiKeyEnv) return String(v.apiKeyEnv)
+        const p = readSettingsSection(settings, 'llm-pi-ai')
+        const deepseek = p && p.providers && p.providers['deepseek']
+        if (deepseek && deepseek.apiKeyEnv) return String(deepseek.apiKeyEnv)
       }
       return 'DEEPSEEK_API_KEY'
     }
@@ -865,22 +863,20 @@ export default {
       const inference = []
       const settings = ctx.get('settings')
       if (settings) {
-        try {
-          const v = settings.get('llm-pi-ai')
-          const providers = (v && v.providers) || {}
-          for (const [id, p] of Object.entries(providers)) {
-            if (!p) continue
-            const base = String(p.baseURL || '')
-            const looksArkCoding = /ark\.cn-beijing\.volces\.com\/api\/coding/i.test(base)
-            const looksVolc = /volcengine/i.test(id) || /volces\.com/i.test(base)
-            if (!looksArkCoding && !looksVolc) continue
-            const env = p.apiKeyEnv ? String(p.apiKeyEnv) : ''
-            if (!env) continue
-            // 推理 Key 只登记到 inference（用于给出「你配的是推理 Key」这种有价值的提示）
-            if (looksLikeInferenceKeyEnv(env)) inference.push(env)
-            else keys.push(env)
-          }
-        } catch (e) {}
+        const v = readSettingsSection(settings, 'llm-pi-ai')
+        const providers = (v && v.providers) || {}
+        for (const [id, p] of Object.entries(providers)) {
+          if (!p) continue
+          const base = String(p.baseURL || '')
+          const looksArkCoding = /ark\.cn-beijing\.volces\.com\/api\/coding/i.test(base)
+          const looksVolc = /volcengine/i.test(id) || /volces\.com/i.test(base)
+          if (!looksArkCoding && !looksVolc) continue
+          const env = p.apiKeyEnv ? String(p.apiKeyEnv) : ''
+          if (!env) continue
+          // 推理 Key 只登记到 inference（用于给出「你配的是推理 Key」这种有价值的提示）
+          if (looksLikeInferenceKeyEnv(env)) inference.push(env)
+          else keys.push(env)
+        }
       }
       return { keys, inference }
     }
@@ -1040,22 +1036,111 @@ export default {
     }
 
     // ---------- deepseek balance ----------
-    async function balance(args) {
-      const manual = args && typeof args.apiKey === 'string' ? args.apiKey.trim() : ''
-      const key = manual ? { value: manual, source: 'manual' } : await resolveApiKey(deepseekKeyEnv())
-      if (!key.value) return { ok: false, error: '未找到 DeepSeek API Key', available: false, total: '', granted: '', toppedUp: '', currency: 'CNY', keySource: 'none' }
+    // 两种余额来源（v1.9.6 起）：
+    //   ① 账号登录态（DSH 0.2.1-rc.2+）：走宿主服务 deepseekAccount.getBalance()，
+    //      拿的是 **Platform 钱包**（充值钱包 normal_wallets 与赠金钱包 bonus_wallets 分离）。
+    //      账号态推理用 x-dsh-auth-token 走 Platform 网关，运行时
+    //      @deepseek-ai/dsh-llm-deepseek-account 的 README 明确「不会回退到 API key」——
+    //      也就是说登录**不会下发 API Key**，旧版只认 DEEPSEEK_API_KEY 的实现
+    //      在纯账号态下必然报「未找到 DeepSeek API Key」。
+    //   ② API Key 态：沿用 https://api.deepseek.com/user/balance（token 口径不变）。
+    // 优先级：面板手填 Key > 账号登录态 > 配置/环境里的 API Key。
+    //   · 手填是用户显式动作，意图最强；
+    //   · 账号态优先于 API Key：账号态下真正被扣的是 Platform 钱包，且「登录了账号」
+    //     本身就是用户的选择；此时回退到 API Key 会显示**另一个账户**的数字，更误导。
+    // 旧 DSH（没有 deepseekAccount 服务）自动走原路径，不需要版本号判断。
+
+    /** 取账号服务；不存在（旧宿主）返回 null。 */
+    function accountService() {
+      try {
+        const svc = ctx.get('deepseekAccount')
+        return svc && typeof svc.getBalance === 'function' ? svc : null
+      } catch (e) {
+        return null
+      }
+    }
+
+    /**
+     * 尝试账号登录态余额。
+     * @param {object} [args] - HTTP 参数（可带 locale / timezoneOffsetSeconds，由浏览器半端提供）
+     * @returns {{handled:boolean, service:boolean, result?:object}}
+     *   handled=true  → result 即最终结果，不再回退 API Key；
+     *   handled=false → 没有可用的账号登录态（未登录/无该服务），由调用方回退；
+     *                   service 表示宿主是否提供账号服务，用于区分「未找到 Key」的文案。
+     */
+    async function tryAccountBalance(args) {
+      const svc = accountService()
+      if (!svc) return { handled: false, service: false }
+      let details
+      try {
+        // client 元数据**必填**：运行时 platformClientHeaders 直接读
+        // version / locale / timezoneOffsetSeconds，缺字段会抛 TypeError。
+        details = await svc.getBalance(accountClientMeta(args, PLUGIN_VERSION))
+      } catch (e) {
+        return {
+          handled: true,
+          service: true,
+          result: accountBalanceFailure('账号余额查询失败：' + toStr(e && e.message ? e.message : e)
+            + '（若是 DSH 升级导致的服务形状变化，请反馈；期间可在下方手动填入 API Key 查询）'),
+        }
+      }
+      // 契约里只有 null 表示「没有已存授权 / 查询期间凭据被清除」，此时才回退 API Key；
+      // undefined 属于契约外（服务没实现好或 RPC 出错）—— 回退可能显示**另一个账户**的数字，
+      // 所以按失败处理并留证，不装作「未登录」。
+      if (details === null) return { handled: false, service: true }
+      if (details === undefined) {
+        return {
+          handled: true,
+          service: true,
+          result: accountBalanceFailure('账号余额查询失败：宿主服务未返回结果（服务未就绪或版本不匹配），可稍后重试或手动填入 API Key'),
+        }
+      }
+      if (details.status !== 'ready') {
+        return {
+          handled: true,
+          service: true,
+          result: accountBalanceFailure('账号余额查询失败：Platform 未返回可用数据（网络超时或接口异常，可稍后重试）'),
+        }
+      }
+      const mapped = mapAccountBalance(details)
+      if (!mapped) {
+        return { handled: true, service: true, result: accountBalanceFailure('账号余额查询失败：返回的钱包数据无法解析') }
+      }
+      return { handled: true, service: true, result: mapped }
+    }
+
+    /** API Key 路径（与 v1.9.5 完全一致，仅新增 source 字段用于视图区分来源）。 */
+    async function balanceWithApiKey(key) {
       try {
         const r = await httpJson('https://api.deepseek.com/user/balance', { Authorization: 'Bearer ' + key.value }, 15000, allowHostsFor('deepseek'))
-        if (r.status !== 200 || !r.body) return { ok: false, error: 'HTTP ' + (r.status || 0) + (r.error ? ' · ' + r.error : ''), available: false, total: '', granted: '', toppedUp: '', currency: 'CNY', keySource: key.source }
+        if (r.status !== 200 || !r.body) return { ok: false, error: 'HTTP ' + (r.status || 0) + (r.error ? ' · ' + r.error : ''), available: false, total: '', granted: '', toppedUp: '', currency: 'CNY', source: 'apikey', keySource: key.source }
         const j = JSON.parse(r.body)
         const infos = Array.isArray(j.balance_infos) ? j.balance_infos : []
         let info = null
         for (const b of infos) { if (b && b.currency === 'CNY') { info = b; break } }
         if (!info) info = infos[0] || {}
-        return { ok: true, error: '', available: !!j.is_available, total: toStr(info.total_balance), granted: toStr(info.granted_balance), toppedUp: toStr(info.topped_up_balance), currency: toStr(info.currency) || 'CNY', keySource: key.source }
+        return { ok: true, error: '', available: !!j.is_available, total: toStr(info.total_balance), granted: toStr(info.granted_balance), toppedUp: toStr(info.topped_up_balance), currency: toStr(info.currency) || 'CNY', source: 'apikey', keySource: key.source }
       } catch (e) {
-        return { ok: false, error: toStr(e && e.message ? e.message : e), available: false, total: '', granted: '', toppedUp: '', currency: 'CNY', keySource: key.source }
+        return { ok: false, error: toStr(e && e.message ? e.message : e), available: false, total: '', granted: '', toppedUp: '', currency: 'CNY', source: 'apikey', keySource: key.source }
       }
+    }
+
+    async function balance(args) {
+      const manual = args && typeof args.apiKey === 'string' ? args.apiKey.trim() : ''
+      if (manual) return balanceWithApiKey({ value: manual, source: 'manual' })
+      const acct = await tryAccountBalance(args)
+      if (acct.handled) return acct.result
+      const key = await resolveApiKey(deepseekKeyEnv())
+      if (!key.value) {
+        return {
+          ok: false,
+          error: acct.service
+            ? '未找到 DeepSeek API Key，也没有已登录的 DeepSeek 账号（DSH 0.2.1+ 可在「设置 → 账号与余额」登录后查询账号余额）'
+            : '未找到 DeepSeek API Key',
+          available: false, total: '', granted: '', toppedUp: '', currency: 'CNY', source: 'none', keySource: 'none',
+        }
+      }
+      return balanceWithApiKey(key)
     }
 
     // ---------- csv export ----------
