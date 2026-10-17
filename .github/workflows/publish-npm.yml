@@ -167,9 +167,11 @@ jobs:
           TITLE="v$VERSION"
           if node scripts/release-notes.mjs --version "$VERSION" > "$NOTES"; then
             NOTES_ARGS=(--notes-file "$NOTES")
-            # 标题取章节首行（形如 `**修复……**`），去掉加粗标记；过长时截断并加省略号
+            # 标题取章节首行（形如 `**修复……**`），去掉加粗标记；过长时截断并加省略号。
+            # ⚠️ 不能用 `cut -c1-60`：runner 在 C locale 下按**字节**切，中文会被拦腰截断，
+            # 出现 "…」��…" 这种替换字符（v1.9.6 发布时实测）。这里按 Unicode 码点切。
             HEADLINE_FULL="$(head -n 1 "$NOTES" | sed 's/^\*\*//; s/\*\*$//' | tr -d '\r')"
-            HEADLINE="$(printf '%s' "$HEADLINE_FULL" | cut -c1-60)"
+            HEADLINE="$(node -e 'const s=process.argv[1]||""; const c=[...s]; process.stdout.write(c.length>60?c.slice(0,60).join(""):s)' "$HEADLINE_FULL")"
             if [ -n "$HEADLINE" ] && [ "$HEADLINE" != "$HEADLINE_FULL" ]; then HEADLINE="$HEADLINE…"; fi
             if [ -n "$HEADLINE" ]; then TITLE="v$VERSION — $HEADLINE"; fi
           else
