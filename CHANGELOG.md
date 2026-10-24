@@ -2,6 +2,37 @@
 
 本文件用中文记录 dsh-cost-tracker 的版本变更。
 
+## v1.10.1(2026-10-25)
+
+**安全加固：本地状态文件在 POSIX 上收紧为 owner-only（目录 0700 / 文件 0600）；新增 PR CI 门禁（`pull_request` 跑 `npm test`）**
+
+> 这两项改进来自外部贡献者 [@shaunpalmer](https://github.com/shaunpalmer) 的 PR #1（[Project studios/english hardening](https://github.com/Angelyeye/dsh-cost-tracker/pull/1)）。该 PR 整体未合并（包名改为 `@shaunpalmer/…`、版本回退、客户端砍掉约 90% 的界面、屏蔽配置入口、并移除了两个 UI 回归测试），但其中「文件权限收紧」与「PR 跑测试」两处是真实缺口，本次按当前代码结构重写后落地。
+
+### 一、本地状态文件权限收紧（`store.js` / `sync.js` / `index.js`）
+
+**问题**：`~/.dsh/storages` 下的文件走默认 umask（常见 022）创建，POSIX 上同机其他用户可读。而这里存的是**完整用量明细**（会话、模型、token、花费；未开启脱敏时还有 sessionId）、设备身份与同步游标、云端同步地址等。
+
+**改法**：
+
+- `store.js` 导出 `PRIVATE_DIR_MODE = 0o700` / `PRIVATE_FILE_MODE = 0o600`：记录文件与实例锁的**目录创建**带 0700、**文件写入**带 0600；
+- `sync.js` 的 `device.json`、`cost-tracker-sync.json` 同样走「目录 0700 + 文件 0600」，并把两处重复的「写临时文件 → rename」收成 `writePrivateJson()`；
+- `index.js` 的配置文件、官方价格状态、历史导入清单也补上同样的模式；
+- **只影响新建**：不 chmod 已有文件，避免动到用户既有部署的权限策略；Windows 忽略 mode，行为完全不变；CSV 导出（用户主动选择落地位置的产物）保持默认权限，方便分享。
+
+**测试**：`test/storage.test.js` 用注入的 fs 断言 `mkdirSync(…,{mode:0o700})` / `writeFileSync(…,{mode:0o600})` 真的传进去了（跨平台可断言），并在 POSIX 上额外核对真实文件权限 0600；`test/sync.test.js` 在 POSIX 上核对身份目录/文件与同步目录/游标的实权限，同时验证私有权限路径不影响读写（游标可读回、不留 `.tmp`）。
+
+### 二、新增 PR CI 门禁（`.github/workflows/ci.yml`）
+
+此前仓库只有手动触发的 `publish-npm.yml`，**PR 上没有任何检查**（评审外部 PR 时只能本地 checkout 分支跑测试）。新增 `CI` 工作流：`pull_request` 与 `push: main` 触发，`permissions: contents: read`（无凭据、fork PR 也能安全跑），Node 24（与发布工作流同版本），执行与发布关卡同一条 `npm test`；另加 concurrency 取消同分支旧运行。不使用 npm cache —— 本包零 npm 依赖、无 lockfile，缓存只会多一次报错。
+
+### 三、未采纳部分（保留在作者自己的 fork）
+
+包名/版本/入口变更、`index.safe.js` 用 Proxy 屏蔽 `settings` 服务并临时篡改 `process.argv[1]`、英文重写全部模块并替换 README/CHANGELOG（会丢失发布历史，而仓库已有 `README.en.md`）、NZD 展示（浏览器直连第三方汇率 API，且写死单一币种）。隐私默认值（`maskSessionId` / `includePurpose`）方向合理但会改变现有云端归因口径，保持当前默认，后续以显式选项讨论。
+
+### 四、测试
+
+`npm test` 全绿（22 个测试文件）；`storage` 85 项、`sync` 126 项断言通过。
+
 ## v1.10.0(2026-10-25)
 
 **模型目录刷新到 2026-10-25 官方口径：15 家厂商 / 141 个条目（新增 51、改价 10、口径修正 25）；火山方舟 Coding Plan 白名单按官方现行 13 个 Model Name 复核，并给「泛 volcengine」分支补上日期后缀容忍**

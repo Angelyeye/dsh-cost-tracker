@@ -1,0 +1,43 @@
+# PR / 主分支 CI —— 只跑测试，不发版、不持有任何凭据。
+#
+# 背景：本仓库此前只有 publish-npm.yml（手动 workflow_dispatch），
+# 拉取请求（PR）上没有任何检查 —— 外部贡献者的改动只能靠维护者本地跑测试
+# （v1.10.0 评审 PR #1 时正是如此，还得手工 checkout 分支才发现两个 UI 回归
+# 测试其实早就红了）。本工作流把「改动能过测试」变成 PR 的可见门禁，
+# 与发布工作流里的 "Run tests" 关卡使用同一条命令。
+#
+# 设计取舍：
+#   · 不使用 npm cache：本包零 npm 依赖（无 lockfile），缓存只会多一次报错；
+#   · 单 job + ubuntu-latest + Node 24：与发布工作流同版本，避免「CI 过、发布红」；
+#   · permissions 只读、无 secrets：fork 发起的 PR 也能安全跑。
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Run test suite
+        run: npm test

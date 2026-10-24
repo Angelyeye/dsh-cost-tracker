@@ -4,7 +4,7 @@
 // 覆盖：日键/保留边界/日汇总聚合/总量合并/旧格式迁移/
 //       持久化往返/损坏自愈/安全上限/索引文件可加载
 // ============================================================
-import { existsSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -12,6 +12,7 @@ import {
   applyRetention, dayKey, writeFileAtomic, isTransientRenameError,
   checkStoreLock, writeStoreLock, releaseStoreLock,
   DETAIL_DAYS, MAX_AXIS_DAYS, MAX_DETAILS,
+  PRIVATE_DIR_MODE, PRIVATE_FILE_MODE,
 } from '../store.js'
 
 let failures = 0
@@ -244,6 +245,26 @@ ok(MAX_DETAILS === 200000, '常量: MAX_DETAILS=200000')
     ok(r1.ok && r1.mode === 'rename' && r1.attempts === 1, `原子写: 一次成功（attempts=${r1.attempts}）`)
     ok(readFileSync(file, 'utf8') === '{"a":1}', '原子写: 内容正确')
     ok(readdirSync(dir).length === 1, `原子写: 不留临时文件（实际 ${readdirSync(dir).join(', ')}）`)
+
+    // 13.1b 私有权限：目录 0o700、文件 0o600（POSIX owner-only）
+    // 用注入的 fs 抓取实参，跨平台可断言（Windows 上 mode 会被内核忽略，但参数仍应传入）
+    let sawMkdirOpts = null
+    let sawWriteOpts = null
+    const spyFs = {
+      mkdirSync: (p, opts) => { sawMkdirOpts = opts },
+      writeFileSync: (p, d, opts) => { sawWriteOpts = opts; writeFileSync(p, d, opts) },
+      unlinkSync: (p) => { try { rmSync(p) } catch (e) {} },
+      renameSync: (from, to) => renameSync(from, to),
+    }
+    const privateFile = join(dir, 'private.json')
+    const rp = writeFileAtomic(privateFile, '{"p":1}', { fs: spyFs })
+    ok(rp.ok, '私有权限: 原子写成功')
+    ok(sawMkdirOpts && sawMkdirOpts.recursive === true && sawMkdirOpts.mode === PRIVATE_DIR_MODE, `私有权限: 目录创建带 mode 0o700（实际 ${sawMkdirOpts && sawMkdirOpts.mode}）`)
+    ok(sawWriteOpts && sawWriteOpts.encoding === 'utf8' && sawWriteOpts.mode === PRIVATE_FILE_MODE, `私有权限: 文件写入带 mode 0o600（实际 ${sawWriteOpts && sawWriteOpts.mode}）`)
+    ok(PRIVATE_DIR_MODE === 0o700 && PRIVATE_FILE_MODE === 0o600, '私有权限: 常量取值 owner-only')
+    if (process.platform !== 'win32') {
+      ok((statSync(privateFile).mode & 0o777) === 0o600, `私有权限: 真实文件权限 0600（实际 0${(statSync(privateFile).mode & 0o777).toString(8)}）`)
+    }
 
     // 13.2 瞬时占用：前两次 EPERM，第三次成功 → 退避重试应救回来
     const eperm = () => Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' })

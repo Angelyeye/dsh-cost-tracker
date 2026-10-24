@@ -77,6 +77,17 @@ function sleepSync(ms) {
 }
 
 /**
+ * 私有目录 / 文件的创建模式：POSIX 上 owner-only（0o700 / 0o600）。
+ *
+ * 为什么需要：`~/.dsh/storages` 里的记录含**完整用量明细**（会话、模型、token、
+ * 花费，未脱敏时还有 sessionId），而默认 umask（常见 022）会让同机其他用户可读。
+ * Windows 会忽略 mode，行为不变；POSIX 上显式收紧到 owner-only。
+ * 已有文件不会被 chmod 改写（只影响新建），避免动到用户既有部署的权限策略。
+ */
+export const PRIVATE_DIR_MODE = 0o700
+export const PRIVATE_FILE_MODE = 0o600
+
+/**
  * 原子落盘：写临时文件 → rename 覆盖目标。
  *
  * · 临时文件名带 **pid**：两个实例各写各的临时文件，不会互相盖掉半个文件
@@ -96,8 +107,8 @@ export function writeFileAtomic(filePath, data, opts) {
   const tmp = filePath + '.' + process.pid + '.tmp'
   const cleanup = () => { try { fs.unlinkSync(tmp) } catch (e) { /* 已被 rename 走或从未创建 */ } }
   try {
-    fs.mkdirSync(dirname(filePath), { recursive: true })
-    fs.writeFileSync(tmp, data, 'utf8')
+    fs.mkdirSync(dirname(filePath), { recursive: true, mode: PRIVATE_DIR_MODE })
+    fs.writeFileSync(tmp, data, { encoding: 'utf8', mode: PRIVATE_FILE_MODE })
   } catch (e) {
     cleanup()
     return { ok: false, attempts: 0, mode: 'failed', error: e, transient: isTransientRenameError(e) }
@@ -173,8 +184,8 @@ export function checkStoreLock(filePath, opts) {
 export function writeStoreLock(filePath, opts) {
   const o = opts || {}
   try {
-    mkdirSync(dirname(filePath), { recursive: true })
-    writeFileSync(filePath + '.lock', JSON.stringify({ pid: process.pid, at: Date.now(), version: o.version || '' }), 'utf8')
+    mkdirSync(dirname(filePath), { recursive: true, mode: PRIVATE_DIR_MODE })
+    writeFileSync(filePath + '.lock', JSON.stringify({ pid: process.pid, at: Date.now(), version: o.version || '' }), { encoding: 'utf8', mode: PRIVATE_FILE_MODE })
     return true
   } catch (e) {
     return false

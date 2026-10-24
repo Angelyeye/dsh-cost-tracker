@@ -47,6 +47,25 @@ export function dataDir(env) {
 export function identityPath(env) { return join(dataDir(env), 'device.json') }
 export function syncStatePath(storageDir) { return join(storageDir, 'cost-tracker-sync.json') }
 
+/**
+ * 同步身份/游标文件的私有权限：POSIX 上 owner-only（0o700 / 0o600）。
+ * device.json 含 machineId（主机名+用户名的哈希）与设备名，游标文件含最近同步
+ * 结果，都不该让同机其他用户可读；Windows 忽略 mode，行为不变。
+ */
+export const PRIVATE_DIR_MODE = 0o700
+export const PRIVATE_FILE_MODE = 0o600
+
+function ensurePrivateDir(dir) {
+  mkdirSync(dir, { recursive: true, mode: PRIVATE_DIR_MODE })
+}
+
+/** 写临时文件（0600）→ rename，避免读者看到半个 JSON */
+function writePrivateJson(file, value) {
+  const tmp = file + '.tmp'
+  writeFileSync(tmp, JSON.stringify(value, null, 2), { encoding: 'utf8', mode: PRIVATE_FILE_MODE })
+  renameSync(tmp, file)
+}
+
 function defaultMachineId(env) {
   const e = env || process.env
   const host = e.COMPUTERNAME || e.HOSTNAME || e.HOST || 'unknown-host'
@@ -81,8 +100,8 @@ export function loadIdentity(opts) {
     nameLocked: false,
   }
   try {
-    mkdirSync(dir, { recursive: true })
-    writeFileSync(file, JSON.stringify(id, null, 2), 'utf8')
+    ensurePrivateDir(dir)
+    writeFileSync(file, JSON.stringify(id, null, 2), { encoding: 'utf8', mode: PRIVATE_FILE_MODE })
   } catch (e) { /* 只读环境：内存态继续工作 */ }
   return id
 }
@@ -91,11 +110,8 @@ export function saveIdentity(id, opts) {
   const env = (opts && opts.env) || process.env
   const dir = (opts && opts.dir) || dataDir(env)
   try {
-    mkdirSync(dir, { recursive: true })
-    const file = join(dir, 'device.json')
-    const tmp = file + '.tmp'
-    writeFileSync(tmp, JSON.stringify(id, null, 2), 'utf8')
-    renameSync(tmp, file)
+    ensurePrivateDir(dir)
+    writePrivateJson(join(dir, 'device.json'), id)
     return true
   } catch (e) {
     return false
@@ -222,11 +238,8 @@ export function readSyncState(storageDir) {
 
 export function writeSyncState(storageDir, state) {
   try {
-    mkdirSync(storageDir, { recursive: true })
-    const file = syncStatePath(storageDir)
-    const tmp = file + '.tmp'
-    writeFileSync(tmp, JSON.stringify(state, null, 2), 'utf8')
-    renameSync(tmp, file)
+    ensurePrivateDir(storageDir)
+    writePrivateJson(syncStatePath(storageDir), state)
     return true
   } catch (e) {
     return false

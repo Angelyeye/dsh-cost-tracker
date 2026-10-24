@@ -6,7 +6,7 @@
 //       settings schema 形状 / 增量与批量组装 / 快照 absorbed /
 //       退避与分类 / 水位推进 / 与真实云端实现（dsh-cost-cloud 源码）端到端
 // ============================================================
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
@@ -70,6 +70,19 @@ function tmpHome() {
   id2.machineName = '办公台式机'
   ok(saveIdentity(id2, { env: {}, dir: join(home, '.dsh-cost') }), '身份写回成功')
   eq(loadIdentity({ env: {}, dir: join(home, '.dsh-cost') }).machineName, '办公台式机', '改名持久化')
+
+  // 私有权限：device.json / 同步游标在 POSIX 上 owner-only（Windows 忽略 mode，跳过实权限断言）
+  const stDir = join(home, 'storages')
+  writeSyncState(stDir, { watermark: 7 })
+  eq(readSyncState(stDir).watermark, 7, '同步游标可读回（私有权限路径未破坏读写）')
+  ok(!existsSync(join(stDir, 'cost-tracker-sync.json.tmp')), '同步游标: 不留临时文件')
+  if (process.platform !== 'win32') {
+    const perm = (p) => statSync(p).mode & 0o777
+    eq(perm(join(home, '.dsh-cost')), 0o700, '身份目录权限 0700')
+    eq(perm(join(home, '.dsh-cost', 'device.json')), 0o600, '身份文件权限 0600')
+    eq(perm(stDir), 0o700, '同步目录权限 0700')
+    eq(perm(join(stDir, 'cost-tracker-sync.json')), 0o600, '同步游标权限 0600')
+  }
 }
 
 // ---------- 3. 配置规范化 ----------

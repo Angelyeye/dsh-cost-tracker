@@ -9,7 +9,7 @@
 import { readFileSync, writeFileSync, mkdirSync, renameSync, existsSync, realpathSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { homedir } from 'node:os'
-import { createStore, collectTotals, DETAIL_DAYS, MAX_AXIS_DAYS } from './store.js'
+import { createStore, collectTotals, DETAIL_DAYS, MAX_AXIS_DAYS, PRIVATE_DIR_MODE, PRIVATE_FILE_MODE } from './store.js'
 import { PRICE_ERAS, V41_EFFECTIVE_AT, exactModelsAt, eraAt, SUBSCRIPTION_RATES, PROVIDER_RATES, GENERIC_RATES, PEAK_WINDOWS, PEAK_HOUR_WINDOWS, isPeak, peakPhaseAt, priceFor, computeCost, normalizeTokens, subscriptionPlanFor, volcenginePlanModels, VOLCENGINE_PLAN_PROVIDER_KEYS, VOLCENGINE_PLAN_RATES, setSyncedEras, getSyncedEras, setPriceOverrides, getPriceOverrides, setPeakHolidays, getPeakHolidays } from './pricing.js'
 import {
   normalizePeakConfig, defaultPeakConfig, peakEffective,
@@ -37,7 +37,7 @@ import { readSettingsSection } from './settings.js'
 import { listSessionLogs, planAndBuildImports, loadManifest, IMPORT_SOURCE } from './import.js'
 
 /** 插件版本（写入上报信封，便于云端排查版本差异） */
-const PLUGIN_VERSION = '1.10.0'
+const PLUGIN_VERSION = '1.10.1'
 setPluginVersion(PLUGIN_VERSION)
 
 /** 配置面板可写的字段（与 settings 命名空间一致）。
@@ -317,9 +317,9 @@ export default {
 
     function saveConfig() {
       try {
-        mkdirSync(dirname(CONFIG_FILE), { recursive: true })
+        mkdirSync(dirname(CONFIG_FILE), { recursive: true, mode: PRIVATE_DIR_MODE })
         const tmp = CONFIG_FILE + '.tmp'
-        writeFileSync(tmp, JSON.stringify(Object.assign({}, peakConfig, cloudConfig, uiConfig, volcengineConfig, billingConfig, importConfig, priceSyncConfig, securityConfig)), 'utf8')
+        writeFileSync(tmp, JSON.stringify(Object.assign({}, peakConfig, cloudConfig, uiConfig, volcengineConfig, billingConfig, importConfig, priceSyncConfig, securityConfig)), { encoding: 'utf8', mode: PRIVATE_FILE_MODE })
         renameSync(tmp, CONFIG_FILE)
         return true
       } catch (e) {
@@ -1603,9 +1603,9 @@ export default {
     }
     function savePriceState() {
       try {
-        mkdirSync(dirname(PRICES_FILE), { recursive: true })
+        mkdirSync(dirname(PRICES_FILE), { recursive: true, mode: PRIVATE_DIR_MODE })
         const tmp = PRICES_FILE + '.tmp'
-        writeFileSync(tmp, JSON.stringify(priceState), 'utf8')
+        writeFileSync(tmp, JSON.stringify(priceState), { encoding: 'utf8', mode: PRIVATE_FILE_MODE })
         renameSync(tmp, PRICES_FILE)
         return true
       } catch (e) {
@@ -1695,9 +1695,9 @@ export default {
     }
     function saveImportManifest() {
       try {
-        mkdirSync(dirname(IMPORT_MANIFEST_FILE), { recursive: true })
+        mkdirSync(dirname(IMPORT_MANIFEST_FILE), { recursive: true, mode: PRIVATE_DIR_MODE })
         const tmp = IMPORT_MANIFEST_FILE + '.tmp'
-        writeFileSync(tmp, JSON.stringify(importManifest), 'utf8')
+        writeFileSync(tmp, JSON.stringify(importManifest), { encoding: 'utf8', mode: PRIVATE_FILE_MODE })
         renameSync(tmp, IMPORT_MANIFEST_FILE)
         return true
       } catch (e) {
