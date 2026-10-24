@@ -37,7 +37,7 @@ import { readSettingsSection } from './settings.js'
 import { listSessionLogs, planAndBuildImports, loadManifest, IMPORT_SOURCE } from './import.js'
 
 /** 插件版本（写入上报信封，便于云端排查版本差异） */
-const PLUGIN_VERSION = '1.9.6'
+const PLUGIN_VERSION = '1.10.0'
 setPluginVersion(PLUGIN_VERSION)
 
 /** 配置面板可写的字段（与 settings 命名空间一致）。

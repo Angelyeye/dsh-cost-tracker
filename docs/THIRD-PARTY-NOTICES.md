@@ -39,7 +39,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-> 目录中的单价来自各厂商公开定价页（每条带 `sourceUrl` / `checkedAt` 便于溯源），
+> 目录初始数据改编自 `dsh-cost-meter`（MIT）；**2026-10-25 起**由本项目按各厂商官方定价页（OpenAI / Anthropic / Google / Moonshot / z-ai / xAI / Alibaba / MiniMax / Tencent / Xiaomi / Upstage / NVIDIA / Mistral / Meta / OpenCode）逐条复核刷新，官方页不可达时才使用网关价并在 `notes` 标注。每条都带 `sourceUrl` / `checkedAt` 便于溯源，
 > 仅作**参考折算**用途；实际账单请以各厂商控制台为准。
 
 ---

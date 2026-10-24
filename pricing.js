@@ -289,10 +289,14 @@ export const VOLCENGINE_PLAN_DEDICATED_PROVIDERS = [
 /**
  * 火山方舟 Coding Plan 覆盖的具体模型（原始名，归一化后匹配）。
  *
- * 带上实测见到的**日期/版本后缀**变体：方舟模型 id 普遍带后缀
- * （用户配置里就有 `glm-5-3-flash-260828`、`deepseek-v4-1-flash-260910`、
- * `doubao-seed-2-1-pro-260915`），漏配的后果是订阅调用被当成未知模型、
- * 标成「按量计费 · 价格为估算」——正是本次要修掉的那类误标。
+ * 清单按官方 2026-10 文档「Coding Plan 个人版快速开始」复核：可配置 Model Name
+ * 共 13 个（另有控制台托管的 ark-code-latest / Auto）。方舟模型 id 普遍带
+ * **6 位日期后缀**（`glm-5-3-flash-260828`、`deepseek-v4-1-flash-260910`、
+ * `doubao-seed-2-1-pro-260915`），故匹配时先剥掉该后缀再查表——否则泛
+ * volcengine 分支会把套餐内模型漏配成「按量计费 · 价格为估算」。
+ *
+ * 沿用旧清单的 9 个 id 未删：官方下线公告页本机取不到正文，删错会把仍在售的
+ * 套餐内模型误标按量；保留的代价只是极端情况下少算按量花费，方向更安全。
  */
 const VOLCENGINE_PLAN_MODEL_IDS = [
   'ark-code-latest',
@@ -302,15 +306,30 @@ const VOLCENGINE_PLAN_MODEL_IDS = [
   'doubao-seed-2.0-pro',
   'doubao-seed-2.0-lite',
   'doubao-seed-2.1-pro',
+  // 2026-10 官方清单新增：豆包 2.1 Lite / 2.0 Mini / 自动演进档
+  'doubao-seed-2.1-lite',
+  'doubao-seed-2.0-mini',
+  'doubao-seed-evolving',
   // 智谱（含用户配置里的 5.3 flash 带日期变体）
   'glm-4.7',
   'glm-5.1',
+  'glm-5.2',
+  'glm-5.3',
   'glm-5.3-flash',
+  // glm-latest 是官方给 glm-5.3 的别名，归一化后是另一个键，必须单独登记
+  'glm-latest',
   // Kimi / DeepSeek / MiniMax
   'kimi-k2.5',
+  // 2026-08 起方舟新增的 Kimi 档（原生侧叫 kimi-for-coding / k3 系）
+  'kimi-k2.8-preview',
+  'kimi-k3',
+  'kimi-k3.1-pro',
   'deepseek-v3.2',
   'deepseek-v4-pro',
   'deepseek-v4.1-flash',
+  // 2026-10 官方清单新增：经济档与旧名 V4-Flash
+  'deepseek-v4.1-flash-economy',
+  'deepseek-v4-flash',
   'minimax-m2.5',
 ]
 
@@ -346,6 +365,15 @@ export function volcenginePlanModels() {
 }
 
 /**
+ * 剥掉方舟模型 id 的 6 位日期后缀（归一化后的尾部 `\d{6}`）。
+ * 只用于火山白名单匹配，不改变全局 normalizeModelName 的语义。
+ * @param {string} n - 已归一化的模型名
+ */
+export function stripVolcDateSuffix(n) {
+  return String(n == null ? '' : n).replace(/\d{6}$/, '')
+}
+
+/**
  * 解析某次调用是否命中订阅套餐。
  * @param {string} np - 归一化 provider 名
  * @param {string} model - 模型名
@@ -366,9 +394,11 @@ export function subscriptionPlanFor(np, model) {
   if (VOLCENGINE_PLAN_PROVIDER_KEYS.indexOf(np) < 0) return null
   if (VOLCENGINE_PLAN_DEDICATED_PROVIDERS.indexOf(np) >= 0) return VOLC_PLAN_RATES
   const n = normalizeModelName(model)
-  if (volcModelIndex()[n] !== undefined) return VOLC_PLAN_RATES
+  const bare = stripVolcDateSuffix(n)
+  const idx = volcModelIndex()
+  if (idx[n] !== undefined || (bare !== n && idx[bare] !== undefined)) return VOLC_PLAN_RATES
   for (const p of VOLCENGINE_PLAN_MODEL_PREFIXES) {
-    if (n.startsWith(p)) return VOLC_PLAN_RATES
+    if (n.startsWith(p) || (bare !== n && bare.startsWith(p))) return VOLC_PLAN_RATES
   }
   return null
 }

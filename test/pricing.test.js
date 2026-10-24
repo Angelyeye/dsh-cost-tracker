@@ -397,12 +397,24 @@ const PRO_PLAN_REVOKED_TS = Date.UTC(2026, 8, 14, 4, 0, 0)
     }
   }
 
-  // 泛 volcengine：套餐内外的模型**混在同一个 provider 下**，必须靠模型白名单区分
-  for (const m of ['ark-code-latest', 'Ark-Code-Latest', 'doubao-seed-code', 'kimi-k2.5', 'glm-5.1', 'deepseek-v4-pro', 'minimax-m2.5']) {
+  // 泛 volcengine：套餐内外的模型**混在同一个 provider 下**，必须靠模型白名单区分。
+  // 白名单按官方 2026-10「Coding Plan 个人版快速开始」复核（13 个可配置 Model Name）。
+  const PLAN_IN_2026_10 = [
+    'ark-code-latest', 'Ark-Code-Latest', 'doubao-seed-code', 'doubao-seed-2.1-pro', 'doubao-seed-2.1-lite',
+    'doubao-seed-2.0-mini', 'doubao-seed-evolving', 'glm-5.3', 'glm-5.3-flash', 'glm-latest',
+    'kimi-k2.5', 'kimi-k2.8-preview', 'kimi-k3', 'kimi-k3.1-pro', 'deepseek-v4-pro', 'deepseek-v4.1-flash',
+    'deepseek-v4.1-flash-economy', 'deepseek-v4-flash', 'minimax-m2.5',
+  ]
+  for (const m of PLAN_IN_2026_10) {
     ok(priceFor('volcengine', m, V41_TS).subscription === true, '火山白名单: ' + m + ' 计为订阅')
   }
+  // 方舟模型 id 普遍带 6 位日期后缀：泛 volcengine 分支也必须能剥后缀命中，
+  // 否则套餐内调用会被静默标成「按量 · 估算」（金额虚高）。
+  for (const m of ['glm-5-3-flash-260828', 'deepseek-v4-1-flash-260910', 'doubao-seed-2-1-pro-260915', 'kimi-k3-1-pro-261023']) {
+    ok(priceFor('volcengine', m, V41_TS).subscription === true, '火山白名单: 带日期后缀的 ' + m + ' 计为订阅')
+  }
   // 接入点 id（在线推理 = 按量）绝不能算成订阅
-  for (const m of ['ep-20260413045435-2shmq', 'doubao-seed-2.0-pro-ep-123', 'some-unlisted-model']) {
+  for (const m of ['ep-20260413045435-2shmq', 'doubao-seed-2.0-pro-ep-123', 'some-unlisted-model', 'some-model-123456']) {
     const p = priceFor('volcengine', m, V41_TS)
     ok(p.subscription === false, '火山白名单: ' + m + ' 不误判为订阅')
     ok(p.estimated === true, '火山白名单: ' + m + ' 走兜底估算')

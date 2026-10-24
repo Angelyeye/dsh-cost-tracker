@@ -2,6 +2,56 @@
 
 本文件用中文记录 dsh-cost-tracker 的版本变更。
 
+## v1.10.0(2026-10-25)
+
+**模型目录刷新到 2026-10-25 官方口径：15 家厂商 / 141 个条目（新增 51、改价 10、口径修正 25）；火山方舟 Coding Plan 白名单按官方现行 13 个 Model Name 复核，并给「泛 volcengine」分支补上日期后缀容忍**
+
+### 一、多厂商目录：新增了哪些新模型
+
+目录上次刷新是 2026-08-18（`generatedAt` 可查），两个多月里各家的新旗舰与降价款都没进来。本次逐家复核，`providers` 从 14 家 90 条扩到 **15 家 141 条**（新增 51，改价 10，其余为来源/口径修正 25；删除 0 条，下线模型一律保留并打 `notes` 标记，便于历史记录核对）。
+
+| 厂商 | 本次新增（部分） | 变化要点 |
+|---|---|---|
+| OpenAI | `gpt-6-astra` / `gpt-6-sol` / `gpt-6.1-sol` / `gpt-6-luna` | `gpt-5.6-sol` **降价 $5/$30 → $4/$20** |
+| Anthropic | `claude-fable-5-1`、`claude-mythos-5-1`、`claude-opus-5-5`、`claude-sonnet-5-5`、`claude-haiku-5-5` | `claude-sonnet-5` 早鸟价 `$2/$10` 经官方 2026-08-10 公告**永久化**，notes 修正 |
+| Google | `gemini-4-argon`（5 折至 2026-11-30）、`gemini-3.8-flash` | 3.7/3.8 Flash 促销口径两源冲突，notes 标「未核实」 |
+| Moonshot | `kimi-k3.1-pro`、`kimi-k3.1-pro-highspeed` | `kimi-k2.5` 官方 2026-08-31 下线（保留 + notes） |
+| 智谱 z-ai | `glm-5.3-flash`、`glm-5.3-flashx`；`glm-5.3` **由 unpriced 恢复精确价** `$1.40/$4.40` | 官方已公布单价，原「不编造价格」占位作废 |
+| xAI | `grok-4.7`、`grok-4.20-0309-reasoning` / `-non-reasoning` / `multi-agent-0309` | `grok-4.3` 补 `cachedInput 0.20`；各档补 >200K 分档说明 |
+| Alibaba | `qwen3.8-flash` | `qwen3.8-max` / `qwen3.7-max` 缓存读价按官方 10% 修正为 `0.20` / `0.25` |
+| MiniMax | `minimax-m3.1-flash`（¥1/¥0.10/¥4，按 7.2 折算） | `minimax-m3` 补 >512K 档与 priority ×1.5 说明 |
+| 腾讯混元 | `hy4-preview`（¥6/¥0.30/¥18 折算） | `hunyuan-a13b` 原值实为**人民币刊例价**，改为美元口径 `0.069/0.278`；`hy3` 升为 official |
+| 小米 MiMo | `mimo-v2.6-pro` / `mimo-v2.6-flash` / `mimo-v2.6-pro-ultraspeed` | `mimo-v2.5` 系 2026-10-21 10:00 下线（保留 + notes） |
+| Upstage | `solar-mini-4` | `solar-pro4` 2026-10-20 起 5 折；`solar-pro3` 2026-10-30 停服（notes） |
+| NVIDIA | `nemotron-3.5-lightning-30b-a3b`、`nemotron-3.5-super-vl-120b-a12b` | 官方仍未公布 token 单价，保持 `unpriced` |
+| Mistral | `mistral-large-4`（Public Preview）、`mistral-small-2603`（原 `mistral-small-4.0` 更名）、`ministral-14b/8b/3b-2512` | 官方价表未列缓存价，缓存值 notes 标「未核实」 |
+| **Meta（新厂商）** | `muse-wonder-1.0`、`muse-spark-1.3`、`muse-spark-1.2` | 新增 provider 别名 `meta` / `meta-ai` / `muse` |
+| OpenCode Go 档 | 补 17 条：`grok-4.7`、`glm-5.3`（原 unpriced → `$1.40/$4.40`）、`kimi-k3.1-pro`、`gpt-6-luna`、`gemini-4-argon`、`hy4-preview`、`deepseek-v4.1-flash` / `v4-pro` 等 | 订阅档按「固定月费 + 每模型月度美元额度」计量，token 单价与按量档一致 |
+
+**未收录的模型与原因**（不编造价格）：
+- `Big Pickle` / `Beam` / `Flint 40B` / `LongCat 2.5 Preview`：仅以网关限时免费档存在，或厂商主体未披露，无公开 token 价 → 不落表（`LongCat-2.0` 有网关价，已收录在 OpenCode Go 档）；
+- 智谱国内 `bigmodel.cn` 人民币价、Kimi K2.7 / K2.6 官方 API 单价、MiniMax 国际站美元价：官方页本机抓不到正文 → 沿用网关值并在 `notes` 明确标注出处；
+- OpenAI / Google 官方定价页本机返回 403 / DNS 不可达 → 这两家的值取自 OpenCode Console 网关价，`sourceUrl` 如实写网关地址，并用 OpenRouter 端点做交叉核对（一致 / 冲突都在 `notes` 写明）。
+
+### 二、火山方舟 Coding Plan 白名单（`pricing.js`）
+
+- 白名单从 14 个扩到 **24 个 id**：按官方 2026-10「Coding Plan 个人版快速开始」复核，补入 `kimi-k3`、`kimi-k3.1-pro`、`kimi-k2.8-preview`、`deepseek-v4.1-flash-economy`、`deepseek-v4-flash`、`glm-5.3`、`glm-latest`、`doubao-seed-2.1-lite`、`doubao-seed-2.0-mini`、`doubao-seed-evolving`；`glm-5.2` 列入（2026-08-31 起官方由 `glm-5.3` 承接）。
+- 旧白名单里 9 个「4 月还在、10 月官方清单不列」的 id **不删**：下线公告页本机取不到正文，删错会把仍在售的套餐内模型误标成按量；保留的代价只是极端情况下少算按量花费（方向更安全，符合本项目「宁可漏配也不能错配」的门卫原则）。
+- **新增日期后缀容忍**：方舟模型 id 普遍带 6 位日期后缀（`glm-5-3-flash-260828`、`deepseek-v4-1-flash-260910`、`doubao-seed-2-1-pro-260915`），而 `normalizeModelName` 只去分隔符。专属 coding 端点因「整档订阅」提前 return 不受影响，但**泛 `volcengine` 分支**下这些 id 会漏配 → 被标成「按量 · 估算」。现新增 `stripVolcDateSuffix()`：先剥尾部 `\d{6}` 再查白名单与前缀，`ep-20260413045435-2shmq` 这类接入点 id 仍不会被误判。
+- Kimi 订阅侧无需改动（`SUBSCRIPTION_MODELS` 为 `null` = 整档订阅），`6.5/27.0/1.1/1.1` 仍是估算值——官方明确不公开套餐内 token 等效价。
+
+### 三、数据纪律
+
+- 每条新增/改动都带 `sourceUrl` + `checkedAt: 2026-10-25`；官方页优先，网关兜底时在 `notes` 写明「取自网关 / 未核实 / 两源冲突」，与仓库既有的「不编造价格」约定一致。
+- `CATALOG_META.generatedAt` 同步为 `2026-10-25`（设置页「数据日期」与云端 `/api/v1/protocol` 都会回显）。
+- 计费优先级不变：手动覆盖价 > 订阅归类 > 内置/同步时代精确价 > 目录 > provider 兜底 > 通用兜底。
+
+### 四、测试
+
+- `test/vendor-catalog.test.js` 新增断言：`meta` 厂商在列、`glm-5.3` / `gpt-6-astra` / `kimi-k3.1-pro` 可命中（防止「只加 JSON 不加别名」或「占位未清」回归）。
+- `test/pricing.test.js` 更新火山门卫断言到 2026-10 官方白名单（含 `glm-latest` 别名），并新增「泛 volcengine 带日期后缀仍计为订阅」与「接入点 id 仍不误判」两侧断言。
+- 全仓 22 个测试文件逐文件运行全绿，`npm test` 全绿。
+
 ## v1.9.6(2026-10-17)
 
 **新增：余额查询兼容 DSH「DeepSeek 账号登录」——账号态改走宿主 `deepseekAccount.getBalance()`，读取 Platform 钱包（充值 / 赠金）；API Key 路径原样保留**
