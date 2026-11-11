@@ -307,6 +307,14 @@ console.log('[4] 宿主面：import-run / import-status')
   const dash = await api('dashboard', { days: 3650 })
   check('看板读到导入记录的总花费', dash.ok === true && dash.realCost > 0, JSON.stringify({ real: dash.realCost, calls: dash.realCalls }))
   check('看板 byDay 带 sub 字段（含 Plan 开关用）', Array.isArray(dash.byDay) && dash.byDay.every((d) => typeof d.sub === 'number'), JSON.stringify(dash.byDay.slice(0, 2)))
+  // 展示层模型名折叠表（v1.10.2）：buildDashboard 下发 displayModels，
+  // 每个聚合键（provider/model）都有映射；计费规范名小写入账 → 显示名全大写在客户端做。
+  check('看板下发 displayModels 且覆盖全部聚合键',
+    dash.displayModels && Object.keys(dash.displayModels).length === dash.byModel.length
+      && dash.byModel.every((m) => typeof dash.displayModels[m.model] === 'string' && dash.displayModels[m.model].length > 0),
+    JSON.stringify({ models: dash.byModel.map((m) => m.model), dm: dash.displayModels }))
+  check('按量记录映射到计费规范名（deepseek-flash）',
+    Object.values(dash.displayModels).includes('deepseek-flash'), JSON.stringify(dash.displayModels))
 
   // 价格同步状态（不联网：只读状态）
   const pr = await api('prices', {})

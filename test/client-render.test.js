@@ -837,6 +837,74 @@ console.log('[11] 自建样式表的 data-plugin 归属标记')
     '不要在两处各写一份字面量')
 }
 
+// ---------- [12] 展示层模型名折叠：图例不再出现一堆 GLM-5.3-Flash ----------
+// 口径（issue 讨论定案）：同一模型跨渠道/跨拼写折叠成一条，显示名 = 计价规范名全大写；
+// 订阅拆桶且显示名原样；「按模型」明细列表合并后标注「合并自 N 渠道」。
+console.log('[12] 展示层模型名折叠（规范名全大写 + 订阅拆桶）')
+{
+  const dupDash = Object.assign({}, DASH, {
+    byModel: [
+      { model: 'byteblus-coding-plan-cn/GLM-5.3-Flash', subscription: true, estimated: true, calls: 10, tokens: 1000, cost: 0.5 },
+      { model: 'opencode-go/GLM-5.3-Flash', subscription: true, estimated: true, calls: 5, tokens: 500, cost: 0.25 },
+      { model: 'z-ai/glm-5.3-flash', subscription: false, estimated: false, calls: 30, tokens: 9000, cost: 5.81 },
+      { model: 'openai/gpt-5-codex', subscription: false, estimated: true, calls: 4, tokens: 1000, cost: 0.5 },
+    ],
+    byModelDay: [
+      { model: 'byteblus-coding-plan-cn/GLM-5.3-Flash', subscription: true, estimated: true, days: DASH.byModelDay[0].days.map(d => Object.assign({}, d, { cost: 0.5 })) },
+      { model: 'opencode-go/GLM-5.3-Flash', subscription: true, estimated: true, days: DASH.byModelDay[0].days.map(d => Object.assign({}, d, { cost: 0.25 })) },
+      { model: 'z-ai/glm-5.3-flash', subscription: false, estimated: false, days: DASH.byModelDay[0].days.map(d => Object.assign({}, d, { cost: 5.81 })) },
+      { model: 'openai/gpt-5-codex', subscription: false, estimated: true, days: DASH.byModelDay[0].days.map(d => Object.assign({}, d, { cost: 0.5 })) },
+    ],
+    displayModels: {
+      'byteblus-coding-plan-cn/GLM-5.3-Flash': 'glm-5.3-flash',
+      'opencode-go/GLM-5.3-Flash': 'glm-5.3-flash',
+      'z-ai/glm-5.3-flash': 'glm-5.3-flash',
+      'openai/gpt-5-codex': 'gpt-5-codex',
+    },
+  })
+  dashPayload = dupDash
+  hookSlots.clear()
+  const mod12 = makeModule({ view: REAL_VIEW, syncView: 'local' })
+  const first12 = await renderAsync(mod12.section, {}, 3)
+  // 图表默认在「按峰谷」页：先点「按模型」切换，再断言图例。
+  // 默认 planTotal=false（纯按量口径）：订阅桶按既有过滤器排除在图外 —— 图例只有按量规范桶。
+  const modelTab = first12.nodes.find((n) => n.name === 'button' && flatText(n).trim() === '按模型' && typeof n.props.onClick === 'function')
+  check('能找到「按模型」切换按钮', !!modelTab)
+  if (modelTab) {
+    modelTab.props.onClick()
+    const folded = await renderAsync(mod12.section, {}, 3)
+    const fText = folded.text.replace(/\s+/g, ' ')
+    check('折叠渲染无异常', folded.errors.length === 0, describeErrors(folded.errors))
+    check('图例出现全大写规范名 GLM-5.3-FLASH（按量桶）', fText.includes('GLM-5.3-FLASH'), JSON.stringify(fText.slice(fText.indexOf('消费金额'), fText.indexOf('消费金额') + 260)))
+    // 原始拼写（大小写混排的 GLM-5.3-Flash）不得出现在**图表与图例**里；
+    // 模型详情面板（modelSections）按设计保留原始拼写，不在断言范围内。
+    const legendText = (folded.text.split('Token 用量统计')[0] || '')
+    check('图例不再出现原始拼写 GLM-5.3-Flash（大小写混排）', !/GLM-5\.3-Flash\b/.test(legendText), JSON.stringify((legendText.match(/.{0,40}GLM-5\.3-Flash.{0,20}/) || [''])[0]))
+    check('gpt-5-codex 显示为全大写规范名', fText.includes('GPT-5-CODEX'), '其它规范名未大写')
+    // 含 Plan 总额：订阅桶进入图例且显示名保留规范名原样（不全大写）
+    const planSwitch = first12.nodes.find((n) => n.name === 'input' && n.props && n.props.type === 'checkbox' && typeof n.props.onChange === 'function')
+    check('能找到「含 Plan 总额」开关', !!planSwitch)
+    if (planSwitch) {
+      planSwitch.props.onChange({ target: { checked: true } })
+      const withSub = await renderAsync(mod12.section, {}, 3)
+      const sText = withSub.text.replace(/\s+/g, ' ')
+      check('含 Plan 后订阅桶入图（glm-5.3-flash（订阅））', sText.includes('glm-5.3-flash（订阅）'), JSON.stringify(sText.slice(sText.indexOf('消费金额'), sText.indexOf('消费金额') + 260)))
+      check('订阅桶保留规范名原样（不全大写）', !sText.includes('GLM-5.3-FLASH（订阅）'), '订阅显示名被误大写')
+    }
+  }
+  // 旧后端（无 displayModels）兼容：不折叠、不炸
+  dashPayload = Object.assign({}, DASH, { displayModels: undefined })
+  hookSlots.clear()
+  const mod12b = makeModule({ view: REAL_VIEW, syncView: 'local' })
+  const legacyFirst = await renderAsync(mod12b.section, {}, 3)
+  const legacyTab = legacyFirst.nodes.find((n) => n.name === 'button' && flatText(n).trim() === '按模型' && typeof n.props.onClick === 'function')
+  if (legacyTab) legacyTab.props.onClick()
+  const legacy = await renderAsync(mod12b.section, {}, 3)
+  check('旧后端缺 displayModels 时渲染无异常', legacy.errors.length === 0, describeErrors(legacy.errors))
+  check('旧后端下图例保持原模型名（不静默丢数据）', legacy.text.replace(/\s+/g, ' ').includes('deepseek-v4.1-flash'), '旧形状被破坏')
+  dashPayload = DASH
+}
+
 console.log('')
 if (failures > 0) {
   console.log(`FAILED: ${failures} 项断言未通过`)

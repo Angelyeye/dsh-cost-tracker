@@ -10,7 +10,7 @@ import { readFileSync, writeFileSync, mkdirSync, renameSync, existsSync, realpat
 import { join, dirname } from 'node:path'
 import { homedir } from 'node:os'
 import { createStore, collectTotals, DETAIL_DAYS, MAX_AXIS_DAYS, PRIVATE_DIR_MODE, PRIVATE_FILE_MODE } from './store.js'
-import { PRICE_ERAS, V41_EFFECTIVE_AT, exactModelsAt, eraAt, SUBSCRIPTION_RATES, PROVIDER_RATES, GENERIC_RATES, PEAK_WINDOWS, PEAK_HOUR_WINDOWS, isPeak, peakPhaseAt, priceFor, computeCost, normalizeTokens, subscriptionPlanFor, volcenginePlanModels, VOLCENGINE_PLAN_PROVIDER_KEYS, VOLCENGINE_PLAN_RATES, setSyncedEras, getSyncedEras, setPriceOverrides, getPriceOverrides, setPeakHolidays, getPeakHolidays } from './pricing.js'
+import { PRICE_ERAS, V41_EFFECTIVE_AT, exactModelsAt, eraAt, SUBSCRIPTION_RATES, PROVIDER_RATES, GENERIC_RATES, PEAK_WINDOWS, PEAK_HOUR_WINDOWS, isPeak, peakPhaseAt, priceFor, computeCost, normalizeTokens, subscriptionPlanFor, volcenginePlanModels, VOLCENGINE_PLAN_PROVIDER_KEYS, VOLCENGINE_PLAN_RATES, setSyncedEras, getSyncedEras, setPriceOverrides, getPriceOverrides, setPeakHolidays, getPeakHolidays, displayModelKey } from './pricing.js'
 import {
   normalizePeakConfig, defaultPeakConfig, peakEffective,
   normalizeCloudConfig, defaultCloudConfig, normalizePluginConfig,
@@ -1370,6 +1370,20 @@ export default {
         const t = r.tokens
         recent.push({ ts: r.ts, time: timeLabel(r.ts), provider: r.provider, model: r.model, period: r.period, subscription: r.subscription, estimated: r.estimated, input: t.input, output: t.output, cacheRead: t.cacheRead, cacheWrite: t.cacheWrite, tokens: t.input + t.output + t.cacheRead + t.cacheWrite, cost: r4(r.cost) })
       }
+      // 展示层模型名折叠表（v1.10.2）：modelKey（provider/model，与 byModel 的键一致）
+      // → displayModelKey 的返回值（计费规范名 / 目录官方键 / 归一化兜底）。
+      // 只服务堆叠图与「按模型」列表的合并显示；详情面板、最近记录与 CSV 导出仍用原键。
+      // 时代取全部内置+同步的并集（订阅记录不查价目表，原拼写可能落在任一时代/目录里）。
+      const displayModels = {}
+      const displayEras = PRICE_ERAS.concat(getSyncedEras())
+      const displayOpts = { catalog: (np, m) => { try { return catalogEntryFor(np, m, { mode: billingConfig.priceMatch, fx: billingConfig.catalogFxRate }) } catch (e) { return null } } }
+      for (const k of keys) {
+        const m = modelMap[k]
+        const slash = m.model.indexOf('/')
+        const prov = slash >= 0 ? m.model.slice(0, slash) : ''
+        const model = slash >= 0 ? m.model.slice(slash + 1) : m.model
+        displayModels[m.model] = displayModelKey(model, displayEras, displayOpts, prov)
+      }
       return {
         ok: true, days,
         realCost: r4(realCost), realCalls, realTokens,
@@ -1379,6 +1393,7 @@ export default {
         month: { real: r4(monthReal), calls: monthCalls, tokens: monthTokens, sub: r4(monthSub), subCalls: monthSubCalls, subTokens: monthSubTokens },
         all: { real: r4(full.realCost), calls: full.realCalls, tokens: full.realTokens, sub: r4(full.subEquivalent), subCalls: full.subCalls, subTokens: full.subTokens },
         byDay, byModel, byModelDay, recent,
+        displayModels,
         peakWindows: PEAK_WINDOWS,
       }
     }
