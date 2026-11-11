@@ -2632,7 +2632,9 @@ window.__ModuleLoader__.load({
 			const [volcHasSecret, setVolcHasSecret] = useState(false);
 			const [volcBusy, setVolcBusy] = useState(false);
 			const [balance, setBalance] = useState(null);
-			const [tab, setTab] = useState("period");
+			// 图表页签默认「按模型」（模型维度比峰谷更常看）；不持久化用户选择，
+			// 与 scheme/planTotal 的记忆行为不同 —— 这是展示偏好里最轻的一个，重开回到默认。
+			const [tab, setTab] = useState("model");
 			const [scheme, setSchemeState] = useState(() => {
 				try { return localStorage.getItem("dsh-cost-tracker-scheme") || "orange-yellow" } catch (e) { return "orange-yellow" }
 			});

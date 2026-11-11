@@ -722,7 +722,15 @@ console.log('[10] 双轨计费口径开关（含 Plan 总额）')
   const onText = on.text.replace(/\s+/g, ' ')
   check('打开后总花费 = 按量 + 订阅等值（5.81 + 0.5 = ¥6.31）', onText.includes('6.31'), JSON.stringify(onText.slice(0, 260)))
   check('打开后金额卡标注「（含 Plan）」', onText.includes('（含 Plan）'), JSON.stringify(onText.slice(0, 200)))
-  check('打开后图表图例出现「订阅等值」（订阅按天并入堆叠）', onText.includes('订阅等值'), JSON.stringify(onText.slice(0, 300)))
+  // 图表页签默认「按模型」：订阅等值段在「按峰谷」页签里，切过去再断言图例
+  const periodTabOn = on.nodes.find((n) => n.name === 'button' && flatText(n).trim() === '按峰谷' && typeof n.props.onClick === 'function')
+  check('能找到「按峰谷」切换按钮', !!periodTabOn)
+  if (periodTabOn) {
+    periodTabOn.props.onClick()
+    const onPeriod = await renderAsync(mod10.section, {}, 3)
+    const onPeriodText = onPeriod.text.replace(/\s+/g, ' ')
+    check('打开后「按峰谷」图例出现「订阅等值」（订阅按天并入堆叠）', onPeriodText.includes('订阅等值'), JSON.stringify(onPeriodText.slice(onPeriodText.indexOf('消费金额'), onPeriodText.indexOf('消费金额') + 300)))
+  }
   check('打开后仍能看出订阅这部分是多少（附注「含订阅」）', onText.includes('含订阅'), JSON.stringify(onText.slice(0, 300)))
 
   // 关回来：金额回到纯按量（用最新一轮渲染的开关节点，避免拿到过期闭包）
