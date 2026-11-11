@@ -6,7 +6,7 @@
 //   mergeDash(本地, 云端_排除本机) === 全网合计，且本机恰好计一次。
 // 另外覆盖云端字段缺失、日期并集、订阅口径、排序与容错。
 // ============================================================
-import { BOARD_VIEWS, BOARD_DIMS, normalizeCloudDash, mergeDash, mergeUsageHeat, addSlice, zeroSlice } from '../view.js'
+import { BOARD_VIEWS, BOARD_DIMS, normalizeCloudDash, mergeDash, mergeUsageHeat, addSlice, zeroSlice, foldModels, modelDisplayLabel } from '../view.js'
 
 let failures = 0
 const passed = []
@@ -241,6 +241,85 @@ function cloudDash() {
   eq(mergeUsageHeat(null, C), C, '本机缺失 → 原样返回云端')
   eq(mergeUsageHeat(L, { ok: true }), L, '云端缺 days 数组 → 退回本机')
   eq(mergeUsageHeat(null, null), null, '两侧都缺 → null')
+}
+
+// ---------- 12. 展示层模型名折叠（v1.10.2）：foldModels / modelDisplayLabel ----------
+// 口径：规范名全大写；订阅拆桶（原样拼写）；跨渠道同模型合并为一条并计 merged 渠道数；
+// displayModels 缺键（旧后端）时不折叠、不丢数据。
+{
+  const dashWithDup = () => ({
+    byModel: [
+      // 同一个 glm-5.3-flash，三个原始键：订阅大写 / 订阅小写 / 按量规范小写
+      { model: 'byteblus/GLM-5.3-Flash', subscription: true, estimated: true, calls: 10, tokens: 1000, cost: 0.5 },
+      { model: 'opengo/GLM-5.3-Flash', subscription: true, estimated: true, calls: 5, tokens: 500, cost: 0.25 },
+      { model: 'z-ai/glm-5.3-flash', subscription: false, estimated: false, calls: 30, tokens: 9000, cost: 3.5 },
+      { model: 'other/gpt-5-codex', subscription: false, estimated: true, calls: 4, tokens: 1000, cost: 0.5 },
+    ],
+  })
+  const DM = {
+    'byteblus/GLM-5.3-Flash': 'glm-5.3-flash',
+    'opengo/GLM-5.3-Flash': 'glm-5.3-flash',
+    'z-ai/glm-5.3-flash': 'glm-5.3-flash',
+    'other/gpt-5-codex': 'gpt-5-codex',
+  }
+  const folded = foldModels(dashWithDup().byModel, DM)
+  eq(folded.length, 3, '三条同规范名的订阅/按量桶 → 订阅 1 条 + 按量 2 条')
+  const sub = folded.find(m => m.subscription)
+  const api = folded.find(m => !m.subscription && m.model === 'glm-5.3-flash')
+  const other = folded.find(m => m.model === 'gpt-5-codex')
+  ok(!!sub && !!api && !!other, '订阅与按量各占自己的桶（不混桶）')
+  near(sub.cost, 0.75, '订阅桶费用相加（0.5 + 0.25）')
+  eq(sub.label, 'glm-5.3-flash', '订阅显示名保留规范名原样（不全大写）')
+  near(api.cost, 3.5, '按量桶费用保留')
+  eq(api.label, 'GLM-5.3-FLASH', '按量显示名 = 规范名全大写')
+  eq(sub.merged, 2, '订阅桶合并自 2 个渠道')
+  eq(api.merged, 0, '单渠道按量桶不标合并')
+  ok(folded[0].cost >= folded[folded.length - 1].cost, '按费用降序')
+  // byModelDay：days 按日期并集相加
+  const byModelDay = [
+    { model: 'byteblus/GLM-5.3-Flash', subscription: true, estimated: true, days: [
+      { date: '2026-09-10', label: '9/10', calls: 10, tokens: 1000, input: 100, output: 50, cacheRead: 850, cacheWrite: 0, cost: 0.5 },
+    ] },
+    { model: 'opengo/GLM-5.3-Flash', subscription: true, estimated: true, days: [
+      { date: '2026-09-10', label: '9/10', calls: 5, tokens: 500, input: 50, output: 25, cacheRead: 425, cacheWrite: 0, cost: 0.25 },
+      { date: '2026-09-11', label: '9/11', calls: 5, tokens: 500, input: 50, output: 25, cacheRead: 425, cacheWrite: 0, cost: 0.25 },
+    ] },
+  ]
+  const foldedDays = foldModels(byModelDay, DM)
+  const subDay = foldedDays.find(m => m.subscription)
+  ok(Array.isArray(subDay.days) && subDay.days.length === 2, 'byModelDay 折叠后 days 按日期并集排列')
+  const d10 = subDay.days.find(d => d.date === '2026-09-10')
+  near(d10.cost, 0.75, '同一天的订阅费用相加（0.5 + 0.25）')
+  eq(d10.calls, 15, '同一天的订阅调用相加（10 + 5）')
+  // 缺键容错：displayModels 为空 → 不折叠、不丢数据
+  // （缺键条目走与规范桶同一套显示名规则：按量原键全大写、订阅原键原样）
+  const unfolded = foldModels(dashWithDup().byModel, {})
+  eq(unfolded.length, 4, 'displayModels 缺键时保持原条目数（旧后端兼容）')
+  ok(unfolded.filter(m => !m.subscription).every(m => m.label === m.model.toUpperCase()), '缺键按量条目显示名 = 原键大写')
+  ok(unfolded.filter(m => m.subscription).every(m => m.label === m.model), '缺键订阅条目显示名 = 原键原样')
+  const unfoldedSub = unfolded.filter(m => m.subscription)
+  eq(unfoldedSub.length, 2, '缺键时订阅条目按原键拆桶（仍不混桶）')
+  // 空输入与缺 displayModels 参数
+  eq(foldModels([], DM).length, 0, '空列表返回空数组')
+  eq(foldModels(null).length, 0, 'null 容错')
+  // 显示名助手
+  eq(modelDisplayLabel('glm-5.3-flash', false), 'GLM-5.3-FLASH', '按量显示名全大写')
+  eq(modelDisplayLabel('glm-5.3-flash', true), 'glm-5.3-flash', '订阅显示名原样')
+  eq(modelDisplayLabel('', false), '', '空名返回空串')
+}
+
+// ---------- 13. mergeDash 透传 displayModels（本地 ∪ 云端） ----------
+{
+  const l = localDash()
+  l.displayModels = { 'deepseek-official/deepseek-v4.1-flash': 'deepseek-flash' }
+  const c = cloudDash()
+  c.displayModels = { 'openai/gpt-5-codex': 'gpt-5-codex' }
+  const merged = mergeDash(l, c)
+  eq(merged.displayModels['deepseek-official/deepseek-v4.1-flash'], 'deepseek-flash', '本地键透传')
+  eq(merged.displayModels['openai/gpt-5-codex'], 'gpt-5-codex', '云端键透传')
+  // 缺字段的旧数据（无 displayModels）也能合并
+  const bare = mergeDash(localDash(), cloudDash())
+  ok(bare.displayModels && Object.keys(bare.displayModels).length === 0, '缺 displayModels 时合并为空对象（不炸）')
 }
 
 if (failures) {

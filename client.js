@@ -726,6 +726,7 @@ window.__ModuleLoader__.load({
 				summary: s.summary,
 				byDay: cloud.byDay || [],
 				byModel: cloud.byModel || [],
+				displayModels: cloud.displayModels || {},
 				byModelDay: (cloud.byModelDay || []).map((m) => Object.assign({}, m, {
 					days: (m.days || []).map((d) => Object.assign({ calls: 0, tokens: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 }, d)),
 				})),
@@ -790,6 +791,8 @@ window.__ModuleLoader__.load({
 				byDay: dates.map((d) => byDayMap.get(d)),
 				byModel: Array.from(byModelMap.values()).sort((a, b) => b.cost - a.cost),
 				byModelDay,
+				// 展示层折叠表：本地 ∪ 云端（与 view.js 的 mergeDash 同一口径，冲突不覆盖）
+				displayModels: Object.assign({}, (cloud && cloud.displayModels) || {}, (local && local.displayModels) || {}),
 				recent: (cloud.recent || []).concat(local.recent || []).slice(0, 20),
 				devices: cloud.devices || [],
 				sources: cloud.sources || [],
@@ -799,6 +802,66 @@ window.__ModuleLoader__.load({
 		// 「Token 用量统计」热力图的跨视图合并（与 view.js 的 mergeUsageHeat 逐行等价，
 		// 浏览器里 require("./view") 取不到时必须自带一份，否则云端用量永远并不进来）
 		function vR4(x) { return Math.round((Number(x) || 0) * 10000) / 10000; }
+		/** 展示层显示名（与 view.js 的 modelDisplayLabel 逐行等价）：规范名全大写；订阅条目原样 */
+		function vModelDisplayLabel(name, subscription) {
+			return subscription ? String(name || "") : String(name || "").toUpperCase();
+		}
+		/** 折叠 days（与 view.js 的 foldDays 逐行等价）：按日期并集相加 */
+		function vFoldDays(dayLists) {
+			const per = new Map();
+			for (const d of dayLists) {
+				const cur = per.get(d.date) || {
+					date: d.date, label: d.label, calls: 0, tokens: 0,
+					input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0,
+				};
+				cur.calls += d.calls || 0; cur.tokens += d.tokens || 0;
+				cur.input += d.input || 0; cur.output += d.output || 0;
+				cur.cacheRead += d.cacheRead || 0; cur.cacheWrite += d.cacheWrite || 0;
+				cur.cost += d.cost || 0;
+				per.set(d.date, cur);
+			}
+			return Array.from(per.values())
+				.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
+				.map((d) => Object.assign(d, { cost: vR2(d.cost) }));
+		}
+		/** 展示层模型名折叠（与 view.js 的 foldModels 逐行等价）：规范桶 + 订阅拆桶 + 合并来源计数 */
+		function vFoldModels(list, displayModels) {
+			const map = new Map();
+			const dm = displayModels || {};
+			for (const m of (list || [])) {
+				const unmapped = dm[m.model] == null || dm[m.model] === "";
+				const canonical = unmapped ? String(m.model) : dm[m.model];
+				const key = canonical + (m.subscription ? "|sub" : "");
+				const cur = map.get(key) || {
+					model: canonical, label: vModelDisplayLabel(canonical, m.subscription),
+					subscription: !!m.subscription, estimated: !!m.estimated,
+					calls: 0, tokens: 0, cost: 0, sources: [],
+				};
+				if (m.days) cur.days = (cur.days || []).concat(m.days);
+				cur.calls += m.calls || 0; cur.tokens += m.tokens || 0; cur.cost += m.cost || 0;
+				cur.estimated = cur.estimated || !!m.estimated;
+				cur.sources.push(m.model);
+				map.set(key, cur);
+			}
+			return Array.from(map.values())
+				.map((m) => {
+					let calls = m.calls, tokens = m.tokens, cost = m.cost;
+					let days;
+					if (m.days) {
+						days = vFoldDays(m.days);
+						calls = days.reduce((s, d) => s + d.calls, 0);
+						tokens = days.reduce((s, d) => s + d.tokens, 0);
+						cost = days.reduce((s, d) => s + d.cost, 0);
+					}
+					return Object.assign(m, {
+						calls, tokens, cost: vR2(cost),
+						merged: m.sources.length > 1 ? m.sources.length : 0,
+						sources: m.sources.sort(),
+						days,
+					});
+				})
+				.sort((a, b) => b.cost - a.cost);
+		}
 		function vMergeUsageHeat(local, cloud) {
 			if (!cloud || !Array.isArray(cloud.days)) return local || null;
 			if (!local || !Array.isArray(local.days)) return cloud;
@@ -858,12 +921,18 @@ window.__ModuleLoader__.load({
 			normalizeCloudDash: vNormalizeCloudDash,
 			mergeDash: vMergeDash,
 			mergeUsageHeat: vMergeUsageHeat,
+			// 展示层模型名折叠（v1.10.2）：内联实现必须与 view.js 逐行等价（[4] 一致性断言守护）
+			modelDisplayLabel: vModelDisplayLabel,
+			foldModels: vFoldModels,
 		});
 		const BOARD_VIEWS = VIEW.BOARD_VIEWS;
 		const BOARD_DIMS = VIEW.BOARD_DIMS;
 		const normalizeCloudDash = VIEW.normalizeCloudDash;
 		const mergeDash = VIEW.mergeDash;
 		const mergeUsageHeat = VIEW.mergeUsageHeat || vMergeUsageHeat;
+		// 展示层模型名折叠（v1.10.2）：view 模块取不到时回落到内联实现（两者必须逐行等价）
+		const modelDisplayLabel = VIEW.modelDisplayLabel || vModelDisplayLabel;
+		const foldModels = VIEW.foldModels || vFoldModels;
 
 		/**
 		 * 双轨计费口径开关（v1.9.0）：金额是否含 Plan 等值总额。
@@ -1046,15 +1115,17 @@ window.__ModuleLoader__.load({
 				chart = e(StackedBarsChart, { labels, titles, segs, rows, fmtY: fmtAxisMoney, fmtValue: fmtMoneyValue });
 				legend = segs;
 			} else {
-				// 模型按总消费降序排名（byModelDay 已按费用降序），全部展示、不合并、不循环：
-				// 第 1 名取色阶首色（最深，垫底），名次越靠后越浅；色相按所选方案漂移
-				const models = dash.byModelDay.filter(m => planTotal || !m.subscription);
+				// 模型按总消费降序排名（foldModels 已按费用降序），全部展示、不循环。
+				// v1.10.2：先按 displayModels 把同一模型跨渠道/跨拼写的条目折叠成规范桶
+				// （订阅与按量拆桶，见 foldModels 注释），图例不再出现一堆 GLM-5.3-Flash。
+				const folded = foldModels(dash.byModelDay, dash.displayModels).filter(m => planTotal || !m.subscription);
 				const sc = COLOR_SCHEMES[scheme] || COLOR_SCHEMES["orange-yellow"];
-				const segs = models.map((m, i) => ({ name: shortModel(m.model) + (m.subscription ? "（订阅）" : ""), color: schemeColor(i, sc) }));
+				const segs = folded.map((m, i) => ({ name: m.label + (m.subscription ? "（订阅）" : ""), color: schemeColor(i, sc) }));
 				const daySegs = dash.byDay.map((d, di) => {
 					const list = [];
-					for (let i = 0; i < models.length; i++) {
-						const c = models[i].days[di] ? models[i].days[di].cost : 0;
+					for (let i = 0; i < folded.length; i++) {
+						const cell = folded[i].days ? folded[i].days.find(x => x.date === d.date) : null;
+						const c = cell ? cell.cost : 0;
 						if (c > 0) list.push({ name: segs[i].name, color: segs[i].color, value: c });
 					}
 					return list;
@@ -2561,7 +2632,9 @@ window.__ModuleLoader__.load({
 			const [volcHasSecret, setVolcHasSecret] = useState(false);
 			const [volcBusy, setVolcBusy] = useState(false);
 			const [balance, setBalance] = useState(null);
-			const [tab, setTab] = useState("period");
+			// 图表页签默认「按模型」（模型维度比峰谷更常看）；不持久化用户选择，
+			// 与 scheme/planTotal 的记忆行为不同 —— 这是展示偏好里最轻的一个，重开回到默认。
+			const [tab, setTab] = useState("model");
 			const [scheme, setSchemeState] = useState(() => {
 				try { return localStorage.getItem("dsh-cost-tracker-scheme") || "orange-yellow" } catch (e) { return "orange-yellow" }
 			});
@@ -2855,7 +2928,14 @@ window.__ModuleLoader__.load({
 		function dimensionPanel(dash, dimension, matrix, onReload) {
 			let rows = [];
 			if (dimension === "model") {
-				rows = dash.byModel.map(m => ({ key: m.model, cost: m.cost, calls: m.calls, tokens: m.tokens, tag: m.subscription ? "订阅" : (m.estimated ? "估算" : "") }));
+				// v1.10.2：与堆叠图同口径 —— 按 displayModels 折叠成规范桶后再列出；
+				// 合并 ≥2 个原始键时在备注里说明（数字怎么来的，一眼可查）。
+				rows = foldModels(dash.byModel, dash.displayModels).map(m => ({
+					key: m.label,
+					cost: m.cost, calls: m.calls, tokens: m.tokens,
+					tag: (m.subscription ? "订阅" : (m.estimated ? "估算" : ""))
+						+ (m.merged ? (m.subscription || m.estimated ? " · " : "") + "合并自 " + m.merged + " 渠道" : ""),
+				}));
 			} else if (dimension === "agent") {
 				rows = (dash.sources || []).map(s => ({ key: s.source, cost: s.cost, calls: s.calls, tokens: s.tokens, tag: (s.devices || []).length + " 台设备" }));
 			} else if (dimension === "device") {
