@@ -76,6 +76,25 @@
 
 口径说明写进 `notes`：官方优先、交叉核对其次、单源标注；促销到期日（`gemini-4-carbon` 12-01 翻倍、`hy4` 12-31 恢复目录价、`gpt-5.5-cyber-preview` 2027-02-01 下线、MiniMax M2.5/M2.7 11-18 下线）一并记录。
 
+### 五之二、中转站 / 聚合网关按模型名识别厂商（真实流量阻塞修复）
+
+**问题（实测发现）**：本机 GPT 流量走的是中转站 `zhouhy-relay`，而目录只认厂商名（`openai`/`anthropic`/…），查不到 `zhouhy-relay` 就直接落到**通用兜底价 2 / 8 / 0.5 CNY**。后果有两层：
+
+1. 真实 GPT 调用长期被**低估约 6 倍**（`gpt-6.1-sol` 实际 ¥13.34/1M 输入，兜底只算 ¥2）；
+2. 兜底路径没有档位概念，**Fast 价永远不生效** —— 这个缺口会直接让本次 Fast 功能在真实环境里空转。
+
+**改法**：`vendor-catalog.js` 新增 `inferProviderFromModel(model)`，在 provider 名查不到时按**模型名前缀**推断厂商（`gpt-`/`o3`/`o4`/`codex` → openai，`claude` → anthropic，`gemini`/`gemma` → google，`grok` → xai，`glm` → z-ai，`qwen` → alibaba，`kimi`/`moonshot` → moonshot，`hy`/`hunyuan` → tencent，`mimo` → xiaomi，`solar` → upstage，`nemotron` → nvidia，`mistral`/`ministral`/`codestral`/`devstral`/`magistral` → mistral，`muse` → meta，`minimax` → minimax）。
+
+**安全边界**：推断只决定「查哪家目录」，推断后仍要**真正命中该厂商的条目**才计精确价；推断不出厂商（或厂商目录里没有该模型）依旧返回 `null`，落回 provider / 通用兜底。`deepseek` 系不映射到目录厂商，仍走内置时代价。命中的条目 `via` 带 `+model-inferred` 标记，便于排查。
+
+**实测（用户真实会话）**：`zhouhy-relay` + `gpt-6.1-sol`，档位 `priority`：
+
+| | 标准价 | Fast 价 |
+|---|---|---|
+| 11 次真实 GPT 调用合计 | ¥44.86 | ¥89.72（+¥44.86，正好 2 倍） |
+
+同一批调用在旧口径（通用兜底）下只有约 ¥4.93 —— 修正后约为其 9 倍，这是**纠偏**而非涨价。
+
 ### 六、云端（dsh-cost-cloud）配套
 
 - `pricing.js` / `vendor-catalog.js` / `price-sync.js` / `docs/provider-pricing.json` 逐字节同源，`PRICING_SOURCE_HASH` 重算；
