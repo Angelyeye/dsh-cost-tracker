@@ -95,6 +95,14 @@
 
 同一批调用在旧口径（通用兜底）下只有约 ¥4.93 —— 修正后约为其 9 倍，这是**纠偏**而非涨价。
 
+### 五之三、带发布批次号的 DeepSeek 模型名（真实账本纠偏）
+
+**问题（实测发现）**：真实流量里的模型 id 带批次后缀，例如 `deepseek-v4.1-flash-1017`、`deepseek-v4-1-flash-261017`。价表只登记了基础名，归一化后仍带数字尾巴 → 错过精确价 → 落到通用兜底，**缓存读按 ¥0.5 计而官方是 ¥0.04**（缓存部分贵 12.5 倍）。本机受影响约 2171 条记录（`tencentmaas` / `gongsi`）。
+
+**改法**：`resolveModelInEra()` 增加一次「剥离尾部版本号后重试」，支持 `-1017`（MMDD）、`-261017`（YYMMDD）、`-2026-09`（YYYY-MM）三种写法。
+
+**边界**：剥离只对 `deepseek` 开头的模型生效 —— 这些是同一模型的不同批次，价格一致；其它厂商的尾号可能代表不同档位（如 `gpt-5.4-mini`），不能一概剥离。
+
 ### 六、云端（dsh-cost-cloud）配套
 
 - `pricing.js` / `vendor-catalog.js` / `price-sync.js` / `docs/provider-pricing.json` 逐字节同源，`PRICING_SOURCE_HASH` 重算；

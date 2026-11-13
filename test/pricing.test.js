@@ -499,5 +499,22 @@ const PRO_PLAN_REVOKED_TS = Date.UTC(2026, 8, 14, 4, 0, 0)
   ok(mod.default && mod.default.name === 'cost-tracker', 'index.js: 默认导出插件对象')
 }
 
+// ---------- 6.6 v1.11.0: date-suffixed deepseek model ids fall back to base name ----------
+// Real traffic carries release batch suffixes (deepseek-v4.1-flash-1017). Those
+// missed the era table and dropped to the generic fallback, where cache reads cost
+// 0.5 instead of the official 0.04 - a 12.5x overcharge on cached tokens.
+{
+  const ts = V41_TS
+  const cases = ['deepseek-v4.1-flash-1017', 'deepseek-v4-1-flash-261017', 'deepseek-flash-2026-09']
+  for (const m of cases) {
+    const p = priceFor('tencentmaas', m, ts)
+    ok(p.source === 'exact', 'suffix: ' + m + ' resolves to exact price (' + p.source + ')')
+    ok(Math.abs(p.rates.cacheRead - 0.04) < 1e-9, 'suffix: ' + m + ' cache read is official 0.04')
+  }
+  // base names still resolve, and non-deepseek suffixes are NOT stripped
+  ok(priceFor('tencentmaas', 'deepseek-flash', ts).source === 'exact', 'suffix: base name still exact')
+  ok(priceFor('tencentmaas', 'gpt-5.4-mini', ts).source !== 'exact', 'suffix: non-deepseek suffix not stripped into era table')
+}
+
 console.log('\n' + passed.length + ' passed, ' + failures + ' failed')
 process.exit(failures === 0 ? 0 : 1)
