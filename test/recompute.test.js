@@ -185,6 +185,20 @@ ok(text.indexOf('缓存写入(cache write)') > -1 && text.indexOf('cacheWriteInp
   ok(!/Tokens \d/.test(statsText), 'stats: 不再出现英文 Tokens + 数字')
 }
 
+// ---------- 6. v1.11.0: 「仅订正标记」与「金额也变了」必须区分 ----------
+// 曾出现自相矛盾的输出：「7010 条仅订正估算标记，金额不变」而合计 +182。
+// 修法是把 markerOnlyFlips 单独统计，文案只用它。
+{
+  const rc = await registered.get('cost_recompute').execute({})
+  ok('重算: 输出 markerOnlyFlips（区分标记订正与金额变化）',
+    typeof rc.markerOnlyFlips === 'number', typeof rc.markerOnlyFlips)
+  ok('重算: markerOnlyFlips 不会超过 changed',
+    rc.markerOnlyFlips <= rc.changed, rc.markerOnlyFlips + ' / ' + rc.changed)
+  const rcText = registered.get('cost_recompute').output.render({}, rc)[0].text
+  ok('重算: 金额确有变化时不再说「金额不变」',
+    !(rc.markerOnlyFlips === 0 && /金额不变/.test(rcText)), rcText.slice(0, 160))
+}
+
 rmSync(home, { recursive: true, force: true })
 console.log('\n' + passed.length + ' passed, ' + failures + ' failed')
 process.exit(failures === 0 ? 0 : 1)

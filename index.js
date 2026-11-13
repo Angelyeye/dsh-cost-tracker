@@ -1546,7 +1546,7 @@ export default {
       else if (Number.isFinite(a.since) && a.since >= 0) since = a.since
       const apply = a.apply === true
       const byModel = {}
-      let scanned = 0, changed = 0, oldCost = 0, newCost = 0, estimatedFlips = 0
+      let scanned = 0, changed = 0, oldCost = 0, newCost = 0, estimatedFlips = 0, markerOnlyFlips = 0
       for (const r of records) {
         if (!(r.ts >= since)) continue
         scanned += 1
@@ -1572,6 +1572,10 @@ export default {
         if (!(Math.abs(cost - r.cost) > 1e-9 || model !== r.model || period !== r.period || flip)) continue
         changed += 1
         if (flip) estimatedFlips += 1
+        // v1.11.0：区分「只订正标记」与「金额也变了」。旧文案把两者混为一谈，
+        // 出现过「7010 条仅订正估算标记，金额不变」与实际金额 +182 自相矛盾的输出。
+        const markerOnly = flip && Math.abs(cost - r.cost) <= 1e-9 && model === r.model && period === r.period
+        if (markerOnly) markerOnlyFlips += 1
         const key = r.provider + '|' + r.model + '|' + model
         const m = byModel[key] || (byModel[key] = { provider: r.provider, from: r.model, to: model, calls: 0, oldCost: 0, newCost: 0, flips: 0 })
         m.calls += 1
@@ -1600,6 +1604,7 @@ export default {
         scanned,
         changed,
         estimatedFlips,
+        markerOnlyFlips,
         oldCost: r4(oldCost),
         newCost: r4(newCost),
         delta: r4(newCost - oldCost),
@@ -1607,7 +1612,7 @@ export default {
         note: changed === 0
           ? '没有需要重算的记录'
           : (apply
-            ? '已重算并落盘' + (estimatedFlips ? '（其中 ' + estimatedFlips + ' 条仅订正「估算」标记，金额不变）' : '')
+            ? '已重算并落盘' + (markerOnlyFlips ? '（其中 ' + markerOnlyFlips + ' 条仅订正「估算」标记，金额不变）' : '')
             : '试算结果，未落盘（传 apply: true 生效）'),
       }
     }
@@ -2281,7 +2286,7 @@ export default {
             : ('自 ' + new Date(v.since + 28800000).toISOString().replace('T', ' ').slice(0, 16).replace(/-/g, '/') + ' 北京起 · era=' + v.era)
           const lines = [
             '费用重算（' + scope + '）',
-            '扫描 ' + v.scanned + ' 条，需修正 ' + v.changed + ' 条' + (v.estimatedFlips ? '（其中 ' + v.estimatedFlips + ' 条仅订正「估算」标记，金额不变）' : ''),
+            '扫描 ' + v.scanned + ' 条，需修正 ' + v.changed + ' 条' + (v.markerOnlyFlips ? '（其中 ' + v.markerOnlyFlips + ' 条仅订正「估算」标记，金额不变）' : ''),
             '合计：¥' + v.oldCost + ' → ¥' + v.newCost + '（' + (v.delta >= 0 ? '+' : '') + v.delta + '）',
           ]
           for (const m of (v.byModel || []).slice(0, 8)) {
