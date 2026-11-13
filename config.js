@@ -275,8 +275,25 @@ export function defaultBillingConfig() {
     // 多厂商目录匹配模式：fuzzy（归一化包含匹配，默认）/ exact（全等）
     priceMatch: 'fuzzy',
     // 目录价 USD→CNY 汇率（目录数据为 USD / 1M tokens，账本为 CNY）
-    catalogFxRate: 7.2,
+    // v1.11.0：默认由 7.2 调整为 6.67（见 CATALOG_FX_DEFAULT）
+    catalogFxRate: 6.67,
   }
+}
+
+/**
+ * 汇率迁移：老配置里存着「旧默认 7.2」说明用户从未改过，升级后跟随新默认；
+ * 用户显式设置的其它合法值（如 6.9）保持不变。
+ * @param {number} fx - 配置里的原始汇率
+ * @param {number} def - 当前默认汇率
+ * @returns {number}
+ */
+export function migrateCatalogFxRate(fx, def) {
+  const base = Number.isFinite(Number(def)) && Number(def) > 0 ? Number(def) : 6.67
+  const v = Number(fx)
+  if (!Number.isFinite(v) || v < 0.1 || v > 100) return base
+  // 旧默认值（7.2）与其等价写法（7.20 / "7.2"）一并视为「未改过」
+  if (Math.abs(v - 7.2) < 1e-9 && Math.abs(base - 7.2) >= 1e-9) return base
+  return v
 }
 
 /**
@@ -305,7 +322,8 @@ export function normalizeBillingConfig(raw) {
     showTotalWithPlan: raw.showTotalWithPlan === true,
     planOverrides,
     priceMatch: raw.priceMatch === 'exact' ? 'exact' : 'fuzzy',
-    catalogFxRate: Number.isFinite(fx) && fx >= 0.1 && fx <= 100 ? fx : def.catalogFxRate,
+    // 旧默认 7.2 → 新默认 6.67：仅当配置值仍是旧默认时才迁移，用户自定义值保留
+    catalogFxRate: migrateCatalogFxRate(fx, def.catalogFxRate),
   }
 }
 

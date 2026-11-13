@@ -159,6 +159,32 @@ ok(text.indexOf('era=') > -1, 'prices: 渲染文本标出当前 era')
 ok(text.indexOf('当前生效：') > -1, 'prices: 渲染文本标出当前生效版本')
 ok(text.indexOf('0.04') > -1 && text.indexOf('（未命中）2') > -1 && text.indexOf('输出 8') > -1, 'prices: 渲染文本包含 V4.1 Flash 新价')
 
+// ---------- 5.5 v1.11.0: 目录与 Fast 档渲染 ----------
+ok(pv.catalog && pv.catalog.meta.generatedAt === '2026-11-13', 'prices: 目录日期刷新到 2026-11-13')
+ok(pv.catalog.fxRate === 6.67, 'prices: 目录汇率默认 6.67')
+ok(Array.isArray(pv.catalog.fast.models) && pv.catalog.fast.models.length >= 6, 'prices: 暴露 Fast 档模型清单')
+const solFast = pv.catalog.fast.models.find((m) => m.model === 'gpt-6.1-sol')
+ok(!!solFast && solFast.fast.input === 4 && solFast.standard.input === 2, 'prices: gpt-6.1-sol 标准 $2 / Fast $4')
+ok(!!solFast && Math.abs(solFast.fastCny.input - 4 * 6.67) < 1e-9, 'prices: Fast 价按 6.67 折算为 CNY')
+ok(text.indexOf('OpenAI Fast 档') > -1, 'prices: 渲染文本含 Fast 档段落')
+ok(text.indexOf('¥26.68') > -1, 'prices: 渲染文本含 Fast 档 CNY 折算价')
+ok(text.indexOf('按标准价计（不会凭空') > -1, 'prices: 渲染文本说明未识别档位时不加价')
+ok(text.indexOf('缓存写入(cache write)') > -1 && text.indexOf('cacheWriteInput') > -1, 'prices: 渲染文本说明独立缓存写价')
+
+// ---------- 5.6 v1.11.0: cost_stats 的 token 数量走中文单位 ----------
+{
+  const statsTool = registered.get('cost_stats')
+  const fake = {
+    days: 7,
+    local: { realTotal: 12.3, peakCost: 10, offCost: 2.3, flatCost: 0, realCalls: 42, realTokens: 150000000, subCalls: 0, subTokens: 0, subEquivalent: 0 },
+    cloud: null,
+  }
+  const statsText = statsTool.output.render({}, fake)[0].text
+  ok(statsText.indexOf('1.5亿') > -1, 'stats: 1.5 亿 token 显示为中文单位（1.5亿）')
+  ok(!/\b150000000\b/.test(statsText), 'stats: 不再直接输出原始 9 位数字')
+  ok(!/Tokens \d/.test(statsText), 'stats: 不再出现英文 Tokens + 数字')
+}
+
 rmSync(home, { recursive: true, force: true })
 console.log('\n' + passed.length + ' passed, ' + failures + ' failed')
 process.exit(failures === 0 ? 0 : 1)

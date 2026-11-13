@@ -25,6 +25,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import * as REAL_VIEW from '../view.js'
+import { formatTokenCN, formatTokenExact } from '../token-format.js'
 import { UI_SURFACES, defaultUiConfig } from '../config.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -835,6 +836,40 @@ console.log('[11] 自建样式表的 data-plugin 归属标记')
     /var DSH_BUNDLE_ID = "@angelyeye\/dsh-cost-tracker";/.test(source)
       && /id: DSH_BUNDLE_ID,/.test(source),
     '不要在两处各写一份字面量')
+}
+
+// ------------------------------------------------------------
+// ------------------------------------------------------------
+// v1.11.0：Token 数量中文单位（万 / 亿）
+//   拦的是「UI 里又冒出英文单位」这类回归：fmtTokens 与 fmtTokensExact
+//   的口径必须与 token-format.js 完全一致，且渲染文本里不得出现
+//   3.1M / 314K / 1.5B 这类英文缩写。
+// ------------------------------------------------------------
+{
+  check('中文单位: fmtTokens 仍存在（调用点统一入口）', /function fmtTokens\(n\)/.test(source))
+  check('中文单位: 没有任何 token 数量走 fmtCompact', !/" \+ fmtCompact\([^)]*tokens?/.test(source))
+  check('中文单位: 没有任何 token 数量走 fmtInt（除精确显示）', !/fmtInt\([^)]*[Tt]okens/.test(source))
+  check('中文单位: 渲染文本不拼接英文 tokens 字样', !/tokens" \+/.test(source) && !/" tokens"/.test(source))
+  check('中文单位: 精确显示函数 fmtTokensExact 存在', /function fmtTokensExact\(n\)/.test(source))
+
+  // 用同一份源码里的实现逐值对照 token-format.js（双端一致性的硬约束）
+  const grab = (name) => {
+    const i = source.indexOf('function ' + name)
+    check('中文单位: 找到 ' + name + ' 定义', i >= 0)
+    if (i < 0) return null
+    const j = source.indexOf('\n\t\t}', i)
+    const body = source.slice(i, j < 0 ? source.length : j + 4)
+    return new Function(body + '; return ' + name + ';')()
+  }
+  const uiFmt = grab('fmtTokens')
+  const uiExact = grab('fmtTokensExact')
+  if (uiFmt && uiExact) {
+    const cases = [0, 999, 1000, 9999, 10000, 31400, 314200, 1500000, 31382777, 99999999, 100000000, 150000000, 1234567890, 32768000000]
+    const diff = cases.filter((n) => uiFmt(n) !== formatTokenCN(n))
+    check('中文单位: 前端 fmtTokens 与 token-format.formatTokenCN 逐值一致' + (diff.length ? '（差异：' + diff.join(',') + '）' : ''), diff.length === 0)
+    const diffExact = [0, 31382777, 1500000000].filter((n) => uiExact(n) !== formatTokenExact(n))
+    check('中文单位: 前端 fmtTokensExact 与 token-format.formatTokenExact 逐值一致', diffExact.length === 0)
+  }
 }
 
 console.log('')

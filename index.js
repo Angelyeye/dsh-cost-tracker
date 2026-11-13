@@ -27,7 +27,11 @@ import {
 } from './volcengine.js'
 import { createSyncEngine, setPluginVersion, SOURCE as SYNC_SOURCE, SYNC_VERSION, loadIdentity } from './sync.js'
 import { Schema } from './schema.js'
-import { catalogEntryFor, CATALOG_META, catalogProviders, catalogFingerprint, CATALOG_FX_DEFAULT } from './vendor-catalog.js'
+import { catalogEntryFor, CATALOG_META, catalogProviders, catalogFingerprint, CATALOG_FX_DEFAULT, catalogFastTiers } from './vendor-catalog.js'
+// v1.11.0：GPT Fast 档识别（读 dsh-fast-tier 写在会话日志里的档位选择，只读）
+import { createTierResolver, resolveTier } from './fast-tier.js'
+// v1.11.0：token 数量统一中文单位（万 / 亿），工具输出与看板同一口径
+import { formatTokenCN } from './token-format.js'
 import { fetchOfficialPrices, buildSyncedEra, diffAgainstEra } from './price-sync.js'
 import { createCredSeam, migrateLegacySecrets, safeFetch, CRED_REFS, hostnameOf } from './credstore.js'
 // 账号登录态（DSH 0.2.1-rc.2+）余额投影：纯函数，单独成文件便于单测
@@ -37,7 +41,7 @@ import { readSettingsSection } from './settings.js'
 import { listSessionLogs, planAndBuildImports, loadManifest, IMPORT_SOURCE } from './import.js'
 
 /** 插件版本（写入上报信封，便于云端排查版本差异） */
-const PLUGIN_VERSION = '1.10.1'
+const PLUGIN_VERSION = '1.11.0'
 setPluginVersion(PLUGIN_VERSION)
 
 /** 配置面板可写的字段（与 settings 命名空间一致）。
@@ -192,6 +196,9 @@ export function ensureNavIconPatch(opts) {
 export default {
   name: 'cost-tracker',
   inject: ['tools', 'webServer'],
+  // v1.11.0：会话与投影服务用于识别 GPT Fast 档；两者都是**可选依赖**，
+  // 缺失时档位解析降级为 standard，记账与其它功能不受影响。
+  optional: ['sessions', 'sessionProjections'],
   apply(ctx) {
     // 侧边栏图标补丁自愈（DSH 升级覆盖外壳后自动重打；失败静默跳过）
     ensureNavIconPatch({ log: (m) => startupLog('[cost-tracker] nav-icon ' + m) })
@@ -588,19 +595,37 @@ export default {
     // ---------- recording ----------
     /** 计价运行时注入项：手动覆盖价 + 目录匹配（随 billingConfig 实时更新） */
     let priceRuntimeOpts = null
+    /** v1.11.0：会话档位解析器（读 dsh-fast-tier 的选择；依赖缺失时恒 standard） */
+    let tierResolver = null
+    // sessions / sessionProjections 是可选依赖，缺失时解析器恒返回 standard
+    // （记账照常，只是不区分 Fast 价），因此这里必须容错。
+    try {
+      tierResolver = createTierResolver(ctx)
+    } catch (e) {
+      tierResolver = null
+    }
     function applyPricingRuntime() {
       setPriceOverrides(billingConfig.priceOverrides || {})
       priceRuntimeOpts = {
-        catalog: (np, m) => catalogEntryFor(np, m, { mode: billingConfig.priceMatch, fx: billingConfig.catalogFxRate }),
+        catalog: (np, m, extra) => catalogEntryFor(np, m, {
+          mode: billingConfig.priceMatch,
+          fx: billingConfig.catalogFxRate,
+          serviceTier: extra && extra.serviceTier,
+          tokens: extra && extra.tokens,
+        }),
         overrides: getPriceOverrides(),
         planOverrides: billingConfig.planOverrides || {},
       }
     }
 
     /** 某时刻的计价三件套（实时记账与历史导入共用，保证口径一致） */
-    function priceForAt(np, model, ts, tokens) {
-      const price = priceFor(np, model, ts, priceRuntimeOpts || undefined)
+    function priceForAt(np, model, ts, tokens, tier) {
+      const price = priceFor(np, model, ts, Object.assign({}, priceRuntimeOpts || {}, {
+        serviceTier: tier && tier.tier === 'fast' ? 'fast' : 'standard',
+        tokens,
+      }))
       const peak = peakEffective(peakConfig, ts) ? isPeak(ts) : false
+      const catalog = price.catalog || {}
       return {
         cost: computeCost(price.rates, price.tiered, peak, tokens),
         estimated: price.estimated,
@@ -608,6 +633,13 @@ export default {
         period: price.tiered ? (peak ? 'peak' : 'off-peak') : 'flat',
         model: price.model || model,
         source: price.source || '',
+        // v1.11.0：服务档位（GPT Fast）与目录口径，旧记录没有这些字段时按 standard 读
+        serviceTier: tier && tier.tier === 'fast' ? 'fast' : 'standard',
+        tierSource: (tier && tier.source) || '',
+        tierPriceSource: catalog.tierPriceSource || '',
+        contextTier: catalog.contextTier || '',
+        ultrafast: tier ? tier.ultrafast === true : false,
+        tierNote: catalog.tierNote || '',
       }
     }
 
@@ -622,12 +654,15 @@ export default {
       // 视觉模型（deepseek-v4-flash-vision-exp）的图片 token 已含在接口
       // prompt_tokens 中（每张≤384 tokens），由 normalizeTokens 归入 input
       const tokens = normalizeTokens(usage)
-      const price = priceForAt(np, model, ts, tokens)
+      const sessionId = toStr(options && options.sessionId)
+      // v1.11.0：GPT Fast 档（请求参数优先，其次该会话在 dsh-fast-tier 里的选择）
+      const tier = resolveTier(options, tierResolver, sessionId)
+      const price = priceForAt(np, model, ts, tokens, tier)
       store.add({
         // 被路由的请求以「实际计费模型规范名」入账（如 V4-Pro → deepseek-flash、
         // 旧名 deepseek-v4-flash → deepseek-flash），使按模型聚合看到的就是真实计费口径。
         ts, provider, model: price.model,
-        sessionId: toStr(options && options.sessionId),
+        sessionId,
         purpose: toStr(options && options.purpose),
         cost: price.cost,
         estimated: price.estimated,
@@ -635,6 +670,15 @@ export default {
         tokens,
         subscription: price.subscription,
         source: 'live', // v1.9.0：与历史导入（source:'import'）区分，覆盖判定只认 live
+        // v1.11.0（可选字段）：Fast 档与目录口径；仅 fast 时写入，标准档保持旧记录形状
+        ...(tier.tier === 'fast' ? {
+          serviceTier: 'fast',
+          tierSource: tier.source,
+          tierPriceSource: price.tierPriceSource,
+          contextTier: price.contextTier,
+          ...(tier.ultrafast ? { ultrafast: true } : {}),
+          ...(price.tierNote ? { tierNote: price.tierNote } : {}),
+        } : {}),
       })
       schedulePersist()
       scheduleSync(4000)
@@ -1186,6 +1230,23 @@ export default {
     }
 
     // ---------- prices ----------
+    /**
+     * v1.11.0：GPT Fast 档价格摘要（USD 原价 + CNY 折算），供工具与设置页展示。
+     * 只放目录里**确实登记了** fast 块的模型，绝不按倍率推算。
+     */
+    function fastTierPriceInfo(fx) {
+      try {
+        const info = catalogFastTiers(fx)
+        return {
+          fxRate: info.fx,
+          checkedAt: info.checkedAt,
+          count: info.models.length,
+          models: info.models,
+        }
+      } catch (e) {
+        return { fxRate: Number(fx) || CATALOG_FX_DEFAULT, checkedAt: '', count: 0, models: [] }
+      }
+    }
     function prices() {
       const now = Date.now()
       const era = eraAt(now)
@@ -1219,6 +1280,8 @@ export default {
           providers: catalogProviders(),
           fxRate: billingConfig.catalogFxRate,
           match: billingConfig.priceMatch,
+          // v1.11.0：GPT Fast 档（service_tier: fast/priority）可用模型与官方价
+          fast: fastTierPriceInfo(billingConfig.catalogFxRate),
         },
         priceSync: {
           url: priceSyncConfig.priceSyncUrl,
@@ -1490,7 +1553,12 @@ export default {
         const np = normProvider(r.provider)
         // v1.9.0：重算与实时记账共用 priceForAt —— 同步时代 / 目录 / 覆盖价 /
         // 订阅归类覆盖在补账时同样生效（口径完全一致，重算后不会有双标）。
-        const p = priceForAt(np, r.model, r.ts, r.tokens)
+        // v1.11.0：记录上带 serviceTier:'fast' 的按 Fast 档重算；旧记录（无该字段）
+        // 仍按标准档，结果与 1.10.x 完全一致。
+        const tier = r.serviceTier === 'fast'
+          ? { tier: 'fast', source: 'record', ultrafast: r.ultrafast === true }
+          : { tier: 'standard', source: 'record' }
+        const p = priceForAt(np, r.model, r.ts, r.tokens, tier)
         const cost = p.cost
         const model = p.model
         const period = p.period
@@ -1734,8 +1802,10 @@ export default {
           importLastResult = { at: Date.now(), imported: 0, files: 0, scanned: 0, note: '未找到会话日志目录（' + root + '）' }
           return { ok: true, imported: 0, files: 0, scanned: 0, note: '未找到会话日志' }
         }
-        const priceFn = (np, model, ts, tokens) => {
-          const p = priceForAt(np, model, ts, tokens)
+        const priceFn = (np, model, ts, tokens, sessionId) => {
+          // v1.11.0：历史导入按该会话在日志里的档位选择计 Fast 价（无选择则标准档）
+          const tier = resolveTier(null, tierResolver, sessionId)
+          const p = priceForAt(np, model, ts, tokens, tier)
           return { cost: p.cost, estimated: p.estimated, subscription: p.subscription, period: p.period, model: p.model }
         }
         const results = await planAndBuildImports(records, rollups, logs, importManifest, { priceFn, normProvider })
@@ -2147,7 +2217,30 @@ export default {
           }
           lines.push('视觉模型 deepseek-v4-flash-vision-exp：图片按官方规则换算 token（每张上限 384），以接口用量计费（已含在 inputTokens 内）。')
           lines.push('kimi-coding（订阅等效，估算）：输入 6.5 / 缓存命中（含缓存写入）1.1 / 输出 27.0')
-          lines.push('缓存写入(cache write)按缓存命中价计费，与官方规则一致。其他 provider 兜底为估算平价（openai 10/30/5，anthropic 15/75/1.5，gemini 2.5/10/0.625，未知 2/8/0.5）；ollama/local 为 0。')
+          lines.push('缓存写入(cache write)：DeepSeek 与缓存命中同价；目录中带独立缓存写价的模型（OpenAI / Anthropic）按条目 cacheWriteInput 计费。其他 provider 兜底为估算平价（openai 10/30/5，anthropic 15/75/1.5，gemini 2.5/10/0.625，未知 2/8/0.5）；ollama/local 为 0。')
+          // ---- v1.11.0：多厂商目录概览 + GPT Fast 档价格 ----
+          if (v.catalog) {
+            const c = v.catalog
+            const meta = c.meta || {}
+            const total = (c.providers || []).reduce((n, p) => n + (Number(p.count) || 0), 0)
+            lines.push('', '【多厂商价格目录】' + (meta.generatedAt || '') + ' · ' + (c.providers || []).length + ' 家 / ' + total + ' 条 · USD→CNY 汇率 ' + c.fxRate + '（匹配：' + c.match + '）')
+            const fast = c.fast || { models: [] }
+            if (fast.models && fast.models.length) {
+              lines.push('', '【OpenAI Fast 档（service_tier: fast / priority）】核实日期 ' + (fast.checkedAt || '') + ' · 汇率 ' + fast.fxRate + ' · 共 ' + fast.models.length + ' 个模型可区分档位')
+              for (const m of fast.models) {
+                const std = m.standardCny || {}
+                const f = m.fastCny || {}
+                lines.push('  ' + m.model + '：标准 ¥' + std.input + ' / ¥' + std.cachedInput + ' / ¥' + std.output
+                  + ' → Fast ¥' + f.input + ' / ¥' + f.cachedInput + ' / ¥' + f.output
+                  + '（USD ' + m.standard.input + '/' + m.standard.cachedInput + '/' + m.standard.output
+                  + ' → ' + m.fast.input + '/' + m.fast.cachedInput + '/' + m.fast.output + '）'
+                  + (m.longContext ? '；>272K 另行计档' : '') + '；来源 ' + (m.confidence || 'official'))
+              }
+              lines.push('Fast 档判定：请求参数 > 会话在 dsh-fast-tier 里的选择；识别不到档位时按标准价计（不会凭空 ×2）。ultrafast 按 Fast 价计，实际倍率更高，属已知偏低。')
+            } else {
+              lines.push('【OpenAI Fast 档】目录中暂无登记 fast 块价的模型。')
+            }
+          }
           return [{ type: 'text', text: lines.join('\n') }]
         },
       },
@@ -2262,11 +2355,11 @@ export default {
           const lines = ['花费统计（' + (v.days === 0 ? '全部' : '近 ' + v.days + ' 天') + '）']
           if (v.local) {
             lines.push('【本机】按量消费：¥' + v.local.realTotal + '（高峰 ¥' + v.local.peakCost + ' · 闲时 ¥' + v.local.offCost
-              + (v.local.flatCost > 0 ? ' · 不分峰谷 ¥' + v.local.flatCost : '') + '）· 请求 ' + v.local.realCalls + ' 次 · Tokens ' + v.local.realTokens)
-            lines.push('【本机】订阅套餐：请求 ' + v.local.subCalls + ' 次 · Tokens ' + v.local.subTokens + ' · 等效 ¥' + v.local.subEquivalent + '（订阅已覆盖，仅供参考）')
+              + (v.local.flatCost > 0 ? ' · 不分峰谷 ¥' + v.local.flatCost : '') + '）· 请求 ' + v.local.realCalls + ' 次 · Token ' + formatTokenCN(v.local.realTokens))
+            lines.push('【本机】订阅套餐：请求 ' + v.local.subCalls + ' 次 · Token ' + formatTokenCN(v.local.subTokens) + ' · 等效 ¥' + v.local.subEquivalent + '（订阅已覆盖，仅供参考）')
           }
           if (v.cloud && v.cloud.ok) {
-            lines.push('【云端汇总】按量消费：¥' + v.cloud.realCost + ' · 请求 ' + v.cloud.realCalls + ' 次 · Tokens ' + v.cloud.realTokens
+            lines.push('【云端汇总】按量消费：¥' + v.cloud.realCost + ' · 请求 ' + v.cloud.realCalls + ' 次 · Token ' + formatTokenCN(v.cloud.realTokens)
               + '（' + (v.cloud.devices || []).map((d) => d.name).join(' / ') + '）')
             if (v.cloud.sources && v.cloud.sources.length) {
               lines.push('【云端汇总】按 Agent：' + v.cloud.sources.map((s) => s.source + ' ¥' + s.cost).join(' · '))

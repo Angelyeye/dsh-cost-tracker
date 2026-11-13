@@ -1,0 +1,14 @@
+# 与 dsh-cost-cloud 逐字节同源的文件必须固定 LF。
+#
+# 背景：`dsh-cost-cloud` 的 .gitattributes 声明了 `* text=auto eol=lf`，
+# 而本仓库此前没有 .gitattributes —— 在 Windows（core.autocrlf=true）上
+# 两侧检出的行尾不同（本仓 CRLF、云端 LF），`check-pricing-sync.js` 的
+# 「逐字节一致」会在**全新 clone** 后失败，表现为莫名其妙的同源漂移。
+#
+# 这四个文件被云端当副本使用，行尾必须按仓库内容（LF）原样落地。
+# 本文件自身也固定 LF：CRLF 会干扰 git 解析属性行。
+.gitattributes text eol=lf
+pricing.js text eol=lf
+vendor-catalog.js text eol=lf
+price-sync.js text eol=lf
+docs/provider-pricing.json text eol=lf

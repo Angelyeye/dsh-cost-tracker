@@ -2,6 +2,101 @@
 
 本文件用中文记录 dsh-cost-tracker 的版本变更。
 
+## v1.11.0(2026-11-13)
+
+**Token 数量改中文单位（万/亿）· GPT Fast 档单独计价 · 目录汇率 6.67 · 新模型与价格表刷新**
+
+### 一、Token 数量统一为中文单位（万 / 亿）
+
+**问题**：界面与工具里 token 一直显示成 `1.5M` / `314K`（英文单位），中英混排、量级不直观。
+
+**改法**：新增纯函数模块 `token-format.js`，规则统一为
+
+| 范围 | 显示 | 示例 |
+|---|---|---|
+| < 1 万 | 千分位整数 | `9,300` |
+| ≥ 1 万 < 1 亿 | `X.X万`（≥100 万取整） | `31.4万` / `150万` / `3138万` |
+| ≥ 1 亿 | `X.XX亿`（≥10 亿 1 位） | `1.5亿` / `327.7亿` |
+
+落点（全量）：
+- 前端 `client.js`：概览卡副行、Tokens 主值、订阅面板、设备×Agent 矩阵、热力图顶部与 tooltip、图表刻度（`fmtTokens` / `fmtCompact` / `fmtInt` 的 token 用途全部收敛到一处）；
+- 宿主 `index.js`：`cost_stats` 工具输出；
+- 云端看板 `web/state.js` 的 `fmtTokens` 与 `web/app.js`、`web/views.js` 的展示文案。
+
+同时新增 `fmtTokensExact` 保留完整千分位数值（tooltip / 明细 / CSV 口径不受影响）；工具 JSON 与 CSV 的**数值字段不变**，只改展示文本。
+
+**UI 兼容**：中文单位让数字变宽，补了 `font-variant-numeric: tabular-nums` 防抖动，Fast 价格行与矩阵列改为「等宽数字 + 单行省略」，避免窄容器换行错位或单位被截断。
+
+### 二、GPT Fast 档（`service_tier: fast` / `priority`）单独计价
+
+**背景**：OpenAI 于 2026-07-30 把 Priority processing 更名为 Fast mode，请求可用 `service_tier: "fast"` 或 `"priority"`；同一模型的 Fast 档价格与标准价不同（多数 2 倍）。此前插件只按模型名匹配单价，Fast 请求被按标准价记账，金额系统性偏低。
+
+**宿主现状**：当前运行时不给插件层提供档位（`GenerateOptions` / `TokenUsage` / stream 事件都没有该字段），因此插件自己取档位：
+
+1. 请求参数 `options.serviceTier`（未来宿主支持时优先）；
+2. 会话在 **`dsh-fast-tier`** 插件里的档位选择（该插件把选择写进会话日志的 `steered` 事件，`source.kind = 'fast-tier'`）；
+3. 都拿不到 → 标准档。
+
+新增 `fast-tier.js`（纯逻辑）：`billableTierOf` / `tierOfSteeredEvent` / `tierFromEvents` / `createTierResolver` / `resolveTier`。解析器**只读**（读会话对象与已注册投影，不注册同名投影、不写会话），`sessions` / `sessionProjections` 声明为**可选依赖**，任一环节缺失或抛错都降级 `standard`，绝不影响记账主流程。
+
+**价格来源**：只认目录里**显式登记**的 `serviceTiers.fast`，绝不按「×2」推算。已登记 6 个模型（官方 Fast 页 + 交叉核对）：
+
+| 模型 | 标准（USD 输入/缓存读/输出） | Fast | 来源 |
+|---|---|---|---|
+| gpt-6-astra | 10 / 1 / 50 | 20 / 2 / 100 | 官方 |
+| gpt-6.1-sol | 2 / 0.1 / 10 | 4 / 0.2 / 20 | 官方 |
+| gpt-6.1-terra | 1 / 0.05 / 5 | 2 / 0.1 / 10 | 官方 |
+| gpt-6-sol | 2 / 0.2 / 10 | 4 / 0.4 / 20 | 官方 |
+| gpt-5.6-sol | 4 / 0.4 / 20 | 8 / 0.8 / 40 | 官方 |
+| gpt-6-luna | 0.1 / 0.01 / 0.5 | 0.2 / 0.02 / 1 | 交叉核对 |
+
+无 Fast 档价的模型（5.4 / 5.6 Luna 等）按标准价计并标 `standard-only`；`ultrafast` 按 Fast 价计并标注「实际倍率更高、金额偏低」。
+
+### 三、长上下文分档与独立缓存写价
+
+- 目录条目新增 `longContext`（`inputTokensAbove` + 长档价）：请求**输入侧** token 超过阈值（OpenAI 272K）时按整请求长档价计。阈值判定只看输入，输出不计入。
+- 目录条目新增 `cacheWriteInput`：OpenAI / Anthropic 的缓存写价与读价不同（如 gpt-6.1-sol 读 $0.1、写 $2.5），此前被强行按读价计。`computeCost` 改为读写分别计价；未提供写价时沿用读价，DeepSeek 等读写同价模型结果完全不变。
+
+### 四、目录汇率 7.2 → 6.67
+
+- `vendor-catalog.js`：`CATALOG_FX_DEFAULT = 6.67`，新增 `CATALOG_FX_LEGACY_DEFAULT = 7.2`；
+- `config.js`：默认值改 6.67，`migrateCatalogFxRate` 把「仍是旧默认 7.2」的配置迁移到 6.67，**用户显式设置的其他值保留**；
+- 云端 `catalog.js`：库内 `catalog_fx_rate` 残留 7.2 时迁移并写回；
+- 前端 `client.js`：三处硬编码 7.2 改为常量 `DEFAULT_FX`。
+
+> 这是全局汇率：所有 USD 计价模型（OpenAI / Anthropic / Gemini / xAI / Mistral 等）随之变化，账本仍以人民币入账，历史记录不回改。
+
+### 五、新模型与价格表刷新（2026-11-13）
+
+目录从 15 家 / 141 条扩到 **16 家 / 155 条**。
+
+新增：`gpt-6.1-terra`、`gpt-6-rosalind`、`gpt-6-cyber`、`gpt-5.6-cyber`、`gpt-5.5-cyber`、`gpt-5.5-cyber-preview`、`gpt-6-astra-law`、`claude-fable-5-2`、`claude-mythos-5-2`、`gemini-4-carbon`、`gemini-4-hydrogen`、`hy4`、`glm-5.3-flashx`、`qwen4-max-preview`（Token Plan 专属、无按 token 公开价，标 `unpriced`）。
+
+改价校正：`mistral-large-4`（0.70 / 0.07 / 2.10，旧值 1.36/4.18 来自第三方 host 非官方牌价）、`grok-4.7`（2 / 0.5 / 6，≥200K 翻倍）、`claude-opus-5-5`（4 / 0.2 / 20，缓存读 0.05x）等。
+
+口径说明写进 `notes`：官方优先、交叉核对其次、单源标注；促销到期日（`gemini-4-carbon` 12-01 翻倍、`hy4` 12-31 恢复目录价、`gpt-5.5-cyber-preview` 2027-02-01 下线、MiniMax M2.5/M2.7 11-18 下线）一并记录。
+
+### 六、云端（dsh-cost-cloud）配套
+
+- `pricing.js` / `vendor-catalog.js` / `price-sync.js` / `docs/provider-pricing.json` 逐字节同源，`PRICING_SOURCE_HASH` 重算；
+- `computeCostAt` 支持 `serviceTier` / `tokens`，并把 tokens 自动带入目录回调（长上下文分档与插件同口径）；
+- `ingest.js` 新增 `tierOfMeta`：按记录 `meta.serviceTier` 决定重算档位，**上报优先、重算留痕**的既有设计不变；
+- `catalogInfo` 回显 `fastTierModelCount`；看板 token 改中文单位；
+- 版本 1.5.0 → 1.6.0，`syncVer` 仍为 1，协议向后兼容（`meta` 为可选字段，未知 meta 被忽略）。
+
+### 七、测试
+
+新增 `test/token-format.test.js`（35 项）、`test/fast-tier.test.js`（45 项），并扩展 `test/client-render.test.js`（前端 `fmtTokens` 与 `token-format` 逐值一致 + 禁止英文单位回归）、`test/vendor-catalog.test.js`（汇率 6.67 / Fast 档 / 长档 / 独立写价）、`test/pricing.test.js`（Fast 计价端到端）、`test/config.test.js`（汇率迁移）、`test/recompute.test.js`（工具渲染）、`test/pricing-sync.test.js`（云端长档与 Fast）。
+
+本仓 24 个测试文件、云端 18 个测试文件全部通过，`check-pricing-sync.js` 全绿。
+
+### 八、已知边界
+
+- Fast 判定依赖 `dsh-fast-tier` 的会话选择；该插件被卸载/禁用后，历史 Fast 请求无法事后识别，按标准价计并标注「档位未知」。
+- 网关私有倍率（sub2api 可能对 Fast 另计）不模拟；必要时用现有手动覆盖价处理。
+- Ultrafast / Flex / Batch / 区域加价 / ChatGPT 订阅额度口径不在本期。
+- 官方 Fast 页只列 4 个模型，`gpt-6-luna`、`gpt-5.6-sol` 的 Fast 价来自模型页 / LiteLLM / Pi 交叉核对，条目标注 `cross-checked`。
+
 ## v1.10.1(2026-10-25)
 
 **安全加固：本地状态文件在 POSIX 上收紧为 owner-only（目录 0700 / 文件 0600）；新增 PR CI 门禁（`pull_request` 跑 `npm test`）**

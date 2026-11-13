@@ -72,16 +72,42 @@ console.log('[3] 匹配：exact / fuzzy / 跨厂商 / 汇率')
   check('fuzzy 命中带后缀的变体', !!e3 && e3.via === 'fuzzy', JSON.stringify(e3 && e3.via))
 
   // USD → CNY 折算
-  const cnyFee = catalogEntryFor('google', bare, { fx: 7.2 })
+  const cnyFee = catalogEntryFor('google', bare, { fx: 6.67 })
   const usdFee = catalogEntryFor('google', bare, { fx: 1 })
-  check('汇率生效（7.2 倍）', Math.abs(cnyFee.rates.input - usdFee.rates.input * 7.2) < 1e-9, cnyFee.rates.input + ' vs ' + usdFee.rates.input)
+  check('汇率生效（6.67 倍）', Math.abs(cnyFee.rates.input - usdFee.rates.input * 6.67) < 1e-9, cnyFee.rates.input + ' vs ' + usdFee.rates.input)
   check('缓存写入价 = 缓存命中价（目录口径）', cnyFee.rates.cacheWrite === cnyFee.rates.cacheRead)
-  check('默认汇率为 7.2', CATALOG_FX_DEFAULT === 7.2 && Math.abs(cnyFee.rates.input / usdFee.rates.input - CATALOG_FX_DEFAULT) < 1e-9)
+  check('默认汇率为 6.67（v1.11.0）', CATALOG_FX_DEFAULT === 6.67 && Math.abs(cnyFee.rates.input / usdFee.rates.input - CATALOG_FX_DEFAULT) < 1e-9)
   check('带 sourceUrl / checkedAt 便于溯源', typeof cnyFee.sourceUrl === 'string' && cnyFee.sourceUrl.length > 0 && typeof cnyFee.checkedAt === 'string')
 
   // 非法 fx 回落默认
   const bad = catalogEntryFor('google', bare, { fx: -3 })
-  check('非法汇率回落默认 7.2', Math.abs(bad.rates.input - usdFee.rates.input * 7.2) < 1e-9)
+  check('非法汇率回落默认 6.67', Math.abs(bad.rates.input - usdFee.rates.input * 6.67) < 1e-9)
+
+  // 独立缓存写价（OpenAI/Anthropic 写价 ≠ 读价）
+  const sol = catalogEntryFor('openai', 'gpt-6.1-sol', { fx: 6.67 })
+  check('条目自带 cacheWriteInput 时写价独立于读价',
+    Math.abs(sol.rates.cacheRead - 0.1 * 6.67) < 1e-9 && Math.abs(sol.rates.cacheWrite - 2.5 * 6.67) < 1e-9,
+    JSON.stringify(sol.rates))
+
+  // Fast 档：官方 Fast 页价格 × 汇率
+  const fast = catalogEntryFor('openai', 'gpt-6.1-sol', { fx: 6.67, serviceTier: 'fast' })
+  check('Fast 档命中目录内 fast 价', fast.serviceTier === 'fast' && fast.tierPriceSource === 'catalog-fast', JSON.stringify(fast.tierPriceSource))
+  check('Fast 档价格 = 官方 $4/$0.20/$20 × 6.67',
+    Math.abs(fast.rates.input - 4 * 6.67) < 1e-9
+    && Math.abs(fast.rates.cacheRead - 0.2 * 6.67) < 1e-9
+    && Math.abs(fast.rates.output - 20 * 6.67) < 1e-9, JSON.stringify(fast.rates))
+  check('Fast 档来源指向官方 Fast 页', fast.sourceUrl.indexOf('api-fast-mode') >= 0, fast.sourceUrl)
+
+  // Fast 档 + 长上下文（>272K 整请求计价）
+  const fastLong = catalogEntryFor('openai', 'gpt-6.1-sol', { fx: 6.67, serviceTier: 'fast', tokens: { input: 300000 } })
+  check('Fast 档长上下文切档', fastLong.contextTier === 'long' && Math.abs(fastLong.rates.input - 8 * 6.67) < 1e-9 && Math.abs(fastLong.rates.output - 30 * 6.67) < 1e-9, JSON.stringify(fastLong.rates))
+  const stdShort = catalogEntryFor('openai', 'gpt-6.1-sol', { fx: 6.67, tokens: { input: 1000 } })
+  check('未超过阈值保持短档', stdShort.contextTier === 'short' && Math.abs(stdShort.rates.input - 2 * 6.67) < 1e-9)
+
+  // 无 Fast 档价的模型：绝不按 ×2 推算
+  const noFast = catalogEntryFor('openai', 'gpt-5.4', { fx: 6.67, serviceTier: 'fast' })
+  check('无 fast 块时回落标准价并标注', noFast.tierPriceSource === 'standard-only' && !!noFast.tierNote, JSON.stringify(noFast.tierNote))
+  check('无 fast 块时价格与标准档一致', Math.abs(noFast.rates.input - catalogEntryFor('openai', 'gpt-5.4', { fx: 6.67 }).rates.input) < 1e-9)
 
   // 短名不参与包含匹配（防误伤）
   const short = catalogEntryFor('openai', 'gpt', { mode: 'fuzzy' })

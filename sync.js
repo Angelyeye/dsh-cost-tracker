@@ -380,6 +380,16 @@ export function createSyncEngine(deps) {
         subscription: r.subscription === true,
         period: r.period || 'flat',
       }
+      // v1.11.0：GPT Fast 档标记随 meta 上报（≤1KB 契约内），云端据此按同一档位重算；
+      // 标准档记录不带该字段，旧服务端忽略未知 meta 也照常工作。
+      if (r.serviceTier === 'fast') {
+        rec.meta = {
+          serviceTier: 'fast',
+          ...(r.tierPriceSource ? { tierPriceSource: String(r.tierPriceSource) } : {}),
+          ...(r.contextTier ? { contextTier: String(r.contextTier) } : {}),
+          ...(r.ultrafast === true ? { ultrafast: true } : {}),
+        }
+      }
       // 去重键按**原始记录**计算（服务端也按原始字段算），脱敏只影响上送字段
       rec.dedupKey = dedupKeyOf(r, resetEpoch)
       const size = JSON.stringify(rec).length

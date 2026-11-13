@@ -331,7 +331,7 @@ export function importKeyOf(sessionId, call) {
  * @param {{path:string}[]} logs - listSessionLogs 的输出
  * @param {object} manifest - 清单（loadManifest 的输出，会被就地更新引用）
  * @param {{priceFn:Function, normProvider:Function, now?:number}} hooks
- *   priceFn(np, model, ts, tokens) → {cost, estimated, subscription, period, model}
+ *   priceFn(np, model, ts, tokens, sessionId) → {cost, estimated, subscription, period, model}
  * @returns {Promise<Array>} 每个文件的结果 {path, sessionId, status, calls, imported, skipped, reason}
  */
 export async function planAndBuildImports(allRecords, rollups, logs, manifest, hooks) {
@@ -369,7 +369,8 @@ export async function planAndBuildImports(allRecords, rollups, logs, manifest, h
       if (importedKeys.has(importKeyOf(sid, call))) continue     // 之前已导入过
       const np = hooks.normProvider(call.provider)
       if (!np && !call.model) continue
-      const price = hooks.priceFn(np, call.model, call.ts, call.tokens)
+      // v1.11.0：多传 sessionId，供计价层识别该会话的 GPT Fast 档选择
+      const price = hooks.priceFn(np, call.model, call.ts, call.tokens, sid)
       picked.push({
         ts: call.ts,
         provider: call.provider,
