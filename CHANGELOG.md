@@ -68,7 +68,7 @@
 
 ### 五、新模型与价格表刷新（2026-11-13）
 
-目录从 15 家 / 141 条扩到 **16 家 / 155 条**。
+目录从 15 家 / 141 条扩到 **15 家 / 154 条**。
 
 新增：`gpt-6.1-terra`、`gpt-6-rosalind`、`gpt-6-cyber`、`gpt-5.6-cyber`、`gpt-5.5-cyber`、`gpt-5.5-cyber-preview`、`gpt-6-astra-law`、`claude-fable-5-2`、`claude-mythos-5-2`、`gemini-4-carbon`、`gemini-4-hydrogen`、`hy4`、`glm-5.3-flashx`、`qwen4-max-preview`（Token Plan 专属、无按 token 公开价，标 `unpriced`）。
 
