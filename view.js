@@ -31,6 +31,96 @@ export function zeroSlice() { return { real: 0, calls: 0, tokens: 0, sub: 0, sub
 
 export function r2(x) { return Math.round((Number(x) || 0) * 100) / 100; }
 
+// ------------------------------------------------------------
+// 展示层模型名折叠（v1.10.2）
+//
+// 后端 buildDashboard 下发 displayModels: { 'provider/model' → 规范名 }，
+// 这里的职责是把 byModel / byModelDay 折叠成规范桶（仅用于堆叠图与「按模型」列表）。
+//
+// 关键决定（与 issue 讨论一致）：
+//   · 折叠键 = 规范名 + subscription 两个维度：订阅与按量拆桶 —— 图例里的
+//     「（订阅）」后缀与「不含订阅」过滤器（planTotal）都依赖这个标记，
+//     混桶会把订阅条目从默认图里整个挤掉；
+//   · 订阅条目的显示名**不用全大写**：订阅记录的 model 保留渠道原始拼写
+//     （如 GLM-5.3-Flash），本身就是「人写的名字」，原样保留更可读；
+//     全大写只属于价目表/目录里查得到的官方规范名（按量记录）。
+//   · 显示名转全大写：规范名是价目表/目录里的官方键（全小写存储），
+//     展示时统一大写，如 glm-5.3-flash → GLM-5.3-FLASH。
+//   · 折叠时收集原始键与来源渠道数：合并 ≥2 个原始键时给出「合并自 N 渠道」提示。
+// ------------------------------------------------------------
+
+/** 显示名：规范名全大写（订阅条目原样，见上） */
+export function modelDisplayLabel(name, subscription) {
+	return subscription ? String(name || "") : String(name || "").toUpperCase();
+}
+
+/**
+ * 把 byModel（或 byModelDay）按 displayModels 折叠成规范桶。
+ * @param {Array} list - dash.byModel / dash.byModelDay
+ * @param {object} displayModels - buildDashboard 下发的 { 'provider/model': 规范名 }
+ * @returns {Array} 折叠后的数组，按费用降序；条目含 model（规范名）、label（显示名）、
+ *          subscription/estimated 标记、聚合数值与 sources（原始键列表）。
+ */
+export function foldModels(list, displayModels) {
+	const map = new Map();
+	const dm = displayModels || {};
+	for (const m of (list || [])) {
+		// 键缺失（旧后端/新数据混排）时不折叠：保持原有形状，绝不静默丢数据
+		const unmapped = dm[m.model] == null || dm[m.model] === "";
+		const canonical = unmapped ? String(m.model) : dm[m.model];
+		const key = canonical + (m.subscription ? "|sub" : "");
+		const cur = map.get(key) || {
+			model: canonical, label: modelDisplayLabel(canonical, m.subscription),
+			subscription: !!m.subscription, estimated: !!m.estimated,
+			calls: 0, tokens: 0, cost: 0, sources: [],
+		};
+		if (m.days) cur.days = (cur.days || []).concat(m.days);
+		cur.calls += m.calls || 0; cur.tokens += m.tokens || 0; cur.cost += m.cost || 0;
+		cur.estimated = cur.estimated || !!m.estimated;
+		cur.sources.push(m.model);
+		map.set(key, cur);
+	}
+	return Array.from(map.values())
+		.map((m) => {
+			let calls = m.calls, tokens = m.tokens, cost = m.cost;
+			let days;
+			if (m.days) {
+				// byModelDay 形状：buildDashboard 不下发顶层 calls/tokens/cost，
+				// 聚合值必须从折叠后的 days 求和（顶层字段全为 0 不能当真）
+				days = foldDays(m.days);
+				calls = days.reduce((s, d) => s + d.calls, 0);
+				tokens = days.reduce((s, d) => s + d.tokens, 0);
+				cost = days.reduce((s, d) => s + d.cost, 0);
+			}
+			return Object.assign(m, {
+				calls, tokens, cost: r2(cost),
+				merged: m.sources.length > 1 ? m.sources.length : 0,
+				sources: m.sources.sort(),
+				days,
+			});
+		})
+		.sort((a, b) => b.cost - a.cost);
+}
+
+/** 折叠后的 days：按日期并集相加（foldModels 可能把多条同规范名的 byModelDay 拼在一起） */
+function foldDays(dayLists) {
+	const per = new Map();
+	for (const d of dayLists) {
+		const cur = per.get(d.date) || {
+			date: d.date, label: d.label, calls: 0, tokens: 0,
+			input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0,
+		};
+		cur.calls += d.calls || 0; cur.tokens += d.tokens || 0;
+		cur.input += d.input || 0; cur.output += d.output || 0;
+		cur.cacheRead += d.cacheRead || 0; cur.cacheWrite += d.cacheWrite || 0;
+		cur.cost += d.cost || 0;
+		per.set(d.date, cur);
+	}
+	return Array.from(per.values())
+		.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
+		.map((d) => Object.assign(d, { cost: r2(d.cost) }));
+}
+
 export function addSlice(a, b) {
 	const x = a || zeroSlice(), y = b || zeroSlice();
 	return {
@@ -107,6 +197,7 @@ export function normalizeCloudDash(cloud, fallbackDays) {
 		summary: s.summary,
 		byDay: cloud.byDay || [],
 		byModel: cloud.byModel || [],
+		displayModels: cloud.displayModels || {},
 		byModelDay: (cloud.byModelDay || []).map((m) => Object.assign({}, m, {
 			days: (m.days || []).map((d) => Object.assign({ calls: 0, tokens: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 }, d)),
 		})),
@@ -172,6 +263,9 @@ export function mergeDash(local, cloud) {
 		byDay: dates.map((d) => byDayMap.get(d)),
 		byModel: Array.from(byModelMap.values()).sort((a, b) => b.cost - a.cost),
 		byModelDay,
+		// 展示层折叠表：本地 ∪ 云端。同键冲突时**不覆盖**（本地值先入，
+		// 两端规范名理论上同源——都来自同一份价目表/目录），仅防极端时序下互相踩。
+		displayModels: Object.assign({}, (cloud && cloud.displayModels) || {}, (local && local.displayModels) || {}),
 		recent: (cloud.recent || []).concat(local.recent || []).slice(0, 20),
 		devices: cloud.devices || [],
 		sources: cloud.sources || [],
@@ -238,11 +332,12 @@ function r4(x) { return Math.round((Number(x) || 0) * 10000) / 10000; }
 // 浏览器 bundle 注册（client.js 通过 require("./view") 取用）
 // ------------------------------------------------------------
 /* istanbul ignore next */
-if (typeof window !== "undefined" && window.__ModuleLoader__ && typeof window.__ModuleLoader__.load === "function") {
+	if (typeof window !== "undefined" && window.__ModuleLoader__ && typeof window.__ModuleLoader__.load === "function") {
 	window.__ModuleLoader__.load({
 		id: "@angelyeye/dsh-cost-tracker/view",
 		factory: () => ({
 			BOARD_VIEWS, BOARD_DIMS, zeroSlice, addSlice, r2, normalizeCloudDash, mergeDash, cloudSlices, mergeUsageHeat,
+			modelDisplayLabel, foldModels,
 		}),
 	});
 }
