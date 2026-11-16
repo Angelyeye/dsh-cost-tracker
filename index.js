@@ -1308,11 +1308,30 @@ export default {
       return out
     }
 
+    /**
+     * 把界面的「天数」换算成查询区间起点（毫秒）。
+     * 本机 buildDashboard 与云端 fetchCloud 必须共用这一份规则，
+     * 否则「本机 + 云端」视图的两半会落在不同区间，卡片数字自相矛盾。
+     *
+     *   · days = 1 → 北京时间当日 00:00（「今天」，与「今日费用」卡同口径）
+     *   · days > 1 → now - days * 86400000 滚动窗口
+     *   · days <= 0 → 0（不限起点，即全部）
+     */
+    function windowCutoff(days, now) {
+      const n = typeof days === 'number' && isFinite(days) ? Math.max(0, Math.floor(days)) : 7
+      if (n <= 0) return 0
+      if (n === 1) {
+        const k = dayKey(now)
+        return Date.UTC(toInt(k.slice(0, 4)), toInt(k.slice(5, 7)) - 1, toInt(k.slice(8, 10))) - 28800000
+      }
+      return now - n * 86400000
+    }
+
     function buildDashboard(args) {
       const days = args && typeof args.days === 'number' && isFinite(args.days) ? Math.max(0, Math.floor(args.days)) : 7
       const now = Date.now()
       const todayKey = dayKey(now)
-      const cutoff = days > 0 ? now - days * 86400000 : 0
+      const cutoff = windowCutoff(days, now)
       const filt = []
       for (const r of records) if (r.ts >= cutoff) filt.push(r)
       // 保留窗口外的日汇总（按天+模型），仅取落在查询范围内的天
@@ -1968,6 +1987,29 @@ export default {
       const qs = new URLSearchParams()
       qs.set('range', query.range || '7d')
       if (query.days) qs.set('days', String(query.days))
+      // 自定义区间：云端 resolveRange() 优先识别 from=… & to=…（可写 from），
+      // 一旦命中就返回 { range:'custom', fromMs, toMs }，不受 range 枚举限制。
+      //
+      // 为什么必须走 from/to 而不是 range 枚举：云端只认 today / 7d / 30d / 90d /
+      // month / year / all，**其余值静默降级成 all**（实测 1d、14d 都变全时段）。
+      // 界面上「近 14 天」若只传 range=14d，会拿到全时段累计且没有任何报错 —— 这种
+      // 静默错值比报错更难发现，所以凡是有精确区间的地方一律传 from/to。
+      //
+      // 语义必须与本地 buildDashboard 的 cutoff 保持一致（否则本机 + 云端两半对不齐）：
+      //   · days=1  → 北京时间当日 00:00 起（「今天」，与「今日费用」卡同口径）
+      //   · days>1  → now - days*86400000 滚动窗口
+      //   · days<=0 → 不传，交给 range（调用方会传 all）
+      // 调用方显式给了 from 就用 from；否则若给了 days>0，用 windowCutoff 自动推导，
+      // 这样 client 只需继续传 days，不必关心云端的 range 枚举。
+      let fromMs = typeof query.from === 'number' && isFinite(query.from) ? query.from : null
+      if (fromMs === null && typeof query.days === 'number' && isFinite(query.days) && query.days > 0) {
+        fromMs = windowCutoff(query.days, Date.now())
+      }
+      if (fromMs !== null) {
+        qs.set('from', String(Math.max(0, Math.floor(fromMs))))
+        const toMs = typeof query.to === 'number' && isFinite(query.to) ? query.to : Date.now()
+        qs.set('to', String(Math.floor(toMs)))
+      }
       if (query.groupBy) qs.set('groupBy', query.groupBy)
       if (query.bucket) qs.set('bucket', query.bucket)
       if (Array.isArray(query.sources) && query.sources.length) qs.set('sources', query.sources.join(','))
@@ -2153,7 +2195,16 @@ export default {
         if (rest.cloudEnabled === true) scheduleSync(500)
         return Object.assign({ ok: true }, syncEngine.status())
       },
-      cloud: (args) => fetchCloud(Object.assign({ route: 'overview', range: '7d' }, args || {})),
+      // range 默认值只在调用方两者都没给时才兜底成 7d：
+      //   调用方给了 days>0 → fetchCloud 会用 windowCutoff 推导 from/to（精确区间，优先）；
+      //   调用方给了 days=0 → 这里传 all。
+      // 此前无条件写死 range:'7d'，导致客户端只传 days 时云端永远按近 7 天算，
+      // 界面切「近 30 天 / 全部」云端那一半却纹丝不动。
+      cloud: (args) => {
+        const a = args || {}
+        const range = a.range || (a.days === 0 ? 'all' : '7d')
+        return fetchCloud(Object.assign({ route: 'overview' }, a, { range }))
+      },
     }
 
     async function handleRoute(req, res) {
@@ -2392,6 +2443,8 @@ export default {
         }
         if (scope === 'cloud' || scope === 'both') {
           const c = await fetchCloud({ route: 'overview', range: days === 0 ? 'all' : '7d', days })
+          // 注：days>0 时 fetchCloud 会用 windowCutoff 推导 from/to，range 只作兜底展示；
+          // days===0 时走 range=all。两条路都与本地 buildDashboard 的窗口语义一致。
           // 云端响应有两种形状，必须都认：
           //   · /api/v1/overview   → 金额摊在 c.summary.{realCost,subEquivalent,...}
           //   · /api/v1/plugin-view → 没有 summary，字段直接摊在顶层（宿主在云端支持

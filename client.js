@@ -925,6 +925,7 @@ window.__ModuleLoader__.load({
 			const views = viewCtl && viewCtl.available ? BOARD_VIEWS : [BOARD_VIEWS[0]];
 			return e("div", { className: "cost-row" },
 				e("select", { className: "cost-select", value: String(days), onChange: ev => setDays(parseInt(ev.target.value, 10)) },
+					e("option", { value: "1" }, "今天"),
 					e("option", { value: "7" }, "近 7 天"),
 					e("option", { value: "14" }, "近 14 天"),
 					e("option", { value: "30" }, "近 30 天"),
@@ -995,7 +996,23 @@ window.__ModuleLoader__.load({
 		function statCards(dash, balance, viewCtl, planTotal) {
 			const today = dash.today || { real: 0, calls: 0, tokens: 0, sub: 0, subCalls: 0, subTokens: 0 };
 			const month = dash.month || { real: 0, calls: 0, tokens: 0, sub: 0, subCalls: 0, subTokens: 0 };
+			// all = 全时段累计（不随筛选变化），仅作副行参考
 			const all = dash.all || { real: 0, calls: 0, tokens: 0, sub: 0, subCalls: 0, subTokens: 0 };
+			// win = 当前时间窗口（顶部「近 N 天 / 全部」下拉）内的合计（v1.9.x）。
+			//   此前这三张卡（总花费 / API 请求次数 / Token）直接读 `all`，与筛选框完全无关：
+			//   切到「近 7 天」时费用却显示全时段累计，与下方图表口径打架。
+			//   现在主值取窗口内金额，累计值降到副行，并显式标注「累计」。
+			//   dash 由 buildDashboard({days}) 计算，realCost/subEquivalent/calls/tokens
+			//   都按 cutoff 过滤；云端经 normalizeCloudDash 后同名字段齐全，故本机/云端/并集同口径。
+			const n = (v) => Number(v) || 0;
+			const win = {
+				real: n(dash.realCost), calls: n(dash.realCalls), tokens: n(dash.realTokens),
+				sub: n(dash.subEquivalent), subCalls: n(dash.subCalls), subTokens: n(dash.subTokens),
+			};
+			const days = Number(dash.days) || 0;
+			// days=1 是「今天」（北京时间日历日，见宿主 buildDashboard 的 cutoff 约定），
+			// 不能拼成「近 1 天」，否则会与「今日费用」卡看起来是两个口径。
+			const winLabel = days === 1 ? "今天" : (days > 0 ? "近 " + days + " 天" : "全部");
 			// 金额卡：口径由「含 Plan 总额」开关决定
 			//   off：主值 = 按量消费（不含订阅会员等效费用）；副行附注订阅等效
 			//   on ：主值 = 按量 + 订阅等值（Plan 总额）；副行说明拆分，避免看数不明口径
@@ -1034,14 +1051,27 @@ window.__ModuleLoader__.load({
 						: "本机 + 云端 " + Math.max(0, (viewCtl.devices || []).length - 1) + " 台其他设备")
 					: "本机";
 			const tag = (t) => scopeNote + (viewCtl && viewCtl.pending > 0 && viewCtl.view !== "local" ? " · 待同步 " + viewCtl.pending + " 条" : "");
+			// 三张「窗口卡」：主值跟随顶部时间筛选，副行给累计值（并注明「累计」）
+			// 金额卡副行的按量/订阅拆分同样取窗口值，累计单独一块，避免半窗口半累计。
+			//
+			// 单位说明：副行保留「N 次」写法（`按量 100 次 · 订阅 5 次`）——
+			// 早先这里只有裸数字 `按量 100 · 订阅 5`，界面上看不出单位，
+			// 且与「今日/本月」两卡的「调用 N 次」风格不一致。
+			const moneyWin = money(win);
+			const cnt = (n) => fmtInt(n) + " 次";
+			const moneyWinSub = (planTotal
+				? "按量 " + cnt(win.calls) + " · 订阅 " + cnt(win.subCalls)
+				: (win.sub > 0 ? "按量 ¥" + fmtMoney(win.real) + " · 订阅 ¥" + fmtMoney(win.sub) : moneySub(win)));
+			const allMoney = money(all);
 			return e("div", { className: "cost-cards" },
 				statCard("今日费用（CNY）" + planBadge + "[" + tag() + "]", "¥" + fmtMoney(money(today)), moneySub(today)),
 				statCard("本月费用（CNY）" + planBadge, "¥" + fmtMoney(money(month)), moneySub(month)),
-				statCard("总花费（CNY）" + planBadge, "¥" + fmtMoney(money(all)), "调用 " + fmtInt(all.calls) + " 次 · Token " + fmtTokens(all.tokens) + (all.sub > 0 ? (planTotal ? " · 含订阅 ¥" + fmtMoney(all.sub) : " · 订阅 ¥" + fmtMoney(all.sub)) : "")),
-				statCard("API 请求次数", fmtInt(all.calls + all.subCalls),
-					"按量 " + fmtInt(all.calls) + " · 订阅 " + fmtInt(all.subCalls)),
-				statCard("Token", fmtTokens(all.tokens + all.subTokens),
-					"按量 " + fmtTokens(all.tokens) + " · 订阅 " + fmtTokens(all.subTokens)),
+				statCard("花费（CNY）" + planBadge + " · " + winLabel, "¥" + fmtMoney(moneyWin),
+					moneyWinSub + " · 累计 ¥" + fmtMoney(allMoney)),
+				statCard("API 请求次数 · " + winLabel, cnt(win.calls + win.subCalls),
+					"按量 " + cnt(win.calls) + " · 订阅 " + cnt(win.subCalls) + " · 累计 " + cnt(all.calls + all.subCalls)),
+				statCard("Token · " + winLabel, fmtTokens(win.tokens + win.subTokens),
+					"按量 " + fmtTokens(win.tokens) + " · 订阅 " + fmtTokens(win.subTokens) + " · 累计 " + fmtTokens(all.tokens + all.subTokens)),
 				statCard(balTitle, balValue, balSub));
 		}
 
@@ -2635,7 +2665,6 @@ window.__ModuleLoader__.load({
 			const [sync, setSync] = useState(null);
 			const [cloudDash, setCloudDash] = useState(null);
 			const [cloudErr, setCloudErr] = useState("");
-			const [cloudMatrix, setCloudMatrix] = useState(null);
 			const [cloudUsage, setCloudUsage] = useState(null);
 			const [cloudUsageErr, setCloudUsageErr] = useState("");
 			const [view, setViewState] = useState(() => {
@@ -2703,10 +2732,41 @@ window.__ModuleLoader__.load({
 					else { setCloudDash(null); setCloudErr((v && v.error) || "云端不可用"); }
 				}).catch(err => { setCloudDash(null); setCloudErr(String(err && err.message ? err.message : err)); });
 			}
-			function loadCloudMatrix(d) {
-				apiCall("cloud", { route: "matrix", days: d, view: view === "local+cloud" ? "cloud-rest" : "cloud" }).then(v => {
-					if (v && v.ok !== false) setCloudMatrix(v); else setCloudMatrix(null);
-				}).catch(() => setCloudMatrix(null));
+			/**
+			 * 「设备 × Agent 矩阵」数据源。
+			 *
+			 * 此前这里请求宿主 `matrix` 路由，但宿主 ROUTES 里**没有**该路由 ——
+			 * 稳定 404 → setCloudMatrix(null) → 矩阵区块永远不渲染（静默失效，
+			 * 界面上只表现为「这块没了」，没有任何报错提示）。
+			 *
+			 * 修复：不再依赖不存在的路由。云端 overview / plugin-view 本身已返回
+			 *   devices:[{device,name,cost,calls,tokens,sources[]}] 与
+			 *   sources:[{source,cost,calls,tokens,devices[]}]
+			 * 足以就地拼出矩阵，且不引入云端版本耦合（老云端同样可用）。
+			 *
+			 * 格子填充规则：devices[].sources 只说明「该设备用过哪些 agent」，
+			 * 并不提供按 agent 拆分的金额。因此**单 agent 设备**把整台设备的金额记到
+			 * 那一列；**多 agent 设备**无法拆分，格子留空并在表头标注「部分未拆分」，
+			 * 不编造数字（合计列仍按设备精确总额展示）。
+			 */
+			function buildDeviceMatrix(dash) {
+				if (!dash) return null;
+				const rows = Array.isArray(dash.devices) ? dash.devices : [];
+				const srcs = Array.isArray(dash.sources) ? dash.sources : [];
+				const cols = Array.from(new Set(srcs.map(s => s && s.source).filter(Boolean)));
+				if (!rows.length || !cols.length) return null;
+				const grid = rows.map(r => {
+					const list = (r.sources || []).filter(Boolean);
+					const cells = {};
+					if (list.length === 1) cells[list[0]] = { cost: Number(r.cost) || 0 };
+					return Object.assign({}, r, { cells });
+				});
+				return {
+					cols,
+					rows: grid,
+					totals: { cost: rows.reduce((s, r) => s + (Number(r.cost) || 0), 0) },
+					unsplit: grid.some(r => Object.keys(r.cells).length !== ((r.sources || []).filter(Boolean).length)),
+				};
 			}
 			/**
 			 * 云端「按天用量明细」（热力图数据源）。
@@ -2800,7 +2860,7 @@ window.__ModuleLoader__.load({
 			useEffect(() => { loadDash(days); }, [days]);
 			useEffect(() => { loadKimi(false); loadVolc(false); loadBalance(""); loadUsage(); loadSync(); }, []);
 			// 视图切换：local+cloud 需要额外拉「排除本机」的云端聚合、矩阵与按天用量明细
-			useEffect(() => { loadCloud(days, view); loadCloudMatrix(days); loadCloudUsage(view); }, [view, days]);
+			useEffect(() => { loadCloud(days, view); loadCloudUsage(view); }, [view, days]);
 			useEffect(() => {
 				const id = setInterval(() => setNow(Date.now()), 30000);
 				return () => clearInterval(id);
@@ -2813,6 +2873,10 @@ window.__ModuleLoader__.load({
 				: view === "cloud"
 					? cloudNorm
 					: (cloudNorm ? mergeDash(dash, cloudNorm) : dash);
+			// 设备 × Agent 矩阵：由 viewDash 的 devices/sources 就地派生（见 buildDeviceMatrix 注释），
+			// 不再依赖宿主 `matrix` 路由 —— 该路由不存在，此前稳定 404 导致矩阵区块永不渲染。
+			// 用派生值而非 state：viewDash / days / view 变化时自动重算，不必再手工触发了拉取。
+			const viewMatrix = view === "local" ? null : buildDeviceMatrix(viewDash);
 			// 热力图同样跟随三态视图：本机 / 本机+云端 / 仅云端。
 			// 云端明细取不到时退回本机，并在标题右侧注明口径，避免与上方卡片数字打架。
 			const viewUsage = view === "local"
@@ -2863,7 +2927,7 @@ window.__ModuleLoader__.load({
 				sync && sync.enabled && sync.pending > 0 && view !== "local"
 					? e("div", { className: "cost-cloudnote" },
 						"本机还有 " + sync.pending + " 条尚未同步，云端数字会偏小 —— ",
-						e("button", { className: "cost-btn", onClick: () => { apiCall("sync-now", {}).then(() => { loadSync(); loadCloud(days, view); loadCloudMatrix(days); loadCloudUsage(view); }); } }, "立即同步"))
+						e("button", { className: "cost-btn", onClick: () => { apiCall("sync-now", {}).then(() => { loadSync(); loadCloud(days, view); loadCloudUsage(view); }); } }, "立即同步"))
 					: null,
 				cloudErr && view !== "local"
 					? e("div", { className: "cost-err", style: { marginTop: "6px" } }, "云端数据不可用（已显示本机数据）：" + cloudErr)
@@ -2874,7 +2938,7 @@ window.__ModuleLoader__.load({
 				dashErr ? e("div", { className: "cost-err", style: { marginTop: "8px" } }, dashErr) : null,
 				(!viewDash && !dashErr) ? e("div", { className: "cost-hint", style: { marginTop: "12px" } }, "加载中…") : null,
 				viewDash ? statCards(viewDash, balance, viewCtl, planTotal) : null,
-				view !== "local" && dimension !== "total" && viewDash ? dimensionPanel(viewDash, dimension, cloudMatrix, loadingCloud => loadingCloud) : null,
+				view !== "local" && dimension !== "total" && viewDash ? dimensionPanel(viewDash, dimension, viewMatrix, loadingCloud => loadingCloud) : null,
 				viewDash ? mainPanel(viewDash, tab, setTab, scheme, setScheme, planTotal) : null,
 				e("div", { className: "cost-panel" },
 					e("div", { className: "cost-row" },
@@ -2932,7 +2996,8 @@ window.__ModuleLoader__.load({
 								e("span", { className: "cost-matrix-num" }, fmtTokens(r.tokens)),
 								e("span", { className: "cost-matrix-note" }, r.tag || "")))),
 				matrix && matrix.rows && e("div", { style: { marginTop: "10px" } },
-					e("div", { className: "cost-hint" }, "设备 × Agent 矩阵（行=设备，列=Agent，点击云端「设备 × Agent」页可下钻到记录）"),
+					e("div", { className: "cost-hint" }, "设备 × Agent 矩阵（行=设备，列=Agent，点击云端「设备 × Agent」页可下钻到记录）"
+						+ (matrix.unsplit ? " · 多 Agent 设备无法按 Agent 拆分金额，未拆分格子留空（合计列仍为精确总额）" : "")),
 					e("div", { className: "cost-matrix" },
 						e("div", { className: "cost-matrix-row cost-matrix-head" },
 							e("span", { className: "cost-matrix-key" }, "设备"),
