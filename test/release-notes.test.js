@@ -131,7 +131,42 @@ console.log('[6] 中英分栏：条目 `中文 ｜ English` 各取一边')
   check('英文段不混入中文', enPart.length > 0 && !enPart.includes('中文描述'), JSON.stringify(enPart.slice(0, 120)))
 }
 
-console.log('[7] 末尾 Full Changelog 对比链接')
+console.log('[7] 小节标题上的 @xxx 署名要落到条目上（中英各用各的句式）')
+{
+  // CHANGELOG 每个 ### 小节标题末尾都写了贡献者（如「### 一、主题 @WeatherCore」）。
+  // 署名属于标题，若直接丢弃，Release 上就看不到贡献者；若原样拼进条目文本，
+  // 按 `｜` 切中英时署名会被带走 → 中文段没署名、英文段出现中文句号。
+  const body = [
+    '<!-- release: 新增功能 -->',
+    '### 一、主题甲 @WeatherCore',
+    '',
+    '- 中文甲 ｜ English A',
+    '',
+    '<!-- release: 问题修复 -->',
+    '### 二、主题乙 @Angelyeye',
+    '',
+    '- 中文乙 ｜ English B',
+  ].join('\n')
+  const text = buildReleaseBody({ version: '9.9.9', body, prevVersion: '9.9.8' })
+  const enStart = text.indexOf('<h3 id="en-v9.9.9">')
+  const cnPart = text.slice(0, enStart)
+  const enPart = text.slice(enStart)
+
+  check('中文段带署名（中文句号 + @）', cnPart.includes('中文甲。 @WeatherCore'), JSON.stringify(cnPart.slice(-200)))
+  check('中文段第二条署名独立', cnPart.includes('中文乙。 @Angelyeye'))
+  check('英文段带 by @', enPart.includes('English A by @WeatherCore'), JSON.stringify(enPart.slice(0, 200)))
+  check('英文段不出现中文句号署名', !/。 @/.test(enPart))
+  check('署名不跨条目串味', !cnPart.includes('中文甲。 @Angelyeye') && !cnPart.includes('中文乙。 @WeatherCore'))
+}
+
+console.log('[8] 未标署名的条目回落到 buildReleaseBody 的 author 参数')
+{
+  const body = '<!-- release: 修复 -->\n### 一、某主题\n\n- 没有署名的条目\n'
+  const text = buildReleaseBody({ version: '9.9.9', body, prevVersion: '', author: 'Someone' })
+  check('回落作者生效', text.includes('没有署名的条目。 @Someone'), text.slice(-160))
+  const noAuthor = buildReleaseBody({ version: '9.9.9', body, prevVersion: '' })
+  check('既无署名也无 author 时不追加', !noAuthor.includes('@') || noAuthor.includes('[中文]'), JSON.stringify(noAuthor.slice(-120)))
+}
 {
   const body = '<!-- release: 修复 -->\n### 一、X\n\n- 条目\n'
   const text = buildReleaseBody({ version: '1.2.3', body, prevVersion: '1.2.2' })
@@ -140,7 +175,7 @@ console.log('[7] 末尾 Full Changelog 对比链接')
   check('无上一版时不输出 compare 行', !noPrev.includes('Full Changelog'))
 }
 
-console.log('[8] 真实 CHANGELOG v1.11.2：分类与双语气节齐全')
+console.log('[9] 真实 CHANGELOG v1.11.2：分类与双语气节齐全')
 {
   const text = readFileSync(join(root, 'CHANGELOG.md'), 'utf8')
   const found = extractReleaseNotes(text, '1.11.2')

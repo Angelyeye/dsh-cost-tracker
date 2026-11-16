@@ -5,7 +5,7 @@
 ## v1.11.2(2026-11-17)
 
 <!-- release: 新增功能 -->
-### 一、按模型聚合统一显示规范名
+### 一、按模型聚合统一显示规范名 @WeatherCore
 
 同一模型跨渠道、跨拼写散成多条图例的问题修好了。此前「按模型」图表和明细列表按记录里的**原始 model 名**分组：按量记录入账时已被改写成计费规范名（小写），订阅记录不查价目表、保留渠道原始拼写，于是 `GLM-5.3-Flash` / `glm-5.3-flash` / `glm-5.3` 各占一条。 ｜ The model breakdown no longer splits one model into several legend entries. Grouping used the raw model string from each record, so billed records (rewritten to the canonical lowercase name) and subscription records (which keep the channel's original spelling) landed in separate buckets.
 
@@ -15,19 +15,19 @@
 - 入账口径与 CSV 导出**不变** —— 折叠只发生在展示层，对账数字不受影响。 ｜ Billing records and CSV exports are unchanged; folding happens only in the display layer.
 
 <!-- release: 体验优化 -->
-### 二、消费金额图表默认页签改为「按模型」
+### 二、消费金额图表默认页签改为「按模型」 @WeatherCore
 
 打开看板先看到每个模型的消费构成，比先看峰谷更符合「这笔钱花在哪」的直觉；峰谷口径仍可一键切回。 ｜ The spend chart now opens on the model breakdown, which answers "where did the money go" first; the peak/off-peak view is one click away.
 
 <!-- release: 文档更新 -->
-### 三、README 重构为面向上手的产品化首页
+### 三、README 重构为面向上手的产品化首页 @Angelyeye
 
 中英文同步重构：价值主张、能力概览、截图、快速安装、验证步骤、三段式架构在前；计价、云同步、HTTP API、迁移、隐私、FAQ 收进可折叠区。移除了过期的版本历史与自相矛盾的「仅本地」表述。 ｜ The Chinese and English READMEs are restructured as onboarding pages: value proposition, capabilities, screenshots, quick install and architecture come first, while pricing, cloud sync, HTTP API, migration, privacy and FAQ fold into expandable sections. Stale version history and contradictory local-only wording were removed.
 
 - 同时修正时间口径描述：卡片主值自 v1.11.1 起跟随顶部时间范围，累计值在副行单独标注。 ｜ The time-range wording was corrected: card values have followed the selected range since v1.11.1, with the all-time total shown separately beneath them.
 
 <!-- release: 问题修复 -->
-### 四、修复合并冲突与时间区间口径
+### 四、修复合并冲突与时间区间口径 @Angelyeye
 
 - `test/client-render.test.js` 合并时，PR 新增的 `[12] 展示层模型名折叠` 测试块与 main 新增的「Token 数量中文单位」测试块落在同一位置。两者都是独立断言、互不依赖，全部保留，未删减任何一方的测试覆盖。 ｜ A merge conflict in `test/client-render.test.js` placed the new model-folding test block and the existing token-unit block at the same position. Both were kept in full; no test coverage was dropped.
 - 修正 README 中与实现不符的时间口径描述。 ｜ Corrected README wording that no longer matched the implementation.
@@ -38,7 +38,7 @@
 
 这一版修的全是**静默错值**——不报错、界面照常渲染，但数字是错的。四个问题互相缠绕，都源于「界面上的时间范围」和「实际取数的区间」不是同一件事。
 
-### 一、三张统计卡（花费 / API 请求次数 / Token）主值跟随时间筛选
+### 一、三张统计卡（花费 / API 请求次数 / Token）主值跟随时间筛选 @Angelyeye
 
 **问题**：这三张卡直接读 `dash.all`（全时段累计），与顶部「近 N 天 / 全部」下拉完全无关。切到「近 7 天」时，图表与明细表都收窄了，卡片却依旧显示开天辟地以来的累计，同一屏内两套口径。
 
@@ -46,7 +46,7 @@
 
 `今日费用`/`本月费用` 两卡保持原样——它们是固定日历口径，与滚动窗口无关是正确语义。
 
-### 二、新增「今天」选项（按北京日历日，不是近 24 小时）
+### 二、新增「今天」选项（按北京日历日，不是近 24 小时） @Angelyeye
 
 时间下拉新增首项「今天」。**不能简单加一个 `days=1`**：`buildDashboard` 原本的约定是 `cutoff = now - days*86400000`，`days=1` 会变成「近 24 小时」，把昨天晚间的消费算进今天，与旁边「今日费用」卡（北京日历日）对不上，屏幕上出现两个互相矛盾的「今天」。
 
@@ -60,7 +60,7 @@
 
 `buildDashboard` 与本版新增的云端 `fetchCloud` 共用它，确保「本机 + 云端」的两半落在同一区间。
 
-### 三、云端区间真正生效（此前恒定近 7 天）
+### 三、云端区间真正生效（此前恒定近 7 天） @Angelyeye
 
 **问题**：`fetchCloud()` 拼查询串时只发了 `range` 和 `days`，**从未发 `from`/`to`**；而 `cloud` 路由又把 `range` 默认值写死成 `'7d'`。结果：界面切「近 30 天 / 全部」，云端那一半纹丝不动，固定按近 7 天算。
 
@@ -72,7 +72,7 @@
 
 **配套云端改动**（`dsh-cost-cloud` 同步发布）：`readOverview` / `readPluginView` 的 union 分支透传 `from`/`to`。这两个函数此前用白名单式 `Object.assign` 转发参数，漏掉了 `from`/`to`，导致「仅云端」正常、「本机+云端」不跟随——一半对一半错。
 
-### 四、设备 × Agent 矩阵恢复渲染
+### 四、设备 × Agent 矩阵恢复渲染 @Angelyeye
 
 **问题**：`loadCloudMatrix()` 请求宿主 `matrix` 路由，但宿主 `ROUTES` 里**根本没有这个路由**，稳定 404 → `setCloudMatrix(null)` → 矩阵区块永不渲染，且无任何提示。
 
@@ -80,7 +80,7 @@
 
 **数据诚实性**：`devices[].sources` 只说明「该设备用过哪些 agent」，**不提供按 agent 拆分的金额**。因此单 agent 设备将整台金额记入该列；多 agent 设备无法拆分时格子**留空**并在表头注明，合计列仍为精确总额——不编造数字。
 
-### 测试
+### 测试 @Angelyeye
 
 新增 `test/time-range.test.js`（9 项断言）：捕获真实发出的云端 URL，断言必须含 `from`/`to`、`days=1` 落在北京零点（UTC 16:00 整）、不同 `days` 必须产生不同区间（锁死「恒定 7d」回归）、`days=0` 走 `range=all` 且不带 `from`。
 
@@ -88,7 +88,7 @@
 
 **Token 数量改中文单位（万/亿）· GPT Fast 档单独计价 · 目录汇率 6.67 · 新模型与价格表刷新**
 
-### 一、Token 数量统一为中文单位（万 / 亿）
+### 一、Token 数量统一为中文单位（万 / 亿） @Angelyeye
 
 **问题**：界面与工具里 token 一直显示成 `1.5M` / `314K`（英文单位），中英混排、量级不直观。
 
@@ -109,7 +109,7 @@
 
 **UI 兼容**：中文单位让数字变宽，补了 `font-variant-numeric: tabular-nums` 防抖动，Fast 价格行与矩阵列改为「等宽数字 + 单行省略」，避免窄容器换行错位或单位被截断。
 
-### 二、GPT Fast 档（`service_tier: fast` / `priority`）单独计价
+### 二、GPT Fast 档（`service_tier: fast` / `priority`）单独计价 @Angelyeye
 
 **背景**：OpenAI 于 2026-07-30 把 Priority processing 更名为 Fast mode，请求可用 `service_tier: "fast"` 或 `"priority"`；同一模型的 Fast 档价格与标准价不同（多数 2 倍）。此前插件只按模型名匹配单价，Fast 请求被按标准价记账，金额系统性偏低。
 
@@ -134,12 +134,12 @@
 
 无 Fast 档价的模型（5.4 / 5.6 Luna 等）按标准价计并标 `standard-only`；`ultrafast` 按 Fast 价计并标注「实际倍率更高、金额偏低」。
 
-### 三、长上下文分档与独立缓存写价
+### 三、长上下文分档与独立缓存写价 @Angelyeye
 
 - 目录条目新增 `longContext`（`inputTokensAbove` + 长档价）：请求**输入侧** token 超过阈值（OpenAI 272K）时按整请求长档价计。阈值判定只看输入，输出不计入。
 - 目录条目新增 `cacheWriteInput`：OpenAI / Anthropic 的缓存写价与读价不同（如 gpt-6.1-sol 读 $0.1、写 $2.5），此前被强行按读价计。`computeCost` 改为读写分别计价；未提供写价时沿用读价，DeepSeek 等读写同价模型结果完全不变。
 
-### 四、目录汇率 7.2 → 6.67
+### 四、目录汇率 7.2 → 6.67 @Angelyeye
 
 - `vendor-catalog.js`：`CATALOG_FX_DEFAULT = 6.67`，新增 `CATALOG_FX_LEGACY_DEFAULT = 7.2`；
 - `config.js`：默认值改 6.67，`migrateCatalogFxRate` 把「仍是旧默认 7.2」的配置迁移到 6.67，**用户显式设置的其他值保留**；
@@ -148,7 +148,7 @@
 
 > 这是全局汇率：所有 USD 计价模型（OpenAI / Anthropic / Gemini / xAI / Mistral 等）随之变化，账本仍以人民币入账，历史记录不回改。
 
-### 五、新模型与价格表刷新（2026-11-13）
+### 五、新模型与价格表刷新（2026-11-13） @Angelyeye
 
 目录从 15 家 / 141 条扩到 **15 家 / 154 条**。
 
@@ -158,7 +158,7 @@
 
 口径说明写进 `notes`：官方优先、交叉核对其次、单源标注；促销到期日（`gemini-4-carbon` 12-01 翻倍、`hy4` 12-31 恢复目录价、`gpt-5.5-cyber-preview` 2027-02-01 下线、MiniMax M2.5/M2.7 11-18 下线）一并记录。
 
-### 五之二、中转站 / 聚合网关按模型名识别厂商（真实流量阻塞修复）
+### 五之二、中转站 / 聚合网关按模型名识别厂商（真实流量阻塞修复） @Angelyeye
 
 **问题（实测发现）**：本机 GPT 流量走的是中转站 `zhouhy-relay`，而目录只认厂商名（`openai`/`anthropic`/…），查不到 `zhouhy-relay` 就直接落到**通用兜底价 2 / 8 / 0.5 CNY**。后果有两层：
 
@@ -177,7 +177,7 @@
 
 同一批调用在旧口径（通用兜底）下只有约 ¥4.93 —— 修正后约为其 9 倍，这是**纠偏**而非涨价。
 
-### 五之三、带发布批次号的 DeepSeek 模型名（真实账本纠偏）
+### 五之三、带发布批次号的 DeepSeek 模型名（真实账本纠偏） @Angelyeye
 
 **问题（实测发现）**：真实流量里的模型 id 带批次后缀，例如 `deepseek-v4.1-flash-1017`、`deepseek-v4-1-flash-261017`。价表只登记了基础名，归一化后仍带数字尾巴 → 错过精确价 → 落到通用兜底，**缓存读按 ¥0.5 计而官方是 ¥0.04**（缓存部分贵 12.5 倍）。本机受影响约 2171 条记录（`tencentmaas` / `gongsi`）。
 
@@ -185,7 +185,7 @@
 
 **边界**：剥离只对 `deepseek` 开头的模型生效 —— 这些是同一模型的不同批次，价格一致；其它厂商的尾号可能代表不同档位（如 `gpt-5.4-mini`），不能一概剥离。
 
-### 六、云端（dsh-cost-cloud）配套
+### 六、云端（dsh-cost-cloud）配套 @Angelyeye
 
 - `pricing.js` / `vendor-catalog.js` / `price-sync.js` / `docs/provider-pricing.json` 逐字节同源，`PRICING_SOURCE_HASH` 重算；
 - `computeCostAt` 支持 `serviceTier` / `tokens`，并把 tokens 自动带入目录回调（长上下文分档与插件同口径）；
@@ -193,13 +193,13 @@
 - `catalogInfo` 回显 `fastTierModelCount`；看板 token 改中文单位；
 - 版本 1.5.0 → 1.6.0，`syncVer` 仍为 1，协议向后兼容（`meta` 为可选字段，未知 meta 被忽略）。
 
-### 七、测试
+### 七、测试 @Angelyeye
 
 新增 `test/token-format.test.js`（35 项）、`test/fast-tier.test.js`（45 项），并扩展 `test/client-render.test.js`（前端 `fmtTokens` 与 `token-format` 逐值一致 + 禁止英文单位回归）、`test/vendor-catalog.test.js`（汇率 6.67 / Fast 档 / 长档 / 独立写价）、`test/pricing.test.js`（Fast 计价端到端）、`test/config.test.js`（汇率迁移）、`test/recompute.test.js`（工具渲染）、`test/pricing-sync.test.js`（云端长档与 Fast）。
 
 本仓 24 个测试文件、云端 18 个测试文件全部通过，`check-pricing-sync.js` 全绿。
 
-### 八、已知边界
+### 八、已知边界 @Angelyeye
 
 - Fast 判定依赖 `dsh-fast-tier` 的会话选择；该插件被卸载/禁用后，历史 Fast 请求无法事后识别，按标准价计并标注「档位未知」。
 - 网关私有倍率（sub2api 可能对 Fast 另计）不模拟；必要时用现有手动覆盖价处理。
@@ -212,7 +212,7 @@
 
 > 这两项改进来自外部贡献者 [@shaunpalmer](https://github.com/shaunpalmer) 的 PR #1（[Project studios/english hardening](https://github.com/Angelyeye/dsh-cost-tracker/pull/1)）。该 PR 整体未合并（包名改为 `@shaunpalmer/…`、版本回退、客户端砍掉约 90% 的界面、屏蔽配置入口、并移除了两个 UI 回归测试），但其中「文件权限收紧」与「PR 跑测试」两处是真实缺口，本次按当前代码结构重写后落地。
 
-### 一、本地状态文件权限收紧（`store.js` / `sync.js` / `index.js`）
+### 一、本地状态文件权限收紧（`store.js` / `sync.js` / `index.js`） @Angelyeye
 
 **问题**：`~/.dsh/storages` 下的文件走默认 umask（常见 022）创建，POSIX 上同机其他用户可读。而这里存的是**完整用量明细**（会话、模型、token、花费；未开启脱敏时还有 sessionId）、设备身份与同步游标、云端同步地址等。
 
@@ -225,15 +225,15 @@
 
 **测试**：`test/storage.test.js` 用注入的 fs 断言 `mkdirSync(…,{mode:0o700})` / `writeFileSync(…,{mode:0o600})` 真的传进去了（跨平台可断言），并在 POSIX 上额外核对真实文件权限 0600；`test/sync.test.js` 在 POSIX 上核对身份目录/文件与同步目录/游标的实权限，同时验证私有权限路径不影响读写（游标可读回、不留 `.tmp`）。
 
-### 二、新增 PR CI 门禁（`.github/workflows/ci.yml`）
+### 二、新增 PR CI 门禁（`.github/workflows/ci.yml`） @Angelyeye
 
 此前仓库只有手动触发的 `publish-npm.yml`，**PR 上没有任何检查**（评审外部 PR 时只能本地 checkout 分支跑测试）。新增 `CI` 工作流：`pull_request` 与 `push: main` 触发，`permissions: contents: read`（无凭据、fork PR 也能安全跑），Node 24（与发布工作流同版本），执行与发布关卡同一条 `npm test`；另加 concurrency 取消同分支旧运行。不使用 npm cache —— 本包零 npm 依赖、无 lockfile，缓存只会多一次报错。
 
-### 三、未采纳部分（保留在作者自己的 fork）
+### 三、未采纳部分（保留在作者自己的 fork） @Angelyeye
 
 包名/版本/入口变更、`index.safe.js` 用 Proxy 屏蔽 `settings` 服务并临时篡改 `process.argv[1]`、英文重写全部模块并替换 README/CHANGELOG（会丢失发布历史，而仓库已有 `README.en.md`）、NZD 展示（浏览器直连第三方汇率 API，且写死单一币种）。隐私默认值（`maskSessionId` / `includePurpose`）方向合理但会改变现有云端归因口径，保持当前默认，后续以显式选项讨论。
 
-### 四、测试
+### 四、测试 @Angelyeye
 
 `npm test` 全绿（22 个测试文件）；`storage` 85 项、`sync` 126 项断言通过。
 
@@ -241,7 +241,7 @@
 
 **模型目录刷新到 2026-10-25 官方口径：15 家厂商 / 141 个条目（新增 51、改价 10、口径修正 25）；火山方舟 Coding Plan 白名单按官方现行 13 个 Model Name 复核，并给「泛 volcengine」分支补上日期后缀容忍**
 
-### 一、多厂商目录：新增了哪些新模型
+### 一、多厂商目录：新增了哪些新模型 @Angelyeye
 
 目录上次刷新是 2026-08-18（`generatedAt` 可查），两个多月里各家的新旗舰与降价款都没进来。本次逐家复核，`providers` 从 14 家 90 条扩到 **15 家 141 条**（新增 51，改价 10，其余为来源/口径修正 25；删除 0 条，下线模型一律保留并打 `notes` 标记，便于历史记录核对）。
 
@@ -268,20 +268,20 @@
 - 智谱国内 `bigmodel.cn` 人民币价、Kimi K2.7 / K2.6 官方 API 单价、MiniMax 国际站美元价：官方页本机抓不到正文 → 沿用网关值并在 `notes` 明确标注出处；
 - OpenAI / Google 官方定价页本机返回 403 / DNS 不可达 → 这两家的值取自 OpenCode Console 网关价，`sourceUrl` 如实写网关地址，并用 OpenRouter 端点做交叉核对（一致 / 冲突都在 `notes` 写明）。
 
-### 二、火山方舟 Coding Plan 白名单（`pricing.js`）
+### 二、火山方舟 Coding Plan 白名单（`pricing.js`） @Angelyeye
 
 - 白名单从 14 个扩到 **24 个 id**：按官方 2026-10「Coding Plan 个人版快速开始」复核，补入 `kimi-k3`、`kimi-k3.1-pro`、`kimi-k2.8-preview`、`deepseek-v4.1-flash-economy`、`deepseek-v4-flash`、`glm-5.3`、`glm-latest`、`doubao-seed-2.1-lite`、`doubao-seed-2.0-mini`、`doubao-seed-evolving`；`glm-5.2` 列入（2026-08-31 起官方由 `glm-5.3` 承接）。
 - 旧白名单里 9 个「4 月还在、10 月官方清单不列」的 id **不删**：下线公告页本机取不到正文，删错会把仍在售的套餐内模型误标成按量；保留的代价只是极端情况下少算按量花费（方向更安全，符合本项目「宁可漏配也不能错配」的门卫原则）。
 - **新增日期后缀容忍**：方舟模型 id 普遍带 6 位日期后缀（`glm-5-3-flash-260828`、`deepseek-v4-1-flash-260910`、`doubao-seed-2-1-pro-260915`），而 `normalizeModelName` 只去分隔符。专属 coding 端点因「整档订阅」提前 return 不受影响，但**泛 `volcengine` 分支**下这些 id 会漏配 → 被标成「按量 · 估算」。现新增 `stripVolcDateSuffix()`：先剥尾部 `\d{6}` 再查白名单与前缀，`ep-20260413045435-2shmq` 这类接入点 id 仍不会被误判。
 - Kimi 订阅侧无需改动（`SUBSCRIPTION_MODELS` 为 `null` = 整档订阅），`6.5/27.0/1.1/1.1` 仍是估算值——官方明确不公开套餐内 token 等效价。
 
-### 三、数据纪律
+### 三、数据纪律 @Angelyeye
 
 - 每条新增/改动都带 `sourceUrl` + `checkedAt: 2026-10-25`；官方页优先，网关兜底时在 `notes` 写明「取自网关 / 未核实 / 两源冲突」，与仓库既有的「不编造价格」约定一致。
 - `CATALOG_META.generatedAt` 同步为 `2026-10-25`（设置页「数据日期」与云端 `/api/v1/protocol` 都会回显）。
 - 计费优先级不变：手动覆盖价 > 订阅归类 > 内置/同步时代精确价 > 目录 > provider 兜底 > 通用兜底。
 
-### 四、测试
+### 四、测试 @Angelyeye
 
 - `test/vendor-catalog.test.js` 新增断言：`meta` 厂商在列、`glm-5.3` / `gpt-6-astra` / `kimi-k3.1-pro` 可命中（防止「只加 JSON 不加别名」或「占位未清」回归）。
 - `test/pricing.test.js` 更新火山门卫断言到 2026-10 官方白名单（含 `glm-latest` 别名），并新增「泛 volcengine 带日期后缀仍计为订阅」与「接入点 id 仍不误判」两侧断言。
@@ -291,7 +291,7 @@
 
 **新增：余额查询兼容 DSH「DeepSeek 账号登录」——账号态改走宿主 `deepseekAccount.getBalance()`，读取 Platform 钱包（充值 / 赠金）；API Key 路径原样保留**
 
-### 一、问题：账号登录用户查不到余额
+### 一、问题：账号登录用户查不到余额 @Angelyeye
 
 DSH 的浏览器 PKCE 账号登录（`@deepseek-ai/dsh-deepseek-account` + `dsh-deepseek-account-platform`，0.1.7-alpha.1 起引入）把授权写进 credentials 的 **record** `deepseek-account-platform/default`（`{version, token, issuer}`），**从不写 ref**。而 `credentials.resolve()` 只查 refs 半区 —— 所以：
 
@@ -301,7 +301,7 @@ DSH 的浏览器 PKCE 账号登录（`@deepseek-ai/dsh-deepseek-account` + `dsh-
 
 结论：只认 `DEEPSEEK_API_KEY` 的旧实现，在纯账号态下必然报「未找到 DeepSeek API Key」，不是配置问题。
 
-### 二、改法：新增账号余额来源，优先级三级
+### 二、改法：新增账号余额来源，优先级三级 @Angelyeye
 
 ```
 面板手填 API Key  >  账号登录态（宿主服务）  >  配置/环境里的 API Key
@@ -313,7 +313,7 @@ DSH 的浏览器 PKCE 账号登录（`@deepseek-ai/dsh-deepseek-account` + `dsh-
 - **账号态失败不回退 API Key**：账号已登录时回退会显示**另一个账户**的数字，比报错更误导；失败信息里直接给出出路（手动填 Key）。
 - **旧宿主零影响**：没有 `deepseekAccount` 服务的 DSH 自动走原路径，文案与 v1.9.5 逐字一致，不做版本号判断。
 
-### 三、口径与字段
+### 三、口径与字段 @Angelyeye
 
 - 账号态「总余额」= 同币种充值钱包合计 + 同币种赠金合计，用 **BigInt 精确十进制加法**（不经 `Number`，`0.1+0.2` 不出现 `0.30000000000000004`；Platform 返回的 `0E-16` 这类零值统一显示为 `0`）。
 - 账号态 `available` 返回 **null**（Platform 摘要没有 `is_available`，不把「未知」渲染成「不可用」）；API Key 态仍为布尔。
@@ -321,14 +321,14 @@ DSH 的浏览器 PKCE 账号登录（`@deepseek-ai/dsh-deepseek-account` + `dsh-
 - **展示精度**：Platform 钱包金额实测是 **16 位小数**（形如 `1234.5600000000000000`）。界面按 DSH 官方「账号与余额」页口径**截断到分**（不四舍五入）、正的不足一分显示 `<0.01`、零显示 `0.00`、负数保留符号；同时兼容 `0E-16` 这类指数写法（指数 > 30 时不硬展开）。**接口返回值保持原始精度不截断**，展示与数据分离。
 - 响应新增 `source: 'account' | 'apikey' | 'none'`；`total` / `granted` / `toppedUp` / `currency` / `keySource` 等旧字段全部保留（`keySource` 账号态为 `account`）。
 
-### 四、顺带修复（同一轮 0.2.x 兼容审计发现）
+### 四、顺带修复（同一轮 0.2.x 兼容审计发现） @Angelyeye
 
 - **历史导入对 v4 会话静默失效**：0.2.x 起宿主把新会话写成 `session.v4.jsonl.zstd`，而 `import.js` 只枚举 `session.v3.jsonl.zstd` / `session.v3.jsonl` / `session.jsonl.zstd` / `session.jsonl` 四个硬编码名字 —— v4 及以后的新会话被**静默跳过**（导入清单里 0 个 v4、无任何报错，只表现为「历史导入不再补录新会话」）。本机实测：`.dsh\sessions` 下 68 个 v4 + 20 个 v3 + 10 个 legacy，修复前 `listSessionLogs()` 只返回 29 个。**内容层本来是兼容的**（抽样实测 v4 日志能正常回放出调用（Lead 样本 1160 事件 → 132 调用；verifier 另证与同目录 v3 的调用集合一致），`usage` / `message.source` 形状未变），断点只在文件名。现改为按 `session[.vN].jsonl[.zstd]` 正则识别，**版本号高者优先、同版本 zstd 优先**，宿主将来升 v5/v6 不需要再改枚举；新增 `test/session-log-v4.test.js`（含 v5 前瞻与真实目录交叉核对）。
 - **账号态 provider 的兜底价**：账号登录的推理 provider 名是 `deepseek-account`，原先不在 `PROVIDER_RATES` 里。现役模型能命中 provider 无关的精确价表（实测 100% 命中、`estimated:false`），但**表外的新模型**会落到 `GENERIC_RATES`（缓存价 0.5 而非 0.04、且无峰谷半价）→ 费用被静默高估。现把 `deepseek-account` 登记为与 `deepseek` 共用同一份兜底价（`pricing.js`）。
 - **`settings` 读取迁移到 0.2.x 的 `describe()`（原为静默降级）**：0.2.x 的 `SettingsForms` 已无 `get()`（只剩 `configure/describe/update/replace/mutate/write/prepareDocument`），插件原来的 `deepseekKeyEnv()` / `kimiKeyEnv()` / 火山 AK 候选链会抛 TypeError 并被各自 try/catch 吞掉 → **恒走硬编码默认名**。默认名与官方一致，标准部署看不出问题；但**自定义 `apiKeyEnv`** 的部署会去查一个不存在的 Key 名（表现为「明明配了 Key 却报未找到」）。0.2.x 的正确读法是 `settings.describe()` —— 它返回全部条目的表单描述，`row.value` 即该条目 volatile 字段的**生效值**（`apiKeyEnv` 正是 `.volatile()` 字段）。新增 `settings.js` 做「describe() 优先、get() 兜底」的双 API 兼容读，并按 settings 实例做 10s 短缓存（describe 是全量投影，余额/Kimi/火山三个入口一次刷新会各调一次）。旧宿主行为完全不变；新增 `test/settings-compat.test.js`（两套 API、优先级、缓存、边界，以及「0.2.x 自定义 ref 真的被用来查 Key」的端到端断言）。
 - **修掉既有测试腐化**：`test/import.test.js` 的「看板读到导入记录的总花费」用 `dashboard {days:30}`（相对当前时间）去断言固定日期 fixture（2026-09-15 起），2026-10-15 之后必然假失败 —— 它断言的是**口径**（导入记录要进看板）而非时间窗口，改为足够宽的窗口覆盖 fixture。这是 `npm test` 在 CI 上变红、进而挡住发布的根因。
 
-### 五、新增测试
+### 五、新增测试 @Angelyeye
 
 `test/balance-account.test.js`：用真实文件 + 真实 HTTP 处理器跑，不打模块内桩：账号 ready 投影、未登录回退 Key、手填 Key 优先（且不调用账号服务）、账号失败不静默回退、`getBalance` 返回 `undefined` 按契约外失败处理（**不**当作未登录回退，否则会显示另一个账户的余额）、旧宿主文案不变、`client` 三字段必填、精确十进制加法、客户端来源判定与币种显示、展示格式化（从 bundle 源码取函数在 VM 里求值）、账号态 provider 兜底价、settings 双 API 端到端。
 
@@ -344,7 +344,7 @@ DSH 的浏览器 PKCE 账号登录（`@deepseek-ai/dsh-deepseek-account` + `dsh-
 
 **修复「桌面端（Electron 外壳）花费统计整块看板变成无样式原生控件」—— 自建 `<style>` 缺 `data-plugin` 归属标记，被 DSH 客户端模块系统认领给别的模块后在 HMR 清理时连带删除**
 
-### 一、根因（已复现并逐帧比对）
+### 一、根因（已复现并逐帧比对） @Angelyeye
 
 DSH 0.2 的客户端模块系统 `@deepseek-ai/dsh-client-modules/lib/client.js` 用两个函数管理插件样式表：
 
@@ -379,7 +379,7 @@ CSS 规则一起删掉**，界面退化成浏览器默认的 `<select>`/`<button
 **归属标记在插入前就要写好**：`claimStyles` 只认「当前是否已带 `data-plugin`」，
 插入后再补标会留下一个未被认领的窗口。
 
-### 二、修法（`client.js`）
+### 二、修法（`client.js`） @Angelyeye
 
 1. 新增模块 id 单一事实源 `var DSH_BUNDLE_ID = "@angelyeye/dsh-cost-tracker"`，
    `__ModuleLoader__.load({ id })` 与样式归属标记共用它；
@@ -393,7 +393,7 @@ CSS 规则一起删掉**，界面退化成浏览器默认的 `<select>`/`<button
 4. 文件末尾注册名护栏保留它**刻意独立**的字面量副本（若与 `DSH_BUNDLE_ID` 同源，
    故障注入测试就永远测不出「注册名 ≠ 包名」了）。
 
-### 三、验证
+### 三、验证 @Angelyeye
 
 - 真机复现（桌面端 profile 的等价宿主 + 无头 Edge/CDP，1280×820，与用户截图同视口）：
   - 修复前：插件样式表 `data-plugin = "@deepseek-ai/dsh-api-remotes"`（被误认领），
@@ -410,7 +410,7 @@ CSS 规则一起删掉**，界面退化成浏览器默认的 `<select>`/`<button
   故障注入改为改写 `DSH_BUNDLE_ID`（同时覆盖注册与归属标记两个消费点）；
 - 全量 19 个测试文件通过。
 
-### 四、说明
+### 四、说明 @Angelyeye
 
 - 只改客户端半端 `client.js`：不动任何计费/同步口径，HTTP 面、配置键、落盘路径、云端契约零改动；
 - 客户端半端换版后**浏览器硬刷新**即可生效；另需确认宿主半端也已是新版（`index.js`/`PLUGIN_VERSION`）；
@@ -420,7 +420,7 @@ CSS 规则一起删掉**，界面退化成浏览器默认的 `<select>`/`<button
 
 **修复「配额查询不可用：火山方舟配额响应不是合法 JSON（GetCodingPlanUsage）」—— 宿主全局 fetch 被 undici 包污染后不解压 gzip，插件改为自带解压兜底**
 
-### 一、根因（已在本机复现并定位到机制）
+### 一、根因（已在本机复现并定位到机制） @Angelyeye
 
 DSH 宿主进程里只要有插件 `import` 了 **npm 的 `undici` 包**，Node **内置 `fetch`** 就不再解压
 gzip：响应**既没有 `content-encoding`，正文也是原始压缩字节**。本机引入方：`dshmarket/lib/net.js`
@@ -442,7 +442,7 @@ gzip：响应**既没有 `content-encoding`，正文也是原始压缩字节**�
 补充对照：`web_fetch` 工具一直正常，因为它用的是 undici 包自己的 `fetch`（解压正常）；
 `content-encoding: gzip` 存在时同样会中招 —— 关键在「谁解压」，不在响应长什么样。
 
-### 二、修法（两层，都在 `credstore.js` 的出站封套里，对调用方透明）
+### 二、修法（两层，都在 `credstore.js` 的出站封套里，对调用方透明） @Angelyeye
 
 1. **请求侧**：`safeFetch` 默认补 `accept-encoding: identity`，从源头要未压缩正文
    （调用方显式指定过就尊重调用方）；
@@ -455,7 +455,7 @@ gzip：响应**既没有 `content-encoding`，正文也是原始压缩字节**�
 影响面：插件全部出站请求都走 `safeFetch`（火山配额、Kimi 配额、云端同步与读取、官方定价页抓取），
 因此这一处修复同时给这些路径兜住了同一个坑。
 
-### 三、验证
+### 三、验证 @Angelyeye
 
 - 真机端到端（先 `import('undici')` 污染进程，再走 `index.js` 的真实接线）：
   - 旧行为（裸全局 fetch）→ 报出与用户完全一致的错误；
@@ -468,7 +468,7 @@ gzip：响应**既没有 `content-encoding`，正文也是原始压缩字节**�
   三档窗口齐全、百分比不被放大、请求确带 `accept-encoding: identity`；
 - 全量 18 个测试文件通过。
 
-### 四、说明
+### 四、说明 @Angelyeye
 
 - 这是**环境韧性**修复，不改变任何计费/同步口径：HTTP 面、配置键、落盘路径、云端契约零改动；
 - 需要重启 `dsh web` 才生效（改动在宿主半端 `index.js`/`credstore.js`）；
@@ -479,7 +479,7 @@ gzip：响应**既没有 `content-encoding`，正文也是原始压缩字节**�
 
 **适配 DSH 0.1.7-alpha.2：配置入口内迁到「花费统计」页头齿轮（带返回键），旧插件配置卡片入口保留兼容**
 
-### 一、背景：新宿主上原配置入口已经消失
+### 一、背景：新宿主上原配置入口已经消失 @Angelyeye
 
 - DSH `0.1.7-alpha.2` **删除了 `settings.plugin.item` 插槽**（在 0.1.7-alpha.2 全部宿主包的 JS 里该字符串零命中），
   原「设置 → 插件 → 插件配置」页由 `dsh-client-ui-settings-plugins` 承担，现在该分区只托管
@@ -491,7 +491,7 @@ gzip：响应**既没有 `content-encoding`，正文也是原始压缩字节**�
 - 结论：v1.9.2 及更早版本在新宿主上「设置 → 插件 → 插件配置」里**再也看不到本插件的配置卡片**，
   而插件的配置又只在那张卡片里 —— 用户实际上失去了全部设置入口（本次修复的动机）。
 
-### 二、改法：配置 UI 内迁到本插件自己的设置分区
+### 二、改法：配置 UI 内迁到本插件自己的设置分区 @Angelyeye
 
 - 新增 `CostSection`（`settings.section` 的渲染函数）：持有 `view`（`dashboard` / `config`）与 `ui` 快照
   （`peak` 轮询 + `UI_EVENT` 监听，从原 `DashGate` 上移，看板与配置页共用同一快照）；
@@ -509,7 +509,7 @@ gzip：响应**既没有 `content-encoding`，正文也是原始压缩字节**�
   只把统计内容换成「点右上角齿轮 → 数据与界面 → 打开」的指引（原卡片入口在新宿主上已不存在，
   这条护栏是必须的）。
 
-### 三、兼容：`settings.plugin.item` 卡片入口保留
+### 三、兼容：`settings.plugin.item` 卡片入口保留 @Angelyeye
 
 - 注册**原样保留**（`slots.inject(pluginItemKey, ...)` 无条件注入，未声明该插槽时回调不触发 ⇒ 零成本）；
   仍声明它的旧宿主（`dsh < 0.1.7-alpha.2`）照旧显示卡片；
@@ -518,7 +518,7 @@ gzip：响应**既没有 `content-encoding`，正文也是原始压缩字节**�
 - 卡片外壳（`li.cost-pcard` > `button.cost-pcard-head` > 折叠 body、默认收起、`aria-expanded`）
   与 `.cost-pcard*` 样式**逐字未改**，原有卡片测试原样通过（`client-render` 的 [3] 组断言未动）。
 
-### 四、文案路径统一
+### 四、文案路径统一 @Angelyeye
 
 - 插件内与 HTTP/Agent 错误里的路径统一为「设置 → 花费统计 → 右上角齿轮 → 分组名」：
   `client.js`（峰谷只读面板、云端同步只读卡、看板关闭提示、云端未配置提示、令牌失效提示）、
@@ -526,7 +526,7 @@ gzip：响应**既没有 `content-encoding`，正文也是原始压缩字节**�
 - 注释同步更新（`config.js`、`pricing.js`、`vendor-catalog.js`、`index.js`、`schema.js` 相关段），
   旧宿主兼容路径只在配置页页脚与 README 里说明。
 
-### 五、测试
+### 五、测试 @Angelyeye
 
 - `test/client-render.test.js`：新增 **[3b] 齿轮入口**（齿轮存在 / 可访问名 / 图标 / 挂在页头操作位 /
   点击进入配置页 / 页头有返回键 / 七个分组齐 / 两视图互斥 / 点返回回到看板）与
@@ -539,7 +539,7 @@ gzip：响应**既没有 `content-encoding`，正文也是原始压缩字节**�
   「齿轮与返回键都在（图标 + 可访问名）」「settings.section 渲染的是 CostSection 而不是直接渲染看板」；
 - 全量 18 个测试文件通过。
 
-### 六、行为差异与注意
+### 六、行为差异与注意 @Angelyeye
 
 - **从配置页点「返回」会丢弃未点保存的草稿**（每个分组仍是「改草稿 → 点该组保存」；
   折叠分组之间的切换不丢草稿，与卡片折叠语义一致）；
@@ -551,7 +551,7 @@ gzip：响应**既没有 `content-encoding`，正文也是原始压缩字节**�
 
 **定价口径修正：V4-Pro 不再路由到 Flash（官方撤销下线计划）+ 新增「法定节假日全天闲时」**
 
-### 一、修正：`deepseek-v4-pro` 维持自有牌价，取消反向路由
+### 一、修正：`deepseek-v4-pro` 维持自有牌价，取消反向路由 @Angelyeye
 
 - **现场**：核对官方定价页（2026-09-20 抓取）—— 官方**为 V4-Pro 单列价格**：
   高峰 输入（未命中）9.0 / 输入（命中）0.30 / 输出 27.0，闲时半价，**并发 500**（Flash 为 2500）；
@@ -571,7 +571,7 @@ gzip：响应**既没有 `content-encoding`，正文也是原始压缩字节**�
 - **历史记录的可修复边界**：路由期入库的 pro 记录，模型名已被改写为计费名
   `deepseek-flash`，补账无法反推原始模型；若要订正必须重放会话日志（`import.js` 保留原始名）。
 
-### 二、新增：法定节假日全天计入闲时（官方口径，此前只排除了周末）
+### 二、新增：法定节假日全天计入闲时（官方口径，此前只排除了周末） @Angelyeye
 
 - 官方脚注：「北京时间周一至周五（**不含中国法定节假日**）9:00-12:00、14:00-18:00
   为高峰时段；其余时段，包括周末及中国法定节假日全天均为空闲时段。」
@@ -598,7 +598,7 @@ gzip：响应**既没有 `content-encoding`，正文也是原始压缩字节**�
 
 **修复：云端同步全面失败（405「方法不允许」）+ 明文迁移在凭据服务晚就绪时不再重试**
 
-### 一、修复：safeFetch 丢掉 fetch 原生签名 → POST 退化成 GET（真实故障）
+### 一、修复：safeFetch 丢掉 fetch 原生签名 → POST 退化成 GET（真实故障） @Angelyeye
 
 - **现场**：升级到 v1.9.0 后云端同步一直失败，界面显示「最近错误：方法不允许」，
   水位卡在 4013、待上报条数只增不减，`pendingFailures` 持续累加并退避到 5 分钟。
@@ -619,7 +619,7 @@ gzip：响应**既没有 `content-encoding`，正文也是原始压缩字节**�
     `POST /api/v1/ingest/records` 且正文含 `syncVer`、授权头带令牌。
   只测 `safeFetch` 或只测引擎都拦不住这个缺陷 —— 必须测两者的**组合**。
 
-### 二、修复：凭据服务晚就绪时，明文迁移不再重试
+### 二、修复：凭据服务晚就绪时，明文迁移不再重试 @Angelyeye
 
 - 现象：升级后 `secretsMigrated` 一直是 `false`，配置里仍留着明文令牌与 SK。
 - 原因：迁移只在启动时跑一次；若那一刻 `ctx.get('credentials')` 还拿不到（凭据服务
@@ -627,7 +627,7 @@ gzip：响应**既没有 `content-encoding`，正文也是原始压缩字节**�
 - 修复：`runSecretMigration()` 返回 `pending`；为真时用 `ctx.inject(['credentials'], …)`
   等凭据服务就绪后**自动再迁一次** —— 既不丢凭据，也不让「配置文件零明文」永远停在未完成。
 
-### 三、安装方式的坑（已写进 README）
+### 三、安装方式的坑（已写进 README） @Angelyeye
 
 - DSH 的 profile 用 pnpm 管理插件（`profiles/web/package.json` 里写着
   `"@angelyeye/dsh-cost-tracker": "^1.8.15"`）。**手动把新版本文件拷进
@@ -641,7 +641,7 @@ gzip：响应**既没有 `content-encoding`，正文也是原始压缩字节**�
 **历史导入 + 凭据外带防护 + 官方价格同步 + 多厂商目录 + Plan/按量双轨开关；
 全部设置集中进「插件配置 → 花费统计」并重设计该卡片（配套云端 v1.4.0）**
 
-### 一、新增模块（各自带独立测试，纯逻辑、可单独跑）
+### 一、新增模块（各自带独立测试，纯逻辑、可单独跑） @Angelyeye
 
 | 模块 | 职责 |
 | --- | --- |
@@ -650,7 +650,7 @@ gzip：响应**既没有 `content-encoding`，正文也是原始压缩字节**�
 | `vendor-catalog.js` + `docs/provider-pricing.json` | 多厂商价格目录（14 家厂商 / 90 个条目，USD/1M tokens） |
 | `credstore.js` | 凭据库封套（`ctx.credentials`）+ 旧明文迁移 + 出站白名单与 `safeFetch` |
 
-### 二、历史导入（`import.js` + 宿主接线）
+### 二、历史导入（`import.js` + 宿主接线） @Angelyeye
 
 - **只补「插件不可能记到」的调用**：早于本机最早一条**实时**记录（`source!=='import'`），
   或所在日完全没有实时覆盖（明细 + 日汇总都没有 → 停机缺口）；
@@ -668,7 +668,7 @@ gzip：响应**既没有 `content-encoding`，正文也是原始压缩字节**�
 - 默认**开机自动导入**（延迟 8s，`ctx.timer` 缺失时用 unref 的原生定时器，不阻塞退出），
   配置卡可关；新增 Agent 工具 `cost_import`（`run: true` 执行一轮）。
 
-### 三、凭据外带防护（`credstore.js` + 全链路接线）
+### 三、凭据外带防护（`credstore.js` + 全链路接线） @Angelyeye
 
 - **密钥零落盘**：新增 `CRED_REFS`（`COST_TRACKER_CLOUD_TOKEN` / `COST_TRACKER_VOLCENGINE_SK`），
   云端令牌与火山 SK 只写 DSH 凭据库；`createCredSeam` 在凭据服务缺席时退化为**内存态**
@@ -687,7 +687,7 @@ gzip：响应**既没有 `content-encoding`，正文也是原始压缩字节**�
   且白名单校验在**发请求之前**完成；`httpJson`、云端只读聚合、`sync.js`、火山签名请求
   全部改走它（`sync.js` 顺带支持异步 `getToken` 依赖）。
 
-### 四、官方价格同步（`price-sync.js` + `pricing.js` 时代注入）
+### 四、官方价格同步（`price-sync.js` + `pricing.js` 时代注入） @Angelyeye
 
 - `parsePricingPage`：模型列（`模型` 与 `BASE URL` 之间）× {缓存命中 / 缓存未命中 / 输出}
   × {空闲 / 高峰} 状态机；**校验六组取齐、个数等于模型列数、数值合理、空闲价 ≈ 高峰一半**，
@@ -700,7 +700,7 @@ gzip：响应**既没有 `content-encoding`，正文也是原始压缩字节**�
 - 实测价值：内置 `v41pro` 时代把 `deepseek-v4-pro` 路由到 Flash，而官方页已恢复 V4-Pro
   独立牌价（9.0/27.0/0.30 高峰）—— 同步一次即可修正，且不影响历史记录。
 
-### 五、多厂商目录与手动覆盖价（`vendor-catalog.js` + `pricing.priceFor` 扩展）
+### 五、多厂商目录与手动覆盖价（`vendor-catalog.js` + `pricing.priceFor` 扩展） @Angelyeye
 
 - 目录数据改编自 `dsh-cost-meter`（MIT）的已核对官方目录，保留 `sourceUrl` / `checkedAt` 溯源；
   provider 别名归一（`gpt→openai`、`claude→anthropic`、`gemini→google`、`kimi→moonshot`、
@@ -713,7 +713,7 @@ gzip：响应**既没有 `content-encoding`，正文也是原始压缩字节**�
 - 订阅归类覆盖（`planOverrides`：`provider/*` 或 `provider/model` → `plan|api`）解决
   「模型 id 带日期后缀、套餐白名单永远追不上」的误标问题。
 
-### 六、Plan 与按量双轨 + 「含 Plan 总额」开关（前后端）
+### 六、Plan 与按量双轨 + 「含 Plan 总额」开关（前后端） @Angelyeye
 
 - 服务端 `buildDashboard` 的 `byDay` 新增每天 `sub`（订阅等值）金额，且**不再跳过订阅记录**；
 - 客户端工具栏新增「含 Plan 总额」开关：关闭（默认）金额卡只显示按量、订阅以附注展示；
@@ -722,7 +722,7 @@ gzip：响应**既没有 `content-encoding`，正文也是原始压缩字节**�
   **修掉一个真实缺陷**：原先每次 `sync` 轮询都会用服务端值覆盖用户刚切的口径
   （`localStorage` 被禁用时尤其明显），现在用 state 记录「用户已手动改过」后不再覆盖。
 
-### 七、设置集中 + 配置卡片重设计（`client.js`）
+### 七、设置集中 + 配置卡片重设计（`client.js`） @Angelyeye
 
 - `设置 → 插件 → 插件配置 → 花费统计` 成为**唯一**设置入口，七个折叠分组
   （多机汇总 / 峰谷计价与提示 / 订阅套餐与配额 / 计价与价格目录 / 历史导入 / 数据与界面 / 安全与凭据）
@@ -736,7 +736,7 @@ gzip：响应**既没有 `content-encoding`，正文也是原始压缩字节**�
   `prices-config`、`prices-sync`、`reset`；`prices` 回显目录、同步状态与覆盖价；
   `sync` 回显计费/导入/同步配置与凭据布尔。
 
-### 八、测试与文档
+### 八、测试与文档 @Angelyeye
 
 - 新增 4 个测试文件：
   - `test/import.test.js`：用 `zstdCompressSync` 合成**多帧**会话日志，覆盖帧边界扫描、
@@ -765,7 +765,7 @@ gzip：响应**既没有 `content-encoding`，正文也是原始压缩字节**�
 但显示 `配额查询不可用：火山方舟凭据无效或无权限访问 GetPersonalPlan（HTTP 401）`，
 且面板上**没有任何可填写凭据的地方** —— 只有一句「需要 AK/SK」，无从下手。
 
-### 一、面板自带凭据输入框（用户直接提出的问题）
+### 一、面板自带凭据输入框（用户直接提出的问题） @Angelyeye
 
 - 面板内新增一行输入：`AccessKeyID`（明文回显，控制台里本就可见）+ `SecretAccessKey`
   （`type=password`，**从不回显**；已保存过时 placeholder 变为「已保存，留空则不改」）。
@@ -777,7 +777,7 @@ gzip：响应**既没有 `content-encoding`，正文也是原始压缩字节**�
   新用户既看不到面板、也没有入口 —— 等于功能不存在。
 - 面板标题旁新增来源徽标：`已保存凭据` / `临时凭据` / `环境变量`，一眼看出当前用的是哪套。
 
-### 二、修复：推理 API Key 被当成 AccessKeyID（401 的真正根因）
+### 二、修复：推理 API Key 被当成 AccessKeyID（401 的真正根因） @Angelyeye
 
 配了 baseURL 指向 `ark.cn-beijing.volces.com/api/coding/v3` 的 provider 时，其 `apiKeyEnv`
 （如 `BYTEBLUS_CODING_PLAN_CN_API_KEY`）是**推理用的 API Key**，而配额查询要的是 IAM 的
@@ -801,7 +801,7 @@ SK = VOLC_SECRETKEY（凭据库里的真 SK）
   「你配置的 X 是推理用的 ARK API Key，不是配额凭据，插件不会拿它去签名」；
 - 缺凭据时明确区分「都缺 / 缺 AK / 缺 SK」。
 
-### 三、修复：两个失败路径缺陷
+### 三、修复：两个失败路径缺陷 @Angelyeye
 
 - **`ReferenceError`（TDZ）把软失败变成 500**：`keyEnv` 原先声明在 `try` 内却在 `catch`
   里引用。任何一次查询失败（401 / 网络异常 / 结构变化）都会在错误处理里再抛一次
@@ -811,7 +811,7 @@ SK = VOLC_SECRETKEY（凭据库里的真 SK）
   `resolveAnyEnv()` 才加的字段；误取 `rid.env` 得到 `undefined`，于是面板从不显示
   「该去改哪个环境变量」。现直接用循环变量名。
 
-### 四、防呆：空串不等于清空
+### 四、防呆：空串不等于清空 @Angelyeye
 
 因为 SK 从不回显，跨浏览器 / 重开面板时 SK 输入框**必然是空的**。若把空串当作「清空」，
 用户只改一下 AK 就会把已存好的 SK 一起写空 —— 静默丢凭据。现在：
@@ -825,7 +825,7 @@ SK = VOLC_SECRETKEY（凭据库里的真 SK）
 
 响应回显 `volcengineAccessKeyId`（非敏感）与 `volcengineHasKeys`，**永不回显 SK**。
 
-### 五、测试
+### 五、测试 @Angelyeye
 
 `test/volcengine-host.test.js` 从 36 条扩到 **48 条**，新增四组：
 推理 Key 不得被当作 AK（真实故障回归，复刻用户的 provider 配置）/ 空串不覆盖已存 SK /
@@ -835,7 +835,7 @@ SK = VOLC_SECRETKEY（凭据库里的真 SK）
 
 **新增：火山方舟 Coding Plan 订阅支持（配额监控 + 等效费用）；并修掉两个此前静默存在的缺陷**
 
-### 一、新增：火山方舟 Coding Plan 配额面板
+### 一、新增：火山方舟 Coding Plan 配额面板 @Angelyeye
 
 - **设置页新增「订阅套餐用量 · 火山方舟 Coding Plan」面板**，与既有 Kimi 面板并列，显示 **5 小时 / 周 / 月** 三档窗口的已用百分比、绝对量与重置倒计时，附「刷新配额」按钮。
 - **查询走方舟管控面 OpenAPI**，不是推理端点：
@@ -850,7 +850,7 @@ SK = VOLC_SECRETKEY（凭据库里的真 SK）
 - **按需出现**：面板只在「存在火山订阅调用（宿主在 `summary` 里回传 `volcengineActive`）或已有窗口数据」时渲染。只跑 DeepSeek / Kimi 的用户界面**完全不变**。
 - **百分比精度**：实测 `Percent` 是 0-100 的百分数但数值极小（`0.3938…` / `0.0997…` / `0.0498…`，即 0.39% / 0.1% / 0.05%），故保留**两位小数** —— 只留一位会把月度 0.05% 显示成「0%」，看上去像没统计到。同时**不套用「≤1 视为小数」的规则**（那会把 0.5% 放大成 50%）。`Cap`（实测恒为 100）用于折算绝对量。
 
-### 二、修掉订阅门卫缺陷：按量调用曾被错记成订阅（重要）
+### 二、修掉订阅门卫缺陷：按量调用曾被错记成订阅（重要） @Angelyeye
 
 - **缺陷**：`priceFor()` 原先只按 **provider 名**判定订阅，对该 provider 的**所有模型**一律套订阅价。
 - **为什么此前没暴露**：Kimi 的 provider 下每个模型都走订阅，所以「只看 provider」恰好成立。
@@ -864,7 +864,7 @@ SK = VOLC_SECRETKEY（凭据库里的真 SK）
 - **前缀刻意收窄**：只放行 `ark-code-*`（方舟自动调度名会滚动升级）。按 `deepseek` / `glm` 这类宽前缀整族放行会把套餐外的按量模型一并算成订阅 —— 那正是本门卫要防的方向；宁可漏配（可显式补清单）也不能错配。
 - **等效单价口径**：套餐内各模型牌价差异很大，而套餐只有一个固定月费、官方并未给出「套餐内某次调用的等效单价」。故取**单一代表价**（3.0 / 12.0 / 缓存 0.6），与既有 Kimi 订阅（同样一个价位代表整档）口径一致，**仅用于横向比较订阅是否划算，不是真实扣费**；可核实到的第三方报价多为聚合站美元估价，与官方人民币牌价不可直接对照，按本仓库「不编造价格」的约定不收录。
 
-### 三、修掉凭据文件读取缺陷：`.credentials.yaml` 兜底一直静默失效（重要）
+### 三、修掉凭据文件读取缺陷：`.credentials.yaml` 兜底一直静默失效（重要） @Angelyeye
 
 - **缺陷**：`readCredFile()` 的正则只匹配**行首无缩进**的键，而真实文件是把键**缩进**存放在 `refs:` 段下的：
   ```yaml
@@ -879,7 +879,7 @@ SK = VOLC_SECRETKEY（凭据库里的真 SK）
 - **现在**：识别缩进、定位 `refs:` 段（避免误读 `records:` 段里的同名键），并保留对「无缩进的旧版平铺文件」的兼容（段内未命中时回落到段外同名键）。
 - **顺带修掉路径硬编码**：原路径写死 `~/.dsh/.credentials.yaml`，`DSH_HOME` 被重定向的部署（含本仓库的沙箱测试）永远读不到；现改为跟随 `DSH_HOME`。
 
-### 四、测试
+### 四、测试 @Angelyeye
 
 - 新增 `test/volcengine-plan.test.js`（113 条）：**与火山官方 demo（`volc-openapi-demos/signature/nodejs/sign.js`）逐字节一致的固定签名向量**、查询串排序与严格 RFC3986 转义、四种响应形态（官方 `QuotaUsage[Level/Percent]`、`UsageDetails`、arkcli `items→periods`、AFP 扁平窗口）、**0.5% 不被放大成 50%**、负数百分比判非法而非钳成 0、`ResetTime=-1` 归一为「无重置」、凭据残缺判 null 且不发请求、403 换 Action、业务信封优先于末尾 404。
 - 新增 `test/volcengine-host.test.js`（36 条）：宿主面端到端（老配置 + 凭据文件 → 已签名请求 → 可渲染窗口）、**密钥零外泄**（响应 / sync / 卡片写入三处）、配置卡片凭据优先、真机响应形状（0.05% 不被抹成 0%）、五类失败路径软降级、120s 缓存 TTL 与 `force` 绕过。
@@ -888,7 +888,7 @@ SK = VOLC_SECRETKEY（凭据库里的真 SK）
 
 ## v1.8.13(2026-09-25)
 
-**新增：可以关掉插件在前端的显示（三个落点各自独立）**
+**新增：可以关掉插件在前端的显示（三个落点各自独立）** @Angelyeye
 
 - **背景**：插件的几个前端落点此前都是常驻的、没有开关 —— 输入框上方的「本会话花费」胶囊、侧边栏底部的峰谷时段条、设置页的「花费统计」看板。不想看的人只能忍，或者干脆卸载插件（连带失去记账与云端同步）。
 - **现在**：设置 → 插件 → 插件配置 → 花费统计 → **界面显示**，三个开关**各自独立**、**勾选即刻生效**（不需要点上面的「保存」，也不需要重启 dsh）：
@@ -911,7 +911,7 @@ SK = VOLC_SECRETKEY（凭据库里的真 SK）
 
 ## v1.8.12(2026-09-19)
 
-**修复：①「Token 用量统计」热力图不跟随三态视图（本机+云端下屏内自相矛盾）② `cost_stats scope=cloud|both` 崩溃**
+**修复：①「Token 用量统计」热力图不跟随三态视图（本机+云端下屏内自相矛盾）② `cost_stats scope=cloud|both` 崩溃** @Angelyeye
 
 - **① 热力图此前恒为本机**：它的数据源是宿主的 `usage` 路由 → `buildUsageHeat()`，只遍历本地
   store 的 records/rollups，**没有任何云端输入**；而同一屏的卡片走 `viewDash`（本机+云端合并）。
@@ -942,7 +942,7 @@ SK = VOLC_SECRETKEY（凭据库里的真 SK）
 
 ## v1.8.11(2026-09-17)
 
-**新增：启动时检测「另一个 dsh 实例正在用同一份记录文件」并直接点名**
+**新增：启动时检测「另一个 dsh 实例正在用同一份记录文件」并直接点名** @Angelyeye
 
 - **背景**：v1.8.10 的 EPERM 现场根因就是**上一个 dsh 实例还在跑，用户又起了一个** —— 两个实例写同一份 `cost-tracker-records.json`，互相覆盖，并在 Windows 上撞上 rename 的 EPERM（旧的临时文件名还是固定的 `<file>.tmp`，两实例必然互抢）。此前用户只能对着堆栈猜。
 - **现在**：启动时在记录文件旁登记一把**仅用于提示**的实例锁（`cost-tracker-records.json.lock`，内含 pid / 版本 / 时间）。若锁的持有者**仍然存活**（`process.kill(pid, 0)`，Windows 上 EPERM 也算存活），立即打印占用者信息与处理办法：
@@ -956,7 +956,7 @@ SK = VOLC_SECRETKEY（凭据库里的真 SK）
 - **实测**（两个真实进程）：holder 登记锁并保持存活 → 第二个实例输出 `{"lockHeldBy":15784,"warned":true}` 且 stderr 打印上面那段；holder 退出后残留的陈旧锁不影响后续启动。
 - **测试**：`test/storage.test.js` 第 14 节新增 14 条断言（无锁 / 自己的锁 / 存活占用者 / 陈旧锁 / 不存在的 pid / 只删自己的锁 / 锁文件损坏不炸）。
 
-**文档：两份 README 补齐长期漂移（无功能变更）**
+**文档：两份 README 补齐长期漂移（无功能变更）** @Angelyeye
 
 - 英文 README 更新记录补齐 v1.8.7–v1.8.10（此前停在 v1.8.6）并补上缺失的 v1.3.0；「本机+云端」口径由过时的「服务端排除本机，因此不重复计数」更正为**并集**（其他整机 ∪ 本机上的非 dsh 来源）；补「多机汇总(云端同步)」功能行与 `sync.js` / `view.js` / `schema.js`。
 - 中文 README 设置页说明补「六组概览卡」「峰谷计价与提示」两条（此前只有英文版有）；FAQ「重启会丢数据吗」补落盘遇瞬时占用的处理；同样补「多机汇总」功能行与三个源文件。
@@ -964,7 +964,7 @@ SK = VOLC_SECRETKEY（凭据库里的真 SK）
 
 ## v1.8.10(2026-09-17)
 
-**修复：Windows 上落盘偶发 `EPERM`（rename 被瞬时占用），启动日志甩出吓人的堆栈**
+**修复：Windows 上落盘偶发 `EPERM`（rename 被瞬时占用），启动日志甩出吓人的堆栈** @Angelyeye
 
 - **现场**（v1.8.9 重启时）：
   ```
@@ -988,7 +988,7 @@ SK = VOLC_SECRETKEY（凭据库里的真 SK）
 
 ## v1.8.9(2026-09-17)
 
-**修正档位文案：「平峰」→「不分峰谷」，且为 0 时不再占图例**
+**修正档位文案：「平峰」→「不分峰谷」，且为 0 时不再占图例** @Angelyeye
 
 - **问题**：按峰谷图的图例第三项写作「平峰」（内部 `period='flat'` 的直译）。官方定价**只有两档**——高峰（工作日 9:00-12:00、14:00-18:00）与闲时（高峰 × 0.5，周末全天闲时）；`flat` 的真实含义是「**这笔计价不分峰谷**」（`price.tiered === false`：订阅套餐、非 DeepSeek provider 的兜底价、未识别模型的通用兜底价）。而中文电价语境里「平峰/平段」指峰谷之间的**第三个时段**，放在这里会让人以为 DeepSeek 有三档价。
 - **另一层误导**：该项常驻图例，即使全区间为 0 也占一个色块（只跑 DeepSeek 按量调用时恒为 0），进一步强化「存在第三个时段」的错觉。
@@ -998,20 +998,20 @@ SK = VOLC_SECRETKEY（凭据库里的真 SK）
 
 ## v1.8.8(2026-09-15)
 
-**修复：「仅云端」视图只有请求次数、费用整列为 ¥0.0000（字段名未映射）**
+**修复：「仅云端」视图只有请求次数、费用整列为 ¥0.0000（字段名未映射）** @Angelyeye
 
 - **现场**：看板切到「仅云端」后，三张金额卡与底部汇总全为 `¥0.0000`，而「API 请求次数 / Tokens」正常（如 4,271 次、712.6M）。这个「次数对、金额 0」的组合直接指向字段名不匹配。
 - **根因**：云端 `/api/v1/overview` 的按量金额字段是 **`realCost`**、订阅等效是 **`subEquivalent`**，而本地 `buildDashboard` 与所有卡片读的是 **`real` / `sub`**。客户端的 `normalizeCloudDash`（与内联兜底 `vNormalizeCloudDash`）当时只把 `today/month/all` 原样透传，`summary` 更是整个丢掉 —— 于是金额全 0，`calls/tokens` 因两边同名而幸存。**测试里那份云端假数据误用了 `real/sub`，把缺陷掩盖了**（已改为与线上一致的 `realCost` 形状）。
 - **修法**：`view.js` 新增 `cloudSlices()` 做**逐项字段映射**（同时接受 `realCost/real`、`subCost/subEquivalent/sub` 三种写法，向后兼容旧云端），客户端内联兜底同步实现；`summary` 行按 `realCost → real`、`subEquivalent → sub` 映射，缺字段时回退到 `all` 的对应值。归一化后同时保证 `real + sub` 与 `calls + subCalls` 口径与本地一致。
 
-**新增：云端「插件形状」只读接口，仅云端的图表不再为空**
+**新增：云端「插件形状」只读接口，仅云端的图表不再为空** @Angelyeye
 
 - 客户端要画消费柱状图、分模型明细与最近记录，需要 `byDay / byModel / byModelDay / recent`，而 `/api/v1/overview` 只给概览卡片 —— 「仅云端」的图表此前注定为空。
 - 云端新增 **`GET /api/v1/plugin-view`**（设备令牌可读，`caps.devicePluginView=true` 声明），字段名与本地 `buildDashboard` **逐项一致**，从根上消除这层适配；同时支持 `union` 并集（「本机+云端」）。
 - 插件探测 `/api/v1/health` 的 caps 后**优先走 plugin-view**，旧云端自动回退 `overview`（卡片可用、图表为空，不再整体不可用）；带 `union` 时仍走 overview（其卡片保持全网口径，与并集相加语义一致）。
 - 顺带修掉云端既有的**同源缺陷**：`pluginView()` 的 today/month/all 原取自 `totalsUnfiltered`（无条件下全表），会**绕过 `excludeDevice`** —— 「本机+云端」相加时本机被计入两次。现改为按同一过滤条件取切片，且 `calls/tokens` 只含按量、订阅另计（`subCalls/subTokens`），与本地口径对齐。
 
-**测试**
+**测试** @Angelyeye
 
 - 插件 `test/client-render.test.js` 的云端假数据改为**线上真实形状**，新增 `[5] 仅云端金额映射`用例：断言今日 ¥0.50、总花费 ¥2.00、不再出现 `¥0.0000`、汇总行按 `realCost` 口径，且内联兜底与 `view.js` 结果逐字一致。
 - 新增 `test/cloud-view-e2e.test.js`：真实启动 `dsh-cost-cloud` 实例 → 设备令牌读 `plugin-view` → 过 `view.js` 归一化 → 断言卡片字段（含向后兼容旧概览口径）。
@@ -1022,7 +1022,7 @@ SK = VOLC_SECRETKEY（凭据库里的真 SK）
 
 ## v1.8.7(2026-09-15)
 
-**修复：`cost_recompute` 的默认范围只覆盖「最近一个价格时代」，更早的陈旧记录被静默跳过**
+**修复：`cost_recompute` 的默认范围只覆盖「最近一个价格时代」，更早的陈旧记录被静默跳过** @Angelyeye
 
 - **现场**：v1.8.6 修复后按提示执行补账，854 条被订正，但另有 **750 条 `deepseek-flash` 记录（seq 611–1360，北京时间 09-10 21:24 ～ 09-14 02:36）仍标着「估算」**。逐条核对发现它们**完全落在默认扫描范围之外**：旧默认 `since` = **最近一个价格时代的生效时刻**（本机为 `v41pro` = 09-14 12:00），该时刻之前的记录一条都没进扫描。补账只做了一半，提示却是「没有需要重算的记录」——**默认值本身就是陷阱**。
 - **修法**：默认改为 **全时段扫描（`since = 0`）**。补账幂等、明细量级有限（本机 1600+ 条耗时毫秒级），全扫代价可忽略，收益是「调用一次必然覆盖全部历史」。
@@ -1039,7 +1039,7 @@ SK = VOLC_SECRETKEY（凭据库里的真 SK）
 
 ## v1.8.6(2026-09-15)
 
-**修复：计费规则与 DeepSeek 官方定价的两处口径偏差（金额口径 + 标记口径）**
+**修复：计费规则与 DeepSeek 官方定价的两处口径偏差（金额口径 + 标记口径）** @Angelyeye
 
 核查基准：官方价格卡 <https://api-docs.deepseek.com/zh-cn/quick_start/pricing> 与发布通告 <https://api-docs.deepseek.com/zh-cn/news/news260910>。核查方法：用独立脚本按官方牌价重算全部已入库记录，与插件记账逐条比对（1985 条记录金额差额 `0.000000`，说明**数值本来就是对的一分不差**；以下两处修复的是口径与标记）。
 
@@ -1052,15 +1052,15 @@ SK = VOLC_SECRETKEY（凭据库里的真 SK）
   - 官方脚注 (1)：「模型名请使用 `deepseek-flash`」。旧实现的规范名是 `deepseek-v4.1-flash`（官方文档中并不可调用的写法），于是宿主实际上报的 `deepseek-flash` 落入 provider 兜底分支——**金额恰好相同，但被标记为「估算」**。本机 1402 条 `deepseek-flash` 记录 100% 命中该问题，云端 `cost_basis` 也随之为 `estimated`，污染「估算占比 / 口径漂移」统计。
   - 修法：`V41_FLASH_MODEL` 改为 `deepseek-flash`（官方现役名），并新增 `MODEL_ALIASES` 别名归一表，使 `deepseek-v4.1-flash` / `deepseek-v4-1-flash` / `deepseek-v41-flash` / `deepseek_flash` 等等价写法解析到同一规范名（单价表本身不重复列项）。路由目标与入账名统一为 `deepseek-flash`。
 
-**修复：`cost_recompute` 不再漏判「仅标记变化」的记录**
+**修复：`cost_recompute` 不再漏判「仅标记变化」的记录** @Angelyeye
 - 变更判定此前只看费用 / 模型名 / 档位，于是「模型名从兜底升为精确档、金额分毫不变」的记录不会被订正。现纳入 `estimated` / `subscription` 标记比对，返回值新增 `estimatedFlips` 计数，工具输出会明确写出「其中 N 条仅订正『估算』标记，金额不变」，避免补账看起来「改了 0 条」。
 
-**变更**
+**变更** @Angelyeye
 - `export const V41_FLASH_MODEL = 'deepseek-flash'`（原 `'deepseek-v4.1-flash'`）；新增导出 `V41_PRO_ROUTE_AT` / `MODEL_ALIASES`。
 - `PRICE_ERAS` 由 2 版增至 3 版：`legacy` / `v41`（09-10 12:00 起，含 V4-Pro 自有牌价）/ `v41pro`（09-14 12:00 起，含 V4-Pro 路由）；`v41` 时代新增 `proRouteSince` 说明字段。
 - `cost_prices` 的 `eras` / 渲染文本同步展示 V4-Pro 路由时刻与官方现役名口径。
 
-**测试**
+**测试** @Angelyeye
 - `test/pricing.test.js`：新增 V4-Pro 路由时刻边界用例（`12:00:00.000` 前一毫秒仍按自有牌价、整点起路由）、`deepseek-flash` 精确命中与别名归一用例。
 - `test/recompute.test.js`：补账样本改为覆盖「路由前窗口金额不变」「路由后改写为 `deepseek-flash`」「误标估算记录被订正」三类，新增 `estimatedFlips` 断言。
 
@@ -1070,21 +1070,21 @@ SK = VOLC_SECRETKEY（凭据库里的真 SK）
 
 ## v1.8.5(2026-09-15)
 
-**修复**
+**修复** @Angelyeye
 - **v1.8.4 的自动回填会中途短路,只补一批就宣告完成**:`runOnce` 推进游标时采信的是**服务端返回的水位**,而服务端 `/api/v1/ingest/records` 回的是它库里该设备明细的 `MAX(client_seq)` —— **整体最大值**,含更早已上传、序号更高的记录,不是"本批"的最大值。于是在**它本来要修的那个场景**里(本机缺 1..723、云端已有 724..1457):第一轮补发 1..500 后服务端回 `maxClientSeq=1457`,游标一步跨到顶,下一批为空,`break` —— 501..723 照样补不回来。现改为游标只推进到**本批实际送达**的 `maxClientSeq`,多轮循环才能真正逐段覆盖全部历史。实测现场:17:16 那次回填只发出 1 批 500 条,预期的 3 批只完成 1 批。
 - **回填算法加版本号**:状态文件新增 `backfillVer`。v1.8.4 已经跑过(有缺陷的)回填的部署,`legacySent` 已是 `true` 而缺口仍在,靠布尔量无法区分"补过且补全"与"补过但短路"。现在低于当前算法版本(2)的部署会**再补跑一次**;`cost_sync action=now full=true` 同样会强制重新回填一轮。
 
-**测试**
+**测试** @Angelyeye
 - `test/sync.test.js` 新增 8d 组:复现「服务端水位 = 整体最大值 + 云端只有最新的 500 条」这一真实故障现场,断言一轮同步必须把 1..1200 全部送达、云端不留空洞、版本号落盘。**该组在 v1.8.4 代码上报 5 条红**(只发出第一批、留下 650 个空洞),修复后全绿。
 - 断言回填成功后必须落 `backfillVer=2`,中途失败时不得落(否则缺口会被永久放过)。全量 `npm test` 通过;无数据迁移、无破坏性变更。
 
 ## v1.8.4(2026-09-15)
 
-**修复**
+**修复** @Angelyeye
 - **云端「全时段」缺失最早一段历史**:`sync.js` 的 `buildRecordsPayload()` 从**最新**记录往回取批,首批装满 `syncBatchSize`(默认 500)后水位立刻跳到最新 seq,而跳过条件是 `seq <= watermark` —— 比首批更旧的记录被判成"已上报",**再也不会被发送**。凡是"先攒下一批本地明细、之后才开启云端同步"的部署都会中招,且 `cost_sync action=now full=true` 也救不回来:全量只是把水位归零,选片方向照旧从最新开始,重复发同一批后水位又跳回顶端。实测现场:本机 1456 条明细,云端只收到 722 条(最早 `2026-08-24 22:53:57`,正好是首轮 500 条批次的起点),**缺 723 条、¥36.68**。现改为**由旧到新**取批,水位逐批连续推进,每轮最多 40 批,多轮即可覆盖全部历史。
 - **已上线部署自动补齐**:启用状态文件里一直闲置的 `legacySent` 标记做**一次性历史回填** —— 升级后的第一轮同步把水位归零、由旧到新重发全部历史(服务端按内容哈希幂等,已存在的记录只计 `duplicates`);该标记**只在明细阶段真正跑完一轮后才置位**,中途失败保持 `false`,下次同步继续补,绝不漏发。
 
-**测试**
+**测试** @Angelyeye
 - `test/sync.test.js` 新增 3 组护栏共 21 条断言:
   - **取片方向**:批上限截断时必须取**最旧**的若干条(≤1.8.3 返回最新的,断言立即报红);
   - **现场复现**:1200 条明细 + 水位被推到 1100 + `legacySent=false`,一轮同步必须完整送达 1200 条(升序、无重复、水位推进到 1200、置位 `legacySent`);置位后只发增量;
@@ -1093,10 +1093,10 @@ SK = VOLC_SECRETKEY（凭据库里的真 SK）
 
 ## v1.8.3(2026-09-15)
 
-**修复**
+**修复** @Angelyeye
 - **三态视图在浏览器里从未生效**:`client.js` 通过 `requireLocal("./view", 兜底桩)` 取三视图与云端合并逻辑,而宿主的客户端模块加载器**只加载本插件的客户端 bundle** —— `view.js` 是宿主侧 ESM,浏览器里永远取不到,于是静默退回只含「本机」的空桩:**三态开关只剩一个按钮**,而且 `normalizeCloudDash` / `mergeDash` 被空实现顶掉,**云端数据即便取回来也永远合并不进来**(这是「只有本机这个选项」的直接原因)。现把 view.js 的纯逻辑**完整内联**进 bundle(保留 `require("./view")` 作为可选覆盖),客户端 bundle 从此自包含。
 
-**测试**
+**测试** @Angelyeye
 - `test/client-render.test.js` 新增两条针对性护栏:
   - **三态按钮断言**:`本机 / 本机+云端 / 仅云端` 必须全部渲染出来 —— 旧断言只查 `includes("本机")`,空桩也能蒙混过关;
   - **一致性断言**:分别构造「取到 / 取不到 view 模块」两个模块实例,渲染结果必须**逐字一致**;内联实现一旦与 `view.js` 漂移立刻报红。
@@ -1106,26 +1106,26 @@ SK = VOLC_SECRETKEY（凭据库里的真 SK）
 
 ## v1.8.2(2026-09-15)
 
-**修复**
+**修复** @Angelyeye
 - **「配置完云端一点保存,插件界面整体消失」**:`client.js` 里的 `timeLabel()` 被引用 3 次却从未定义(v1.8.0 引入)。三处调用都写成 `st.lastSyncAt ? timeLabel(...) : "从未"`,因此**只有首次同步成功之后**才会执行到 —— 一保存配置、同步一成功,客户端渲染立刻抛 `ReferenceError`,`「花费统计」页与「插件配置」卡片同时消失`(实为渲染崩溃,宿主半端仍在正常运行、上报也没断)。现补上定义:一天内给「刚刚 / N 分钟前 / N 小时前」,更早给 `MM-DD HH:mm`。
 - **「仅云端 / 本机+云端」始终拿不到云端数据**:插件的云端聚合读取走 `/api/admin/*` 并用**设备令牌**鉴权,而管理接口只认管理员会话 cookie,必然 `401 UNAUTHORIZED`。现改走设备令牌可读的只读接口 `/api/v1/overview|matrix|devices`(需 dsh-cost-cloud ≥ 支持该接口的版本);命中 404 时提示「云端版本过旧」并给出升级指引,不再只回一个 `HTTP 404`。
 
-**测试**
+**测试** @Angelyeye
 - `test/client-render.test.js` 的 fetch 桩改为返回**真实形态的「已配置且已同步」响应**(含 `lastSyncAt`/`watermark`/`deviceId`),并新增「上次同步时间标签必须渲染出来」断言 —— 原先喂空对象会走 `"从未"` 分支,恰好绕开了这条崩溃路径。该护栏在已发布的 1.8.0 / 1.8.1 上都会报红(`timeLabel is not defined`)。
 - 新增 `test/cloud-read.test.js`(6 项):钉住云端只读路径必须是 `/api/v1/*`、不得用设备令牌读 `/api/admin/*`、404 必须带可操作提示。
 - 全量 `npm test` 通过;无数据迁移、无破坏性变更。
 
 ## v1.8.1(2026-09-15)
 
-**修复(均为 v1.8.0 的原生缺陷,建议所有 1.8.0 用户升级)**
+**修复(均为 v1.8.0 的原生缺陷,建议所有 1.8.0 用户升级)** @Angelyeye
 - **「花费统计」页白屏**:`Dashboard` 把 `sync` 作为 prop 传给 `PeakPanel`,而 `PeakPanel` 内部误用了裸 `sync`(未从 props 解构),渲染期抛 `ReferenceError: sync is not defined`,整块面板被卸载成空白 —— 1.8.0 的主页面等于完全不可用。
 - **插件配置卡片永不显示**:客户端用 `slots.entries("settings.plugin.item").length > 0` 当「宿主是否声明了该插槽」的探测。`entries` 数的是**已经注册进该插槽的条目**,而条目恰恰由各插件在插槽声明之后才注册,所以该判断在插件 apply 阶段恒为假,卡片永远注册不上(也就没有地方填写云端地址)。改为**无条件** `slots.inject`,与宿主官方卡片及 `dsh-context` 的写法一致。
 - **宿主侧命名空间注册时序**:`ctx.get('settings')` 只探一次,服务晚一步就绪时命名空间永不注册。改为 `ctx.inject(['settings'], …)` 等它就绪再注册(服务始终缺席时保持 inert,不阻断启动);`installSettingsSection` 增加幂等守卫,避免二次注册触发宿主 `already registered`。
 
-**改进**
+**改进** @Angelyeye
 - **插件配置卡片改用宿主同款外壳**:`li.cost-pcard` > 可点击 header(标题 / 副标题 / 旋转箭头) + 折叠 body,逐条照搬宿主 `PluginCard.module.css` 的设计 token(边框、圆角、hover、展开态配色、focus-visible、过渡时长),默认收起、点击展开,与「插件市场 / 上下文 / 终端」等卡片视觉一致。样式用 `.cost-pcard` 前缀,避免与「花费统计」页既有的 `.cost-card`(概览数字卡)冲突。
 
-**测试**
+**测试** @Angelyeye
 - 新增 `test/client-render.test.js`:用零依赖的极小 React 替身在 Node 里真实执行 `client.js`(函数组件被真正调用、`useState` 可持久化以模拟交互、`useEffect` 会执行并等微任务落地),覆盖:apply 完整、两个插槽都注册、花费统计页渲染无异常、配置卡片默认折叠 / 点击展开 / 展开后表单字段渲染。该护栏在 1.8.0 的原始代码上会红(正是上面两个缺陷)。
 - `test/client-registration.test.js` 新增「插件配置卡片注册方式」3 项断言(必须无条件 inject、条目键必须等于命名空间、必须与宿主 `installSection` 的 ns 一致)。
 
@@ -1158,11 +1158,11 @@ SK = VOLC_SECRETKEY（凭据库里的真 SK）
 - 新增 `POST /api/cost-tracker/sync`、`sync-now`、`sync-test`、`sync-config`、`cloud` 路由。
 - 隐私：`会话脱敏`（`sessionId` 上报前替换为不可逆哈希）、`不含 purpose` 两个开关。
 
-**修复**
+**修复** @Angelyeye
 - `store.js` 的保留期折叠现在会记录 `absorbed` 键（此前折叠后无法向云端证明"这些明细已计入快照"，会导致云端重复计数）。
 - 备份：`store.add()` 分配 `seq` 时不再依赖调用方，旧文件（无 `seq`）加载后按时间升序补配并透明落盘。
 
-**测试**
+**测试** @Angelyeye
 - 新增 `test/sync.test.js`（89 项）与 `test/view.test.js`（56 项）：契约向量、身份文件、配置规范化、schema 形状、增量/批量/窗口裁剪、快照 absorbed、退避与错误分类、三态视图相加不变量，以及与 `dsh-cost-cloud` 真实实现的跨仓库端到端（本地清空后重导、全量补传去重）。
 - 既有 218 项测试全部保持通过。
 
@@ -1173,7 +1173,7 @@ SK = VOLC_SECRETKEY（凭据库里的真 SK）
 
 ## v1.7.1(2026-09-14)
 
-**修复(严重,影响所有 v1.7.0 的干净安装)**
+**修复(严重,影响所有 v1.7.0 的干净安装)** @Angelyeye
 - **修复客户端半端加载失败**:`client.js` 向浏览器端 `__ModuleLoader__.load()` 注册时用的 id 仍是旧裸名 `dsh-cost-tracker`,而加载器持有的图行 id 已是包名全称 `@angelyeye/dsh-cost-tracker`(v1.7.0 改包名时漏改了这一处手写字符串)。两者不等,加载器判定「bundle 已执行但没有以该 id 注册」并抛错:
 
   ```
@@ -1188,16 +1188,16 @@ SK = VOLC_SECRETKEY（凭据库里的真 SK）
 - `client.js` 末尾新增注册名护栏:以单一事实源常量表述注册 id,执行时自检「实际写入 `factories` 的 id」是否等于包名。**一致时不介入**(不会安装对 `loader.load` 的包装);不一致时在控制台直接点名根因 —— 若注册的是历史裸名,会明确说明这是 v1.7.0 的缺陷及改法,而不是只留加载器那句难以定位的报错。
 - 新增 `test/client-registration.test.js`(11 项断言):在 `node:vm` 沙箱里按宿主的真实注册语义运行 bundle,断言注册名严格等于 `package.json` 的 `name`、允许尾部 `/client` 写法(会被宿主的 `stripClientSuffix` 去掉)、并**反向验证**注册名不一致时护栏必须报错。已接入 `npm test`。
 
-**文档**
+**文档** @Angelyeye
 - **更正 v1.7.0 条目里的迁移指引**:原文让人用 `dsh plugin --profile web add github:Angelyeye/dsh-cost-tracker` 重装 —— 该写法在 v1.7.0 上**同样无法修复**客户端加载失败(包名不变、图行 id 不变,问题在 bundle 内部)。已装坏的用户正确出路是**升级到 1.7.1**,不需要重装。中英文 README 同步更正。
 - 明确一条开发约定:**客户端 bundle 注册的 id 必须与 `package.json` 的 `name` 逐字一致**(允许尾部带 `/client`)。包名带 scope 时尤其容易漏。
 
-**升级**
+**升级** @Angelyeye
 - 1.7.0 → 1.7.1 直接升级即可,**无需**先卸载;`cordis.patch.yml` 的 loader id 未变,不会产生重复注册。功能、数据格式、存储路径均无变化。
 
 ## v1.7.0(2026-09-12)
 
-**变更(破坏性,仅影响安装方式,不影响功能与数据)**
+**变更(破坏性,仅影响安装方式,不影响功能与数据)** @Angelyeye
 - **包名由 `dsh-cost-tracker` 改为 `@angelyeye/dsh-cost-tracker`**:npm 上原名已被他人占用,而插件市场的 npm 映射要求「已发布包名 = 仓库 `package.json` 的 `name`」并且该包的 `repository` 指回本仓库。改名后市场才能建立 npm 映射(下载量、宿主兼容徽章、版本化更新)。
 - `cordis.patch.yml` 的 bundle 补丁同步改为新包名。**注意 scoped 名在 YAML 里必须加引号**(`name: "@angelyeye/dsh-cost-tracker"`)——`@` 是 YAML 的保留起始字符,不加引号会导致整个 bundle 层解析失败。
 - **迁移**:旧安装必须**先清掉旧的、再装新的**,不能直接叠加安装 —— 新旧两份 `cordis.patch.yml` 用的是**同一个 loader id**(`dsh-cost-tracker`),叠加会让两份同时加载,表现为重复的 HTTP 路由、Agent 工具与 UI 插槽。
@@ -1211,7 +1211,7 @@ SK = VOLC_SECRETKEY（凭据库里的真 SK）
 
 ## v1.6.0(2026-09-10)
 
-**新增**
+**新增** @Angelyeye
 - **适配 V4.1 Flash 新计费规则(北京时间 2026-09-10 12:00 起生效)**:单价表改为**按「计费时代」分版**(`PRICE_ERAS`),按**每条记录自身的时间戳**选版计费,因此历史记录口径不变、切换点自动生效,无需重启或改配置。
   - 新增时代 `v41`(北京时间 2026-09-10 12:00 = `2026-09-10T04:00:00Z`):V4.1 Flash 高峰价 **输入(缓存命中)0.04 / 输入(缓存未命中)2 / 输出 8**(元/百万 tokens),空闲时段仍为高峰半价(0.02 / 1 / 4)。**峰谷窗口不变**,故时段条与倒计时逻辑无需调整。
   - 新增**模型路由**(时代内的 `routes`):V4.1 Pro 上线前,V4-Pro 的请求全部路由到 V4.1 Flash 并按 V4.1 Flash 单价计费;旧 V4-Flash 系(含 `deepseek-v4-flash-vision-exp`)已被 V4.1 Flash 取代,一并按新价计费。**记录以实际计费模型名入账**(如 `deepseek-v4-pro` → `deepseek-v4.1-flash`),按模型聚合看到的就是真实计费口径。
@@ -1221,12 +1221,12 @@ SK = VOLC_SECRETKEY（凭据库里的真 SK）
 
 - **新增 `cost_recompute` 一次性补账工具**(同时开放 HTTP `/api/cost-tracker/recompute`):按记录自身时间戳重算已入库记录的费用与计费模型名。用于「价格时代已切换、但宿主尚未重启」期间按旧价入库的记录;**默认只试算不落盘**,传 `apply: true` 才写回,幂等可重复执行。只重算明细(明细保留最近 180 天;更早的记录已折叠进日汇总,其时间段远早于任何价格切换窗口)。
 
-**变更**
+**变更** @Angelyeye
 - `priceFor(np, model, ts)` 新增第三个参数 `ts`(调用发生时刻),缺省为当前时间;返回值新增 `model`(**计费模型规范名**,命中路由时为被路由到的模型)与 `era` 字段。记账链路改为传入记录时间戳。
 - DeepSeek provider 兜底单价同步至 V4.1 Flash 档(`2.0 / 8.0 / 0.04`),未知 deepseek 模型不再按旧价高估。
 - `EXACT_MODELS` 语义收敛为 **legacy(旧价)时代的单价表**,保留导出以兼容既有调用与历史口径。
 
-**测试**
+**测试** @Angelyeye
 - `test/pricing.test.js` 新增计费时代分版与模型路由用例(切换边界 11:59:59 / 12:00:00、V4-Pro 路由、旧 V4-Flash 系路由、别名归一化、空闲半价、悬空路由防护)。
 - 所有涉及单价的断言改为**显式传入时间戳**,不再随运行时刻漂移(否则跨 12:00 切换后必然误报)。
 
@@ -1236,7 +1236,7 @@ SK = VOLC_SECRETKEY（凭据库里的真 SK）
 
 ## v1.5.2(2026-08-25)
 
-### 新增
+### 新增 @Angelyeye
 - **「简洁」时段条新增「双行紧凑（上下布局）」选项**:设置页当时段条样式为「简洁（单行紧凑）」时出现该复选项,勾选后时段条由左右单行改为上下两行布局,并可进一步选择「时段条在上·文字在下」(默认)或「文字在上·时段条在下」;侧边栏与设置页预览同步生效。
 - 新增 `peakCompactStack`(默认 `false`)与 `peakCompactOrder`(`bar-first` / `text-first`,默认 `bar-first`)配置项,纳入 `defaultPeakConfig` / `normalizePeakConfig` 与配置层单元测试。
 
@@ -1244,14 +1244,14 @@ SK = VOLC_SECRETKEY（凭据库里的真 SK）
 
 ## v1.5.1(2026-08-24)
 
-### 修复
+### 修复 @Angelyeye
 - **侧边栏底部(sidebar.footer.action)与多插件 UI 兼容**:DSH 渲染器把该槽锚点设为 `display:contents`(见 `dsh-client-ui-renderer` 的 `ANCHOR_STYLE`),导致多个往此槽注册内容的插件(如 `linxin666/dsh-web-ui-all`)被并进同一行、互相挤压。现通过覆盖样式把该锚点改为**纵向堆叠**(`display:flex; flex-direction:column`),使本插件的时段条与其它 footer 插件共存不重叠(思路与 `dsh-footer-order` 一致)。采用稳定 `data-slot` 选择器,收起(rail)态仅显示短词、天然不受影响。
 
 ---
 
 ## v1.5.0(2026-08-24)
 
-### 新增
+### 新增 @Angelyeye
 - **峰谷「时段条样式」新增「环形表盘(24h 中空圆环)」**(替代原「经典(两行)」):
   - 12 档「当前时刻」指针式样可选,默认采用**相位色点**(圆点颜色随相位变化:高峰橙 / 平价蓝 / 周末绿),不再使用从圆心连到边缘的长指针;
   - 圆环按 24h 划分(0:00 顶部、6:00 右、12:00 底、18:00 左),橙色 = 高峰时段(9:00–12:00、14:00–18:00),蓝色 = 平价时段,周末整环无橙色(全天谷价);
@@ -1259,7 +1259,7 @@ SK = VOLC_SECRETKEY（凭据库里的真 SK）
   - 新增「显示时间」开关(仅环形表盘)控制是否显示 00:00–21:00 小时刻度。
 - **「简洁(单行紧凑)」时段条改为按 24h 比例划分**:蓝色平价底条铺满 24h,橙色高峰段按窗口比例定位(9:00–12:00 → 37.5%–50%,14:00–18:00 → 58.33%–75%),白色分割线标出「当前时间」实时进度;周末仅蓝底 + 白线。
 
-### 改进
+### 改进 @Angelyeye
 - 后端 `peakSnapshot()` 新增下发结构化窗口数组 `peakHours`(`PEAK_HOUR_WINDOWS`),前端据此绘制比例轨道 / 圆弧,与 `isPeak`/`peakPhaseAt` 计费口径一致;前端内置兜底窗口 `[9,12]`/`[14,18]`。
 - 新增 `peakShowTickLabels` 配置项(默认 `true`),纳入 `defaultPeakConfig` / `normalizePeakConfig`。
 - 新增设计文档 `docs/peak-dial-design.md` 与可交互预览页 `docs/peak-dial-preview.html`(含 12 档指针式样对比)。
@@ -1268,12 +1268,12 @@ SK = VOLC_SECRETKEY（凭据库里的真 SK）
 
 ## v1.4.1(2026-08-23)
 
-### 修复
+### 修复 @Angelyeye
 - **修复缓存写入(cache write)计价 bug**:原先 `cacheWrite` 被按「缓存未命中价」计费(flash 3.0 / pro 9.0),导致缓存写入量大的会话费用被严重高估。官方规则(及 `dsh-cost-meter`)约定**缓存写入与缓存命中同价**,现统一为 `(cacheRead + cacheWrite) × 缓存命中价`(flash 0.10 / pro 0.30)。
 - `computeCost()` 改为 `输入×未命中价 + 输出×输出价 + (缓存读+缓存写)×命中价`,与官方/参考口径完全一致。
 - **补充 reasoning(推理)token 计费**:`normalizeTokens()` 新增 `reasoning` 桶(读 `usage.reasoningTokens`),模型单价含 `reasoning` 时按单独单价计费(DeepSeek 当前模型未单独列 reasoning 价,计 0)。
 
-### 改进
+### 改进 @Angelyeye
 - 同步 `EXACT_MODELS` / `SUBSCRIPTION_RATES` / `PROVIDER_RATES` / `GENERIC_RATES` 的 cacheWrite 值(均改为命中价)。
 - 更新 `cost_prices` 工具文案与单元测试(新增「缓存写入按命中价」与「reasoning 计费」用例)。
 
@@ -1283,7 +1283,7 @@ SK = VOLC_SECRETKEY（凭据库里的真 SK）
 
 ## v1.4.0(2026-08-23)
 
-### 新增
+### 新增 @Angelyeye
 - **峰谷计价提示(对标 dsh-cost-meter)**:
   - 设置页新增「峰谷计价与提示」面板:启用 DeepSeek 峰谷时段价格、峰时高价时段显著提示、时段条样式(简洁/经典)、峰/谷切换前弹窗提醒、提前提醒分钟(1–30)、提醒类型(峰和谷/进入峰/进入谷)、弹窗位置(右下角/屏幕中心)、同步发送系统通知;全部设置即时保存到 `~/.dsh/storages/cost-tracker-config.json`;
   - 侧边栏底部常驻显示时段条(当前档位 + 距下次切换倒计时),窄栏(rail)自适应为短词;悬停可见完整说明;
@@ -1292,18 +1292,18 @@ SK = VOLC_SECRETKEY（凭据库里的真 SK）
   - 新增 `POST /api/cost-tracker/peak`(峰谷相位快照)与 `POST /api/cost-tracker/peak-config`(保存配置),以及 Agent 工具 `cost_peak`。
 - **六组概览卡**:设置页顶部改版为六张卡——今日费用 / 本月费用 / 总花费 / API 请求次数 / Tokens / **总余额**。今日、本月、总花费三个金额卡**不含订阅会员等效费用**(订阅以附注展示);本月按北京日历月统计;总花费为全时段累计(明细 + 永久日汇总,永远精确)。
 
-### 改进
+### 改进 @Angelyeye
 - **同步 DeepSeek 最新定价规则**:高峰时段限定为北京时间**周一至周五 9:00–12:00、14:00–18:00**,**周末全天计为闲时(闲时半价)**;`isPeak()` 不再忽略星期几,修复周末高峰窗口内被误判为高峰价的问题。
 - 时段条对齐参考项目样式:两段轨道(左橙右蓝)+ 标记线 + 单行着色 chip,窄栏自适应;倒计时文案改为紧凑格式(`5小时56分后进入高峰`)。
 
-### 修复
+### 修复 @Angelyeye
 - 预览弹窗此前强制居中显示,现已**跟随用户配置的弹窗位置**(右下角/屏幕中心)。
 
 ---
 
 ## v1.3.0(2026-08-23)
 
-### 新增
+### 新增 @Angelyeye
 - **Token 用量统计热力图**:
   - 设置页新增「Token 用量统计」面板,类 Codex 的 **26 周每日用量方格热图**;
   - 颜色深浅按当日 token 相对最大值分 4 档,网格自动铺满设置页宽度;
@@ -1313,7 +1313,7 @@ SK = VOLC_SECRETKEY（凭据库里的真 SK）
   - 日期键统一按北京时间(UTC+8)生成,与服务端口径完全一致。
 - **本会话按模型拆分**:状态栏新增按会话实际使用的模型拆分,订阅与按量分开统计。
 
-### 改进
+### 改进 @Angelyeye
 - **状态栏改版**:改为**胶囊分段**布局(本会话 / 订阅套餐 / 分模型),信息清晰、竖线分隔、基线对齐。
 - **只显示本会话花费**:不再显示累计金额,也不再显示当前峰/闲时价。
 - **订阅去重**:订阅只显示一个着色徽标(具体套餐名 + 总等效费用),不再在模型区重复出现。
@@ -1321,7 +1321,7 @@ SK = VOLC_SECRETKEY（凭据库里的真 SK）
 - **显示精简**:去掉配额(周配额剩)与模型调用次数(`×N`)等噪音信息。
 - **视觉统一**:金额字重与配色统一,与整体主题一致。
 
-### 修复
+### 修复 @Angelyeye
 - 状态栏不再依赖"当前选中的模型"判定显示,而是**按会话实际用到的模型 / 订阅**决定,修复多会话切换时显示错误、订阅会话显示为 ¥0 的问题。
 - 热力图悬停浮层在格子靠近左 / 右 / 顶边界时自适应定位,不再被容器裁剪。
 
@@ -1329,7 +1329,7 @@ SK = VOLC_SECRETKEY（凭据库里的真 SK）
 
 ## v1.2.0(此前)
 
-- 支持视觉模型 (`deepseek-v4-flash-vision-exp`) 定价;
-- 订阅计费修复;
-- 新增启动日志开关;
-- 新增三套图表配色(橙→黄 / 蓝→紫 / 蓝→浅蓝)。
+- 支持视觉模型 (`deepseek-v4-flash-vision-exp`) 定价。 @Angelyeye
+- 订阅计费修复。 @Angelyeye
+- 新增启动日志开关。 @Angelyeye
+- 新增三套图表配色(橙→黄 / 蓝→紫 / 蓝→浅蓝)。 @Angelyeye

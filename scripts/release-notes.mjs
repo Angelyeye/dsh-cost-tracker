@@ -130,6 +130,16 @@ function withAuthor(line, author) {
  * 不用机翻 —— 发布说明里的技术描述翻错了比不翻更糟。
  */
 const EN_SPLIT = /\s*[|｜]\s*/
+
+/** 条目末尾若带 `@xxx` 署名，拆成 { text, author } */
+const AUTHOR_TAIL = /^(.*?)\s*@([A-Za-z0-9-]+)\s*$/
+function splitAuthor(line) {
+  const s = String(line || '')
+  const m = AUTHOR_TAIL.exec(s)
+  if (!m) return { text: s.trim(), author: '' }
+  return { text: m[1].replace(/[。.;；]\s*$/, '').trim(), author: m[2] }
+}
+
 function englishOf(line) {
   const parts = String(line || '').split(EN_SPLIT)
   return parts.length > 1 ? parts.slice(1).join(' | ').trim() : String(line || '')
@@ -139,6 +149,22 @@ function englishOf(line) {
 function chineseOf(line) {
   const parts = String(line || '').split(EN_SPLIT)
   return parts.length > 1 ? parts[0].trim() : String(line || '')
+}
+
+/**
+ * 按语言段渲染单条：剥离 `@xxx` 署名 → 取对应语言部分 → 重新追加署名。
+ * 直接对整条做 `englishOf()` 会把署名一起带走（署名在文本末尾、竖线右侧），
+ * 于是中文段没署名、英文段拿到中文句号。所以必须拆开再拼。
+ */
+function renderItem(line, lang, fallbackAuthor) {
+  const { text, author } = splitAuthor(line)
+  const who = author || fallbackAuthor || ''
+  const body = lang === 'en' ? englishOf(text) : chineseOf(text)
+  const clean = body.replace(/@[A-Za-z0-9-]+\s*$/, '').trim()
+  if (!who) return clean
+  return lang === 'en'
+    ? clean.replace(/[。.;；]\s*$/, '') + ' by @' + who
+    : clean.replace(/[。.;；]\s*$/, '') + '。 @' + who
 }
 
 /**
@@ -164,6 +190,7 @@ export function parseSections(body) {
   // 开头可能直接是正文（没有 ### 段落），先给一个兜底分类
   push('其他变更', 'Chores')
   let pending = null // 待绑定到下一个 ### 段落的分类
+  let sectionAuthor = '' // 当前小节的署名（取自小节标题末尾的 @xxx）
 
   let inFence = false
   for (const raw of String(body || '').split(/\r?\n/)) {
@@ -179,6 +206,13 @@ export function parseSections(body) {
     // ### 段落：若有标记就开新分类，否则沿用当前分类
     const h3 = /^###\s+(.+)$/.exec(line)
     if (h3) {
+      // 小节标题末尾的 `@xxx` 是该小节的**署名**（CHANGELOG 里每个小节都标了
+      // 贡献者）。它不属于标题文本，要单独取出留给本段条目使用 ——
+      // 否则署名随标题一起被丢弃，Release 上就看不到贡献者了。
+      let heading = h3[1].trim()
+      const am = /^(.*?)\s+@([A-Za-z0-9-]+)$/.exec(heading)
+      if (am) { heading = am[1].trim(); sectionAuthor = am[2] } else { sectionAuthor = '' }
+
       if (pending) {
         const c = classify(pending)
         // 同一分类只开一次，后续段落并进去
@@ -186,7 +220,7 @@ export function parseSections(body) {
         if (exist) { cur = exist } else { push(c.cn, c.en) }
         pending = null
       } else if (cur !== out[0]) {
-        unmarked.push(h3[1].trim())
+        unmarked.push(heading)
       }
       // 段落标题只用于归类，本身不作为条目输出
       continue
@@ -194,16 +228,27 @@ export function parseSections(body) {
 
     if (/^\|/.test(line) || /^-{3,}$/.test(line)) continue
 
+    // 条目文本统一在末尾带上本小节署名（CHANGELOG 的小节标题末尾写了 @xxx）。
+    // 直接拼进文本而不是改成 {text, author} 结构：后者要同时改 mergeSections /
+    // buildReleaseBody / 去重逻辑，牵连面大且容易破坏既有「字符串条目」约定。
+    // 已有 @xxx 的条目不再重复追加。
+    const withSectionAuthor = (text) => {
+      const t = String(text || '').trim()
+      if (!t || !sectionAuthor) return t
+      if (/@[A-Za-z0-9-]+\s*$/.test(t)) return t
+      return t.replace(/[。.;；]?\s*$/, '') + '。 @' + sectionAuthor
+    }
+
     const li = /^[-*]\s+(.+)$/.exec(line)
-    if (li) { cur.items.push(li[1].trim()); continue }
+    if (li) { cur.items.push(withSectionAuthor(li[1])); continue }
 
     const bold = /^\*\*(.+?)\*\*[：:]?\s*(.*)$/.exec(line)
     if (bold) {
       const tail = (bold[2] || '').trim()
-      cur.items.push(tail ? bold[1].trim() + '：' + tail : bold[1].trim())
+      cur.items.push(withSectionAuthor(tail ? bold[1].trim() + '：' + tail : bold[1].trim()))
       continue
     }
-    cur.items.push(line)
+    cur.items.push(withSectionAuthor(line))
   }
 
   const sections = out
@@ -258,7 +303,7 @@ export function buildReleaseBody(opts) {
     lines.push(first ? `<h3 id="${cnId}">${s.cn}</h3>` : `### ${s.cn}`)
     first = false
     lines.push('')
-    for (const it of s.items) lines.push('- ' + withAuthor(chineseOf(it), o.author))
+    for (const it of s.items) lines.push('- ' + renderItem(it, 'cn', o.author))
     lines.push('')
   }
 
@@ -270,13 +315,7 @@ export function buildReleaseBody(opts) {
     lines.push(first ? `<h3 id="${enId}">${s.en}</h3>` : `### ${s.en}`)
     first = false
     lines.push('')
-    for (const it of s.items) {
-      const en = englishOf(it)
-      const withBy = o.author && !/@[A-Za-z0-9-]+/.test(en)
-        ? en.replace(/[。.]?\s*$/, '') + ' by @' + o.author
-        : en
-      lines.push('- ' + withBy)
-    }
+    for (const it of s.items) lines.push('- ' + renderItem(it, 'en', o.author))
     lines.push('')
   }
 
