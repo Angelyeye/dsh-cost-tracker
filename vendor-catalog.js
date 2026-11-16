@@ -26,13 +26,20 @@ import { readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 
 export const CATALOG_META = {
-  generatedAt: '2026-10-25',
-  note: 'USD per 1M tokens; unpriced entries have no verified official price.',
-  origin: 'adapted from dsh-cost-meter docs/provider-pricing.json (MIT); refreshed from vendor pricing pages 2026-10-25',
+  generatedAt: '2026-11-13',
+  note: 'USD per 1M tokens; unpriced entries have no verified official price. fast-tier prices live under serviceTiers.fast.',
+  origin: 'adapted from dsh-cost-meter docs/provider-pricing.json (MIT); refreshed from vendor pricing pages 2026-11-13',
 }
 
-/** 目录价 USD→CNY 默认汇率（可在配置中覆盖） */
-export const CATALOG_FX_DEFAULT = 7.2
+/** 目录价 USD→CNY 默认汇率（可在配置中覆盖）。v1.11.0 起由 7.2 调整为 6.67。 */
+export const CATALOG_FX_DEFAULT = 6.67
+
+/**
+ * 历史默认汇率：v1.10.x 及更早版本的默认值。
+ * 老配置文件里如果存着这个值，说明用户**从未改过**（只是被默认值写了进去），
+ * 升级后应跟随新默认 6.67；用户显式改成别的数字（如 6.9）则保留。
+ */
+export const CATALOG_FX_LEGACY_DEFAULT = 7.2
 
 /** 与 pricing.js 的 normalizeModelName 同一实现（避免相互 import 成环） */
 export function normalizeModelName(m) {
@@ -46,7 +53,7 @@ export const PROVIDER_ALIASES = {
   google: 'google', gemini: 'google', deepmind: 'google',
   moonshot: 'moonshot', 'moonshot-ai': 'moonshot', 'moonshotai': 'moonshot', kimi: 'moonshot',
   'z-ai': 'z-ai', zai: 'z-ai', zhipu: 'z-ai', bigmodel: 'z-ai', glm: 'z-ai',
-  xai: 'xai', grok: 'xai',
+  xai: 'xai', grok: 'xai', 'x-ai': 'xai', 'x-ai-inc': 'xai', xaiinc: 'xai',
   alibaba: 'alibaba', qwen: 'alibaba', dashscope: 'alibaba', ali: 'alibaba',
   minimax: 'minimax',
   tencent: 'tencent', hunyuan: 'tencent',
@@ -85,19 +92,33 @@ export function catalogProviders() {
   return Object.keys(ps).map((id) => ({ id, count: Object.keys((ps[id] && ps[id].models) || {}).length }))
 }
 
-/** 惰性索引：目录键 → Map(归一化模型名 → 条目) */
+/** 惰性索引：目录键 → Map(归一化模型名 → 条目)；条目不改写，原名另存于 KEY_ORIGINAL */
 let INDEX = null
+/** 归一化模型名 → 目录里的原始写法（展示用，避免出现 gpt61sol 这种名字） */
+let KEY_ORIGINAL = null
 function catalogIndex() {
   if (INDEX) return INDEX
   INDEX = new Map()
+  KEY_ORIGINAL = new Map()
   const ps = rawProviders()
   for (const pid of Object.keys(ps)) {
     const models = (ps[pid] && ps[pid].models) || {}
     const m = new Map()
-    for (const key of Object.keys(models)) m.set(normalizeModelName(key), models[key])
+    for (const key of Object.keys(models)) {
+      const norm = normalizeModelName(key)
+      m.set(norm, models[key])
+      if (!KEY_ORIGINAL.has(norm)) KEY_ORIGINAL.set(norm, key)
+    }
     INDEX.set(pid, m)
   }
   return INDEX
+}
+
+/** 归一化模型名 → 目录原始写法（无记录时回退为归一化名） */
+export function catalogOriginalName(normalized) {
+  catalogIndex()
+  const n = String(normalized == null ? '' : normalized)
+  return (KEY_ORIGINAL && KEY_ORIGINAL.get(n)) || n
 }
 
 /** 反向索引：归一化模型名 → 拥有它的目录键列表（跨厂商同名匹配用，惰性） */
@@ -125,23 +146,100 @@ export function catalogProviderKey(np) {
   return ''
 }
 
+/**
+ * v1.11.0：按**模型名**推断厂商目录键。
+ *
+ * 为什么需要：真实流量常走「中转站 / 聚合网关」（本机就是 `zhouhy-relay`、
+ * `muteki`、`sub.zhouhy.net` 这类名字），provider 名与厂商毫无关系。
+ * 这些 provider 在 catalogProviderKey 里查不到，于是所有模型都掉到
+ * 通用兜底价（2/8/0.5 CNY）——比官方价低约 6 倍，Fast 档也就永远不生效。
+ *
+ * 这里只做「前缀 -> 厂商」的确定性映射：模型名本身就带厂商标识
+ * （gpt- -> openai、claude- -> anthropic、gemini- -> google …）。
+ * 返回的键仍会走正常的命中流程，**推断不出具体条目就返回 null 回退兜底**，
+ * 因此不会给陌生模型乱安价格。
+ *
+ * @param {string} model
+ * @returns {string} 目录键，或 ''
+ */
+export function inferProviderFromModel(model) {
+  const m = String(model == null ? '' : model).toLowerCase()
+  if (!m) return ''
+  const RULES = [
+    [/^(gpt-|chatgpt-|o[134](?:-|$)|codex)/, 'openai'],
+    [/^claude/, 'anthropic'],
+    [/^(gemini|gemma|imagen)/, 'google'],
+    [/^(kimi|moonshot)/, 'moonshot'],
+    [/^(glm|zai-|z-ai)/, 'z-ai'],
+    [/^grok/, 'xai'],
+    [/^(qwen|qwq|qvq)/, 'alibaba'],
+    [/^minimax/, 'minimax'],
+    [/^(hy\d|hunyuan)/, 'tencent'],
+    [/^mimo/, 'xiaomi'],
+    [/^solar/, 'upstage'],
+    [/^nemotron/, 'nvidia'],
+    [/^(mistral|ministral|codestral|devstral|magistral)/, 'mistral'],
+    [/^muse/, 'meta'],
+  ]
+  for (const [re, pid] of RULES) {
+    if (re.test(m) && rawProviders()[pid]) return pid
+  }
+  return ''
+}
+
 function toRates(entry, fx) {
   const num = (v) => { const n = Number(v); return Number.isFinite(n) && n >= 0 ? n : 0 }
   const cache = num(entry.cachedInput)
+  // v1.11.0：缓存写价优先用条目自带的 cacheWriteInput（OpenAI / Anthropic 与缓存读不同价），
+  // 没有该字段时沿用旧约定（写价 = 缓存命中价），保证历史条目行为不变。
+  const cacheWrite = entry.cacheWriteInput === undefined ? cache : num(entry.cacheWriteInput)
   return {
     input: num(entry.input) * fx,
     output: num(entry.output) * fx,
     cacheRead: cache * fx,
-    cacheWrite: cache * fx,
+    cacheWrite: cacheWrite * fx,
   }
+}
+
+/**
+ * 取条目某个档位（fast / standard）的价格块，若请求输入量超过长上下文阈值则改用 longContext。
+ * @param {object} entry - 目录条目
+ * @param {{input?:number, cacheRead?:number, cacheWrite?:number}} [tokens] - 本次用量
+ * @returns {{ block: object, contextTier: 'short'|'long' }}
+ */
+function pickBlock(entry, tokens) {
+  const long = entry && entry.longContext
+  if (!long) return { block: entry || {}, contextTier: 'short' }
+  const t = tokens || {}
+  const num = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : 0 }
+  // 阈值只按**输入侧**判定（官方口径：prompt > 272K），输出 token 不计入，
+  // 否则「长输入短输出」的请求会被误判成长档。
+  const promptTokens = num(t.input) + num(t.cacheRead) + num(t.cacheWrite)
+  const threshold = num(long.inputTokensAbove)
+  if (threshold > 0 && promptTokens > threshold) {
+    // 只覆盖价格字段，**不能**把 longContext / serviceTiers 带进来：
+    // 否则标准档会误用 Fast 价（曾实测：standard 请求被算成 $4 而不是 $2）。
+    return {
+      block: {
+        input: long.input, cachedInput: long.cachedInput, output: long.output,
+        ...(long.cacheWriteInput === undefined ? {} : { cacheWriteInput: long.cacheWriteInput }),
+      },
+      contextTier: 'long',
+    }
+  }
+  return { block: entry, contextTier: 'short' }
 }
 
 /**
  * 在目录中查找某次调用的价格。
  * @param {string} np - 归一化 provider 名
  * @param {string} model - 模型名
- * @param {{mode?:'exact'|'fuzzy', fx?:number}} [opts]
- * @returns {object|null} { provider, catalogModel, rates(CNY), sourceUrl, checkedAt, fx, via }
+ * @param {{mode?:'exact'|'fuzzy', fx?:number, serviceTier?:'standard'|'fast',
+ *          tokens?:{input?:number, cacheRead?:number, cacheWrite?:number}}} [opts]
+ *   serviceTier='fast' 时优先用条目的 serviceTiers.fast（无该块则回落标准价并标 standard-only）；
+ *   tokens 用于长上下文分档（超过 longContext.inputTokensAbove 时按整请求长档价）。
+ * @returns {object|null} { provider, catalogModel, rates(CNY), sourceUrl, checkedAt, fx, via,
+ *   serviceTier, tierPriceSource, contextTier, tierNote? }
  *   via: 'exact' | 'fuzzy' | 'cross-provider'
  */
 export function catalogEntryFor(np, model, opts) {
@@ -149,7 +247,14 @@ export function catalogEntryFor(np, model, opts) {
   const mode = o.mode === 'exact' ? 'exact' : 'fuzzy'
   const fx = Number.isFinite(Number(o.fx)) && Number(o.fx) > 0 ? Number(o.fx) : CATALOG_FX_DEFAULT
   let pid = catalogProviderKey(np)
-  if (!pid) return null
+  // v1.11.0：中转站 / 聚合网关的 provider 名与厂商无关（如 zhouhy-relay），
+  // 按模型名前缀推断厂商；推断不出就照旧返回 null，落到 provider / 通用兜底。
+  let viaProvider = 'alias'
+  if (!pid) {
+    pid = inferProviderFromModel(model)
+    if (!pid) return null
+    viaProvider = 'model-inferred'
+  }
   const models = catalogIndex().get(pid)
   if (!models || models.size === 0) return null
   const n = normalizeModelName(model)
@@ -179,16 +284,35 @@ export function catalogEntryFor(np, model, opts) {
   }
   if (!hit) return null
   const num = (v) => { const c = Number(v); return Number.isFinite(c) ? c : 0 }
+  // ---- v1.11.0：服务档位（GPT Fast / priority）----
+  // 只有条目显式登记 serviceTiers.fast 才按 Fast 计；没登记的模型一律按标准价，
+  // 绝不按「×2」推算 —— 价格必须来自官方或可核对的来源。
+  const wantFast = String(o.serviceTier || '').toLowerCase() === 'fast'
+  const fastEntry = wantFast && hit.serviceTiers && hit.serviceTiers.fast ? hit.serviceTiers.fast : null
+  const priced = fastEntry || hit
+  const { block, contextTier } = pickBlock(priced, o.tokens)
+  const serviceTier = fastEntry ? 'fast' : 'standard'
+  let tierNote = ''
+  if (wantFast && !fastEntry) {
+    tierNote = '该模型无 Fast 档价，按标准价计'
+  } else if (wantFast && fastEntry && block === priced && priced.longContext) {
+    tierNote = ''
+  }
   return {
     provider: pid,
     catalogModel: hit.__key || undefined,
-    rates: toRates(hit, fx),
-    sourceUrl: String(hit.sourceUrl || ''),
-    checkedAt: String(hit.checkedAt || ''),
+    rates: toRates(block, fx),
+    sourceUrl: String((fastEntry && hit.sourceUrlFast) || hit.sourceUrl || ''),
+    checkedAt: String((fastEntry && hit.checkedAtFast) || hit.checkedAt || ''),
     notes: String(hit.notes || ''),
     fx,
-    via,
-    priceHint: { input: num(hit.input), output: num(hit.output), cachedInput: num(hit.cachedInput), currency: 'USD' },
+    via: viaProvider === 'model-inferred' ? via + '+model-inferred' : via,
+    serviceTier,
+    tierPriceSource: fastEntry ? 'catalog-fast' : (wantFast ? 'standard-only' : 'standard'),
+    ...(tierNote ? { tierNote } : {}),
+    contextTier,
+    longContextThreshold: block && block.inputTokensAbove !== undefined ? num(block.inputTokensAbove) : undefined,
+    priceHint: { input: num(block.input), output: num(block.output), cachedInput: num(block.cachedInput), currency: 'USD', serviceTier },
   }
 }
 
@@ -197,4 +321,54 @@ export function catalogModelsFor(np) {
   const pid = catalogProviderKey(np)
   if (!pid) return []
   return [...catalogIndex().get(pid).keys()]
+}
+
+/**
+ * v1.11.0：列出目录中**登记了 Fast 档价**的模型，并给出标准价 / Fast 价对照。
+ * 展示层（设置页、cost_prices 工具）据此说明哪些模型走 Fast 会加价，以及具体数额。
+ *
+ * @param {number} [fx] - USD→CNY 汇率（缺省用 CATALOG_FX_DEFAULT）
+ * @returns {{ fx:number, checkedAt:string, models:Array<object> }}
+ *   每项：{ provider, model, standard:{input,cachedInput,output}, fast:{...},
+ *          standardCny, fastCny, longContext?, sourceUrl, checkedAt, confidence }
+ */
+export function catalogFastTiers(fx) {
+  const rate = Number.isFinite(Number(fx)) && Number(fx) > 0 ? Number(fx) : CATALOG_FX_DEFAULT
+  const out = []
+  let checkedAt = ''
+  const yen = (v) => Math.round(Number(v) * rate * 10000) / 10000
+  for (const [pid, models] of catalogIndex()) {
+    for (const [normName, entry] of models) {
+      const fast = entry && entry.serviceTiers && entry.serviceTiers.fast
+      if (!fast) continue
+      const std = { input: Number(entry.input) || 0, cachedInput: Number(entry.cachedInput) || 0, output: Number(entry.output) || 0 }
+      const fst = { input: Number(fast.input) || 0, cachedInput: Number(fast.cachedInput) || 0, output: Number(fast.output) || 0 }
+      const check = String(entry.checkedAtFast || '')
+      if (check && check > checkedAt) checkedAt = check
+      out.push({
+        provider: pid,
+        model: catalogOriginalName(normName),
+        standard: std,
+        fast: fst,
+        standardCny: { input: yen(std.input), cachedInput: yen(std.cachedInput), output: yen(std.output) },
+        fastCny: { input: yen(fst.input), cachedInput: yen(fst.cachedInput), output: yen(fst.output) },
+        ...(entry.longContext ? { longContext: entry.longContext } : {}),
+        ...(fast.longContext ? { fastLongContext: fast.longContext } : {}),
+        sourceUrl: String(entry.sourceUrlFast || ''),
+        checkedAt: check,
+        confidence: String(fast.confidence || ''),
+      })
+    }
+  }
+  out.sort((a, b) => (a.provider === b.provider ? a.model.localeCompare(b.model) : a.provider.localeCompare(b.provider)))
+  return { fx: rate, checkedAt, models: out }
+}
+
+/** v1.11.0：目录中**没有** Fast 档价的模型清单（展示层据此说明「该模型不区分 Fast」） */
+export function catalogModelsWithoutFastTier(np) {
+  const pid = catalogProviderKey(np)
+  if (!pid) return []
+  const models = catalogIndex().get(pid)
+  if (!models) return []
+  return [...models.entries()].filter(([, e]) => !(e && e.serviceTiers && e.serviceTiers.fast)).map(([k]) => k)
 }

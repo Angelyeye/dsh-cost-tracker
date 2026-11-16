@@ -18,6 +18,7 @@ import {
   subscriptionPlanFor, VOLCENGINE_PLAN_PROVIDER_KEYS, VOLCENGINE_PLAN_RATES,
   setPeakHolidays, getPeakHolidays, holidayKeyAt, isCnHoliday, normalizeHolidayList,
 } from '../pricing.js'
+import { catalogEntryFor, CATALOG_FX_DEFAULT } from '../vendor-catalog.js'
 
 let failures = 0
 const passed = []
@@ -444,10 +445,75 @@ const PRO_PLAN_REVOKED_TS = Date.UTC(2026, 8, 14, 4, 0, 0)
   ok(VOLCENGINE_PLAN_RATES.input > 0, '门卫: 套餐单价表已导出')
 }
 
+// ---------- 6.5 v1.11.0: GPT Fast tier pricing (USD x 6.67) ----------
+// Guards against: wrong tier selected, cache-write priced as cache-read,
+// long-context tier never applied.
+{
+  ok(CATALOG_FX_DEFAULT === 6.67, 'Fast: default fx rate is 6.67')
+
+  // 短档用量（输入 100K，远低于 272K 长上下文阈值），用于比较短档价
+  const tokens = { input: 100000, output: 10000, cacheRead: 0, cacheWrite: 0, reasoning: 0 }
+  const cat = (np, m, extra) => catalogEntryFor(np, m, {
+    fx: 6.67,
+    serviceTier: extra && extra.serviceTier,
+    tokens: extra && extra.tokens,
+  })
+
+  const std = priceFor('openai', 'gpt-6.1-sol', V41_TS, { catalog: cat, serviceTier: 'standard', tokens })
+  const fast = priceFor('openai', 'gpt-6.1-sol', V41_TS, { catalog: cat, serviceTier: 'fast', tokens })
+  ok(std.source === 'catalog' && fast.source === 'catalog', 'Fast: both hit the catalog')
+  ok(fast.catalog.tierPriceSource === 'catalog-fast', 'Fast: marked catalog-fast')
+  ok(std.catalog.tierPriceSource === 'standard', 'Fast: standard marked standard')
+
+  const stdCost = computeCost(std.rates, std.tiered, true, tokens)
+  const fastCost = computeCost(fast.rates, fast.tiered, true, tokens)
+  // standard $2 input / $10 output; fast $4 / $20; 0.1M input + 0.01M output at 6.67
+  approx(stdCost, (0.1 * 2 + 0.01 * 10) * 6.67, 'Fast: standard cost = 1.67 CNY')
+  approx(fastCost, (0.1 * 4 + 0.01 * 20) * 6.67, 'Fast: fast cost = 3.34 CNY')
+  approx(fastCost / stdCost, 2, 'Fast: fast tier is 2x standard')
+
+  const writeOnly = { input: 0, output: 0, cacheRead: 0, cacheWrite: 1000000, reasoning: 0 }
+  approx(computeCost(std.rates, false, true, writeOnly), 2.5 * 6.67, 'Fast: cache write billed at 2.5 USD')
+  const readOnly = { input: 0, output: 0, cacheRead: 1000000, cacheWrite: 0, reasoning: 0 }
+  approx(computeCost(std.rates, false, true, readOnly), 0.1 * 6.67, 'Fast: cache read billed at 0.1 USD')
+
+  const longTokens = { input: 300000, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0 }
+  const fastLong = priceFor('openai', 'gpt-6.1-sol', V41_TS, { catalog: cat, serviceTier: 'fast', tokens: longTokens })
+  ok(fastLong.catalog.contextTier === 'long', 'Fast: >272K switches to long context')
+  approx(computeCost(fastLong.rates, false, true, longTokens), 8 * 6.67 * 0.3, 'Fast: long tier 300K input at $8')
+
+  const noFast = priceFor('openai', 'gpt-5.4', V41_TS, { catalog: cat, serviceTier: 'fast', tokens })
+  ok(noFast.catalog.tierPriceSource === 'standard-only', 'Fast: model without fast price marked standard-only')
+  approx(computeCost(noFast.rates, false, true, tokens), (0.1 * 2.5 + 0.01 * 15) * 6.67, 'Fast: falls back to standard price')
+
+  approx(
+    computeCost({ input: 2, output: 8, cacheRead: 0.04 }, true, true, { input: 0, output: 0, cacheRead: 1000000, cacheWrite: 1000000, reasoning: 0 }),
+    0.08,
+    'Fast: missing cacheWrite keeps legacy read-price behavior (DeepSeek)',
+  )
+}
+
 // ---------- 7. index.js 仍可加载（含 pricing 导入） ----------
 {
   const mod = await import('../index.js')
   ok(mod.default && mod.default.name === 'cost-tracker', 'index.js: 默认导出插件对象')
+}
+
+// ---------- 6.6 v1.11.0: date-suffixed deepseek model ids fall back to base name ----------
+// Real traffic carries release batch suffixes (deepseek-v4.1-flash-1017). Those
+// missed the era table and dropped to the generic fallback, where cache reads cost
+// 0.5 instead of the official 0.04 - a 12.5x overcharge on cached tokens.
+{
+  const ts = V41_TS
+  const cases = ['deepseek-v4.1-flash-1017', 'deepseek-v4-1-flash-261017', 'deepseek-flash-2026-09']
+  for (const m of cases) {
+    const p = priceFor('tencentmaas', m, ts)
+    ok(p.source === 'exact', 'suffix: ' + m + ' resolves to exact price (' + p.source + ')')
+    ok(Math.abs(p.rates.cacheRead - 0.04) < 1e-9, 'suffix: ' + m + ' cache read is official 0.04')
+  }
+  // base names still resolve, and non-deepseek suffixes are NOT stripped
+  ok(priceFor('tencentmaas', 'deepseek-flash', ts).source === 'exact', 'suffix: base name still exact')
+  ok(priceFor('tencentmaas', 'gpt-5.4-mini', ts).source !== 'exact', 'suffix: non-deepseek suffix not stripped into era table')
 }
 
 console.log('\n' + passed.length + ' passed, ' + failures + ' failed')

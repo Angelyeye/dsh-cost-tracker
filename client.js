@@ -282,6 +282,14 @@ window.__ModuleLoader__.load({
 .cost-cfg-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; line-height: 1.6; padding: 2px 9px; border-radius: 999px; border: .5px solid var(--dsw-alias-border-l2, #e5e7eb); background: var(--dsw-alias-bg-layer-3, transparent); color: var(--dsw-alias-label-secondary, #5b6472); white-space: nowrap; }
 .cost-cfg-chip b { color: var(--dsw-alias-label-primary, #171a1f); font-weight: 600; font-variant-numeric: tabular-nums; }
 .cost-cfg-chip.is-on { border-color: var(--dsw-alias-brand-primary, #2563eb); color: var(--dsw-alias-brand-primary, #2563eb); }
+/* v1.11.0：GPT Fast 档价格行（token 走「万/亿」后数字变宽，用等宽数字 + 单行省略兜底） */
+.cost-fast-row { display: flex; align-items: baseline; gap: 8px; min-width: 0; padding: 2px 0; font-size: 12px; font-variant-numeric: tabular-nums; }
+.cost-fast-name { flex: 0 0 auto; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-primary, #171a1f); font-weight: 500; }
+.cost-fast-pair { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dsw-alias-label-secondary, #5b6472); }
+.cost-fast-sep { opacity: .45; }
+.cost-fast-tag { flex: 0 0 auto; font-size: 11px; padding: 0 6px; border-radius: 999px; border: .5px solid var(--dsw-alias-border-l2, #e5e7eb); color: var(--dsw-alias-label-secondary, #5b6472); white-space: nowrap; }
+/* token 数字统一等宽，避免 万/亿 切换时宽度跳动 */
+.cost-matrix-num, .cost-ug-tip-val, .cost-stat-sub { font-variant-numeric: tabular-nums; }
 .cost-sec { border: 1px solid var(--dsw-alias-border-l1, #e5e7eb); border-radius: 10px; margin-top: 10px; overflow: hidden; }
 .cost-sec-head { appearance: none; width: 100%; font: inherit; color: inherit; text-align: left; cursor: pointer; background: none; border: 0; display: flex; align-items: center; gap: 8px; padding: 10px 12px; }
 .cost-sec-head:hover { background: var(--dsw-alias-bg-layer-2, transparent); }
@@ -366,6 +374,9 @@ window.__ModuleLoader__.load({
 				e("path", { d: "M8.75 3.5 5.25 7l3.5 3.5", stroke: "currentColor", strokeWidth: 1.5, strokeLinecap: "round", strokeLinejoin: "round" }));
 		}
 
+		/** 目录价 USD→CNY 缺省汇率（与后端 vendor-catalog.CATALOG_FX_DEFAULT 一致；真实值由后端回显） */
+		const DEFAULT_FX = 6.67;
+
 		function fmtInt(n) { return String(Math.round(Number(n) || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, ","); }
 		function fmtMoney(n) {
 			const x = Number(n) || 0;
@@ -380,14 +391,29 @@ window.__ModuleLoader__.load({
 			if (n >= 1000) return (n / 1000).toFixed(1) + "K";
 			return String(Math.round(n));
 		}
-		// 热力图 token 显示：<1000 原样；≥1000 用 K（≥100 时取整），≥1000000 用 M（≥100 时取整）
+		// v1.11.0：token 数量统一中文口径（与 token-format.js 同一规则，双端一致）
+		//   <1万 → 千分位整数；≥1万 → X.X万（≥100万取整）；≥1亿 → X.XX亿（≥10亿 1 位）
+		// 保留 fmtTokens 这个函数名（调用点最多），但语义已换成中文单位，
+		// 这样 Windows 大小写不敏感的文件系统上不会出现两个只差大小写的同名函数。
 		function fmtTokens(n) {
-			const v = Math.max(0, Number(n) || 0);
-			const scaled = (x) => (x >= 100 ? String(Math.round(x)) : String(Math.round(x * 10) / 10));
-			if (v < 1000) return String(Math.round(v));
-			if (v < 1000000) return scaled(v / 1000) + "K";
-			return scaled(v / 1000000) + "M";
+			const raw = Number(n);
+			const v = Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 0;
+			const trim = (s) => (s.indexOf(".") >= 0 ? s.replace(/\.?0+$/, "") : s);
+			if (v < 10000) return String(v).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+			if (v < 100000000) {
+				const w = v / 10000;
+				return (w >= 100 ? String(Math.round(w)) : trim(w.toFixed(1))) + "万";
+			}
+			const y = v / 100000000;
+			return (y >= 10 ? trim(y.toFixed(1)) : trim(y.toFixed(2))) + "亿";
 		}
+		/** token 精确显示（tooltip / 明细用，完整千分位不换算单位） */
+		function fmtTokensExact(n) {
+			const raw = Number(n);
+			const v = Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 0;
+			return String(v).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+		}
+		// 热力图 token 显示：统一走上面的 fmtTokens（v1.11.0 起为中文单位 万/亿）
 		function fmtAxisMoney(v) {
 			if (v <= 0) return "0";
 			if (v >= 1000) return (v / 1000).toFixed(1) + "k";
@@ -968,6 +994,7 @@ window.__ModuleLoader__.load({
 			const views = viewCtl && viewCtl.available ? BOARD_VIEWS : [BOARD_VIEWS[0]];
 			return e("div", { className: "cost-row" },
 				e("select", { className: "cost-select", value: String(days), onChange: ev => setDays(parseInt(ev.target.value, 10)) },
+					e("option", { value: "1" }, "今天"),
 					e("option", { value: "7" }, "近 7 天"),
 					e("option", { value: "14" }, "近 14 天"),
 					e("option", { value: "30" }, "近 30 天"),
@@ -1038,13 +1065,29 @@ window.__ModuleLoader__.load({
 		function statCards(dash, balance, viewCtl, planTotal) {
 			const today = dash.today || { real: 0, calls: 0, tokens: 0, sub: 0, subCalls: 0, subTokens: 0 };
 			const month = dash.month || { real: 0, calls: 0, tokens: 0, sub: 0, subCalls: 0, subTokens: 0 };
+			// all = 全时段累计（不随筛选变化），仅作副行参考
 			const all = dash.all || { real: 0, calls: 0, tokens: 0, sub: 0, subCalls: 0, subTokens: 0 };
+			// win = 当前时间窗口（顶部「近 N 天 / 全部」下拉）内的合计（v1.9.x）。
+			//   此前这三张卡（总花费 / API 请求次数 / Token）直接读 `all`，与筛选框完全无关：
+			//   切到「近 7 天」时费用却显示全时段累计，与下方图表口径打架。
+			//   现在主值取窗口内金额，累计值降到副行，并显式标注「累计」。
+			//   dash 由 buildDashboard({days}) 计算，realCost/subEquivalent/calls/tokens
+			//   都按 cutoff 过滤；云端经 normalizeCloudDash 后同名字段齐全，故本机/云端/并集同口径。
+			const n = (v) => Number(v) || 0;
+			const win = {
+				real: n(dash.realCost), calls: n(dash.realCalls), tokens: n(dash.realTokens),
+				sub: n(dash.subEquivalent), subCalls: n(dash.subCalls), subTokens: n(dash.subTokens),
+			};
+			const days = Number(dash.days) || 0;
+			// days=1 是「今天」（北京时间日历日，见宿主 buildDashboard 的 cutoff 约定），
+			// 不能拼成「近 1 天」，否则会与「今日费用」卡看起来是两个口径。
+			const winLabel = days === 1 ? "今天" : (days > 0 ? "近 " + days + " 天" : "全部");
 			// 金额卡：口径由「含 Plan 总额」开关决定
 			//   off：主值 = 按量消费（不含订阅会员等效费用）；副行附注订阅等效
 			//   on ：主值 = 按量 + 订阅等值（Plan 总额）；副行说明拆分，避免看数不明口径
 			const money = (t) => planTotal ? (Number(t.real) || 0) + (Number(t.sub) || 0) : (Number(t.real) || 0);
 			const moneySub = (t) => {
-				const base = "调用 " + fmtInt(t.calls) + " 次 · Tokens " + fmtCompact(t.tokens);
+				const base = "调用 " + fmtInt(t.calls) + " 次 · Token " + fmtTokens(t.tokens);
 				if (planTotal) {
 					return base + " · 含订阅 ¥" + fmtMoney(t.sub) + (t.subCalls ? "（" + fmtInt(t.subCalls) + " 次）" : "");
 				}
@@ -1077,14 +1120,27 @@ window.__ModuleLoader__.load({
 						: "本机 + 云端 " + Math.max(0, (viewCtl.devices || []).length - 1) + " 台其他设备")
 					: "本机";
 			const tag = (t) => scopeNote + (viewCtl && viewCtl.pending > 0 && viewCtl.view !== "local" ? " · 待同步 " + viewCtl.pending + " 条" : "");
+			// 三张「窗口卡」：主值跟随顶部时间筛选，副行给累计值（并注明「累计」）
+			// 金额卡副行的按量/订阅拆分同样取窗口值，累计单独一块，避免半窗口半累计。
+			//
+			// 单位说明：副行保留「N 次」写法（`按量 100 次 · 订阅 5 次`）——
+			// 早先这里只有裸数字 `按量 100 · 订阅 5`，界面上看不出单位，
+			// 且与「今日/本月」两卡的「调用 N 次」风格不一致。
+			const moneyWin = money(win);
+			const cnt = (n) => fmtInt(n) + " 次";
+			const moneyWinSub = (planTotal
+				? "按量 " + cnt(win.calls) + " · 订阅 " + cnt(win.subCalls)
+				: (win.sub > 0 ? "按量 ¥" + fmtMoney(win.real) + " · 订阅 ¥" + fmtMoney(win.sub) : moneySub(win)));
+			const allMoney = money(all);
 			return e("div", { className: "cost-cards" },
 				statCard("今日费用（CNY）" + planBadge + "[" + tag() + "]", "¥" + fmtMoney(money(today)), moneySub(today)),
 				statCard("本月费用（CNY）" + planBadge, "¥" + fmtMoney(money(month)), moneySub(month)),
-				statCard("总花费（CNY）" + planBadge, "¥" + fmtMoney(money(all)), "调用 " + fmtInt(all.calls) + " 次 · Tokens " + fmtCompact(all.tokens) + (all.sub > 0 ? (planTotal ? " · 含订阅 ¥" + fmtMoney(all.sub) : " · 订阅 ¥" + fmtMoney(all.sub)) : "")),
-				statCard("API 请求次数", fmtInt(all.calls + all.subCalls),
-					"按量 " + fmtInt(all.calls) + " · 订阅 " + fmtInt(all.subCalls)),
-				statCard("Tokens", fmtInt(all.tokens + all.subTokens),
-					"按量 " + fmtCompact(all.tokens) + " · 订阅 " + fmtCompact(all.subTokens)),
+				statCard("花费（CNY）" + planBadge + " · " + winLabel, "¥" + fmtMoney(moneyWin),
+					moneyWinSub + " · 累计 ¥" + fmtMoney(allMoney)),
+				statCard("API 请求次数 · " + winLabel, cnt(win.calls + win.subCalls),
+					"按量 " + cnt(win.calls) + " · 订阅 " + cnt(win.subCalls) + " · 累计 " + cnt(all.calls + all.subCalls)),
+				statCard("Token · " + winLabel, fmtTokens(win.tokens + win.subTokens),
+					"按量 " + fmtTokens(win.tokens) + " · 订阅 " + fmtTokens(win.subTokens) + " · 累计 " + fmtTokens(all.tokens + all.subTokens)),
 				statCard(balTitle, balValue, balSub));
 		}
 
@@ -1174,7 +1230,7 @@ window.__ModuleLoader__.load({
 				body = e("div", null, bars);
 			}
 			const stats = dash
-				? "累计请求 " + fmtInt(dash.subCalls) + " 次 · Tokens " + fmtInt(dash.subTokens) + " · 等效按量费用 ¥" + fmtMoney(dash.subEquivalent)
+				? "累计请求 " + fmtInt(dash.subCalls) + " 次 · Token " + fmtTokens(dash.subTokens) + " · 等效按量费用 ¥" + fmtMoney(dash.subEquivalent)
 				: "加载中…";
 			return e("div", { className: "cost-panel" },
 				e("div", { className: "cost-row" },
@@ -1258,7 +1314,7 @@ window.__ModuleLoader__.load({
 				}
 			}
 			const stats = dash
-				? "累计请求 " + fmtInt(dash.subCalls) + " 次 · Tokens " + fmtInt(dash.subTokens) + " · 等效按量费用 ¥" + fmtMoney(dash.subEquivalent)
+				? "累计请求 " + fmtInt(dash.subCalls) + " 次 · Token " + fmtTokens(dash.subTokens) + " · 等效按量费用 ¥" + fmtMoney(dash.subEquivalent)
 				: "加载中…";
 			return e("div", { className: "cost-panel" },
 				e("div", { className: "cost-row" },
@@ -1452,7 +1508,7 @@ window.__ModuleLoader__.load({
 					className: "cost-ug-tip",
 					style: { left: left + "px", top: top + "px", transform: transform },
 				},
-					e("div", { className: "cost-ug-tip-total" }, day.date + " · " + fmtTokens(tokens) + " tokens" + (day.calls ? " · " + fmtInt(day.calls) + " 次调用" : "")),
+					e("div", { className: "cost-ug-tip-total" }, day.date + " · " + "Token " + fmtTokens(tokens) + (day.calls ? " · " + fmtInt(day.calls) + " 次调用" : "")),
 					e("div", { className: "cost-ug-tip-row" }, e("span", { className: "cost-ug-tip-name" }, "输入"), e("span", { className: "cost-ug-tip-val" }, fmtTokens(day.input))),
 					e("div", { className: "cost-ug-tip-row" }, e("span", { className: "cost-ug-tip-name" }, "缓存"), e("span", { className: "cost-ug-tip-val" }, fmtTokens((day.cacheRead || 0) + (day.cacheWrite || 0)))),
 					e("div", { className: "cost-ug-tip-row" }, e("span", { className: "cost-ug-tip-name" }, "输出"), e("span", { className: "cost-ug-tip-val" }, fmtTokens(day.output))),
@@ -1461,7 +1517,7 @@ window.__ModuleLoader__.load({
 
 			return e("div", { className: "cost-ug" },
 				e("div", { className: "cost-ug-total" },
-					"累计 " + fmtTokens(t.tokens) + " tokens · 输入 " + fmtTokens(t.input) + " · 缓存 " + fmtTokens(t.cache) + " · 输出 " + fmtTokens(t.output) + " · " + fmtInt(t.calls) + " 次调用"),
+					"累计 " + fmtTokens(t.tokens) + " · 输入 " + fmtTokens(t.input) + " · 缓存 " + fmtTokens(t.cache) + " · 输出 " + fmtTokens(t.output) + " · " + fmtInt(t.calls) + " 次调用"),
 				e("div", { className: "cost-ug-host", ref: hostRef },
 					e("div", { className: "cost-ug-grid", style: { gridTemplateColumns: "repeat(" + WEEKS + ", 1fr)" } }, cells),
 					tipEl),
@@ -1821,7 +1877,7 @@ window.__ModuleLoader__.load({
 			const [draft, setDraft] = useState({});
 			// 分组草稿（各自独立保存；互不覆盖）
 			const [peakDraft, setPeakDraft] = useState({});
-			const [bill, setBill] = useState({ showTotalWithPlan: false, priceMatch: "fuzzy", catalogFxRate: 7.2, planRows: [], priceRows: [] });
+			const [bill, setBill] = useState({ showTotalWithPlan: false, priceMatch: "fuzzy", catalogFxRate: DEFAULT_FX, planRows: [], priceRows: [] });
 			const [psDraft, setPsDraft] = useState({ priceSyncUrl: "", priceSyncAutoCheck: true });
 			const [impDraft, setImpDraft] = useState({ autoImport: true });
 			const [volcId, setVolcId] = useState("");
@@ -1882,7 +1938,7 @@ window.__ModuleLoader__.load({
 					setBill({
 						showTotalWithPlan: v.showTotalWithPlan === true,
 						priceMatch: v.priceMatch === "exact" ? "exact" : "fuzzy",
-						catalogFxRate: typeof v.catalogFxRate === "number" ? v.catalogFxRate : 7.2,
+						catalogFxRate: typeof v.catalogFxRate === "number" ? v.catalogFxRate : DEFAULT_FX,
 						planRows: planOverridesToRows(v.planOverrides),
 						priceRows: priceOverridesToRows(v.priceOverrides),
 					});
@@ -1958,7 +2014,7 @@ window.__ModuleLoader__.load({
 				apiCall("billing-config", {
 					showTotalWithPlan: !!bill.showTotalWithPlan,
 					priceMatch: bill.priceMatch === "exact" ? "exact" : "fuzzy",
-					catalogFxRate: Number(bill.catalogFxRate) || 7.2,
+					catalogFxRate: Number(bill.catalogFxRate) || DEFAULT_FX,
 					planOverrides: planRowsToObj(bill.planRows),
 					priceOverrides: priceRowsToObj(bill.priceRows),
 				}).then(v => {
@@ -2272,7 +2328,7 @@ window.__ModuleLoader__.load({
 					e("div", { className: "cost-row", style: { gap: "8px" } },
 						e("input", {
 							className: "cost-input", style: { width: "90px" }, type: "number", step: "0.1", min: "0.1", max: "100",
-							value: String(bill.catalogFxRate == null ? 7.2 : bill.catalogFxRate),
+							value: String(bill.catalogFxRate == null ? DEFAULT_FX : bill.catalogFxRate),
 							onChange: ev => setBillField("catalogFxRate", Number(ev.target.value)),
 						}),
 						e("span", { className: "cost-hint" }, "目录单价为 USD/1M tokens，按此汇率折算为人民币入账"))),
@@ -2313,7 +2369,26 @@ window.__ModuleLoader__.load({
 					cat ? e("div", { className: "cost-cfg-top", style: { marginTop: "6px" } },
 						(cat.providers || []).map(p => e("span", { key: "cp" + p.id, className: "cost-cfg-chip" }, p.id, " ", e("b", null, p.count)))) : null,
 					e("div", { className: "cost-hint", style: { marginTop: "4px" } },
-						"命中目录 = 精确价（不计入「估算」）；内置时代价优先于目录，手动覆盖价优先于两者；目录读取失败不影响计费，自动回落 provider 兜底。")));
+						"命中目录 = 精确价（不计入「估算」）；内置时代价优先于目录，手动覆盖价优先于两者；目录读取失败不影响计费，自动回落 provider 兜底。"),
+					// v1.11.0: GPT Fast tier price comparison (service_tier fast / priority)
+					cat && cat.fast && (cat.fast.models || []).length > 0
+						? e("div", { className: "cost-subblock", style: { marginTop: "10px" } },
+							e("div", { className: "cost-panel-title", style: { fontSize: "12px" } }, "GPT Fast 档价格（USD → CNY @" + cat.fast.fxRate + "）"),
+							e("div", { className: "cost-hint", style: { marginTop: "4px" } },
+								"共 " + cat.fast.models.length + " 个模型登记了 Fast 档价 · 核实 " + (cat.fast.checkedAt || "—")
+								+ "。判定来源：请求参数优先，其次读本会话在 dsh-fast-tier 里的档位选择；识别不到时按标准价计，绝不按倍率推算。"),
+							e("div", { className: "cost-list", style: { marginTop: "6px" } },
+								cat.fast.models.map(m => e("div", { key: "ft" + m.provider + m.model, className: "cost-fast-row" },
+									e("span", { className: "cost-fast-name", title: m.model + " · " + (m.sourceUrl || "") }, m.model),
+									e("span", { className: "cost-fast-pair", title: "CNY / 1M tokens：标准 → Fast" },
+										"输入 ¥" + m.standardCny.input + "→¥" + m.fastCny.input,
+										e("span", { className: "cost-fast-sep" }, " · "),
+										"输出 ¥" + m.standardCny.output + "→¥" + m.fastCny.output),
+									e("span", { className: "cost-fast-tag" }, m.confidence === "official" ? "官方" : "交叉核对")))))
+						: null,
+					cat && cat.fast && (cat.fast.models || []).length === 0
+						? e("div", { className: "cost-hint", style: { marginTop: "6px" } }, "目录中暂无登记 Fast 档价的模型。")
+						: null));
 
 			// ---------- ⑤ 历史导入 ----------
 			const impBody = e("div", null,
@@ -2663,7 +2738,6 @@ window.__ModuleLoader__.load({
 			const [sync, setSync] = useState(null);
 			const [cloudDash, setCloudDash] = useState(null);
 			const [cloudErr, setCloudErr] = useState("");
-			const [cloudMatrix, setCloudMatrix] = useState(null);
 			const [cloudUsage, setCloudUsage] = useState(null);
 			const [cloudUsageErr, setCloudUsageErr] = useState("");
 			const [view, setViewState] = useState(() => {
@@ -2731,10 +2805,41 @@ window.__ModuleLoader__.load({
 					else { setCloudDash(null); setCloudErr((v && v.error) || "云端不可用"); }
 				}).catch(err => { setCloudDash(null); setCloudErr(String(err && err.message ? err.message : err)); });
 			}
-			function loadCloudMatrix(d) {
-				apiCall("cloud", { route: "matrix", days: d, view: view === "local+cloud" ? "cloud-rest" : "cloud" }).then(v => {
-					if (v && v.ok !== false) setCloudMatrix(v); else setCloudMatrix(null);
-				}).catch(() => setCloudMatrix(null));
+			/**
+			 * 「设备 × Agent 矩阵」数据源。
+			 *
+			 * 此前这里请求宿主 `matrix` 路由，但宿主 ROUTES 里**没有**该路由 ——
+			 * 稳定 404 → setCloudMatrix(null) → 矩阵区块永远不渲染（静默失效，
+			 * 界面上只表现为「这块没了」，没有任何报错提示）。
+			 *
+			 * 修复：不再依赖不存在的路由。云端 overview / plugin-view 本身已返回
+			 *   devices:[{device,name,cost,calls,tokens,sources[]}] 与
+			 *   sources:[{source,cost,calls,tokens,devices[]}]
+			 * 足以就地拼出矩阵，且不引入云端版本耦合（老云端同样可用）。
+			 *
+			 * 格子填充规则：devices[].sources 只说明「该设备用过哪些 agent」，
+			 * 并不提供按 agent 拆分的金额。因此**单 agent 设备**把整台设备的金额记到
+			 * 那一列；**多 agent 设备**无法拆分，格子留空并在表头标注「部分未拆分」，
+			 * 不编造数字（合计列仍按设备精确总额展示）。
+			 */
+			function buildDeviceMatrix(dash) {
+				if (!dash) return null;
+				const rows = Array.isArray(dash.devices) ? dash.devices : [];
+				const srcs = Array.isArray(dash.sources) ? dash.sources : [];
+				const cols = Array.from(new Set(srcs.map(s => s && s.source).filter(Boolean)));
+				if (!rows.length || !cols.length) return null;
+				const grid = rows.map(r => {
+					const list = (r.sources || []).filter(Boolean);
+					const cells = {};
+					if (list.length === 1) cells[list[0]] = { cost: Number(r.cost) || 0 };
+					return Object.assign({}, r, { cells });
+				});
+				return {
+					cols,
+					rows: grid,
+					totals: { cost: rows.reduce((s, r) => s + (Number(r.cost) || 0), 0) },
+					unsplit: grid.some(r => Object.keys(r.cells).length !== ((r.sources || []).filter(Boolean).length)),
+				};
 			}
 			/**
 			 * 云端「按天用量明细」（热力图数据源）。
@@ -2828,7 +2933,7 @@ window.__ModuleLoader__.load({
 			useEffect(() => { loadDash(days); }, [days]);
 			useEffect(() => { loadKimi(false); loadVolc(false); loadBalance(""); loadUsage(); loadSync(); }, []);
 			// 视图切换：local+cloud 需要额外拉「排除本机」的云端聚合、矩阵与按天用量明细
-			useEffect(() => { loadCloud(days, view); loadCloudMatrix(days); loadCloudUsage(view); }, [view, days]);
+			useEffect(() => { loadCloud(days, view); loadCloudUsage(view); }, [view, days]);
 			useEffect(() => {
 				const id = setInterval(() => setNow(Date.now()), 30000);
 				return () => clearInterval(id);
@@ -2841,6 +2946,10 @@ window.__ModuleLoader__.load({
 				: view === "cloud"
 					? cloudNorm
 					: (cloudNorm ? mergeDash(dash, cloudNorm) : dash);
+			// 设备 × Agent 矩阵：由 viewDash 的 devices/sources 就地派生（见 buildDeviceMatrix 注释），
+			// 不再依赖宿主 `matrix` 路由 —— 该路由不存在，此前稳定 404 导致矩阵区块永不渲染。
+			// 用派生值而非 state：viewDash / days / view 变化时自动重算，不必再手工触发了拉取。
+			const viewMatrix = view === "local" ? null : buildDeviceMatrix(viewDash);
 			// 热力图同样跟随三态视图：本机 / 本机+云端 / 仅云端。
 			// 云端明细取不到时退回本机，并在标题右侧注明口径，避免与上方卡片数字打架。
 			const viewUsage = view === "local"
@@ -2891,7 +3000,7 @@ window.__ModuleLoader__.load({
 				sync && sync.enabled && sync.pending > 0 && view !== "local"
 					? e("div", { className: "cost-cloudnote" },
 						"本机还有 " + sync.pending + " 条尚未同步，云端数字会偏小 —— ",
-						e("button", { className: "cost-btn", onClick: () => { apiCall("sync-now", {}).then(() => { loadSync(); loadCloud(days, view); loadCloudMatrix(days); loadCloudUsage(view); }); } }, "立即同步"))
+						e("button", { className: "cost-btn", onClick: () => { apiCall("sync-now", {}).then(() => { loadSync(); loadCloud(days, view); loadCloudUsage(view); }); } }, "立即同步"))
 					: null,
 				cloudErr && view !== "local"
 					? e("div", { className: "cost-err", style: { marginTop: "6px" } }, "云端数据不可用（已显示本机数据）：" + cloudErr)
@@ -2902,7 +3011,7 @@ window.__ModuleLoader__.load({
 				dashErr ? e("div", { className: "cost-err", style: { marginTop: "8px" } }, dashErr) : null,
 				(!viewDash && !dashErr) ? e("div", { className: "cost-hint", style: { marginTop: "12px" } }, "加载中…") : null,
 				viewDash ? statCards(viewDash, balance, viewCtl, planTotal) : null,
-				view !== "local" && dimension !== "total" && viewDash ? dimensionPanel(viewDash, dimension, cloudMatrix, loadingCloud => loadingCloud) : null,
+				view !== "local" && dimension !== "total" && viewDash ? dimensionPanel(viewDash, dimension, viewMatrix, loadingCloud => loadingCloud) : null,
 				viewDash ? mainPanel(viewDash, tab, setTab, scheme, setScheme, planTotal) : null,
 				e("div", { className: "cost-panel" },
 					e("div", { className: "cost-row" },
@@ -2964,10 +3073,11 @@ window.__ModuleLoader__.load({
 								e("span", { className: "cost-matrix-key", title: r.key }, r.key),
 								e("span", { className: "cost-matrix-num" }, "¥" + fmtMoney(r.cost)),
 								e("span", { className: "cost-matrix-num" }, fmtInt(r.calls)),
-								e("span", { className: "cost-matrix-num" }, fmtCompact(r.tokens)),
+								e("span", { className: "cost-matrix-num" }, fmtTokens(r.tokens)),
 								e("span", { className: "cost-matrix-note" }, r.tag || "")))),
 				matrix && matrix.rows && e("div", { style: { marginTop: "10px" } },
-					e("div", { className: "cost-hint" }, "设备 × Agent 矩阵（行=设备，列=Agent，点击云端「设备 × Agent」页可下钻到记录）"),
+					e("div", { className: "cost-hint" }, "设备 × Agent 矩阵（行=设备，列=Agent，点击云端「设备 × Agent」页可下钻到记录）"
+						+ (matrix.unsplit ? " · 多 Agent 设备无法按 Agent 拆分金额，未拆分格子留空（合计列仍为精确总额）" : "")),
 					e("div", { className: "cost-matrix" },
 						e("div", { className: "cost-matrix-row cost-matrix-head" },
 							e("span", { className: "cost-matrix-key" }, "设备"),

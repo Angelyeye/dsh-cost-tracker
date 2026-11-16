@@ -3,7 +3,7 @@
 //   node test/config.test.js
 // 覆盖：默认值、非法回退、生效门控、界面显示开关
 // ============================================================
-import { defaultPeakConfig, normalizePeakConfig, peakEffective, defaultUiConfig, normalizeUiConfig, normalizePluginConfig, UI_SURFACES } from '../config.js'
+import { defaultPeakConfig, normalizePeakConfig, peakEffective, defaultUiConfig, normalizeUiConfig, normalizePluginConfig, UI_SURFACES, defaultBillingConfig, normalizeBillingConfig, migrateCatalogFxRate } from '../config.js'
 
 let failures = 0
 const passed = []
@@ -100,6 +100,31 @@ function ok(cond, msg) {
   ok(merged.peakStyle === 'classic' && merged.cloudUrl === 'https://c.example.com' && merged.uiPeakEnabled === false,
     '界面显示: 与峰谷 / 云端字段同存不互相覆盖')
   ok(merged.uiDockEnabled === true && merged.uiDashboardEnabled === true, '界面显示: 未提及的开关保持可见')
+}
+
+// 5. v1.11.0: catalog FX rate 7.2 -> 6.67 with migration semantics
+//    Legacy configs stored the old default (7.2) merely by being written;
+//    those must follow the new default, while an explicit user value stays.
+{
+  ok(defaultBillingConfig().catalogFxRate === 6.67, 'FX: default is 6.67')
+
+  const migrated = normalizeBillingConfig({ catalogFxRate: 7.2 })
+  ok(migrated.catalogFxRate === 6.67, 'FX: legacy default 7.2 migrates to 6.67')
+
+  const custom = normalizeBillingConfig({ catalogFxRate: 6.9 })
+  ok(custom.catalogFxRate === 6.9, 'FX: explicit user value 6.9 is preserved')
+
+  const unset = normalizeBillingConfig({})
+  ok(unset.catalogFxRate === 6.67, 'FX: absent value uses new default')
+
+  const invalid = normalizeBillingConfig({ catalogFxRate: -1 })
+  ok(invalid.catalogFxRate === 6.67, 'FX: invalid value falls back to default')
+
+  ok(migrateCatalogFxRate(7.2, 6.67) === 6.67, 'FX: migration helper maps 7.2 -> 6.67')
+  ok(migrateCatalogFxRate(6.67, 6.67) === 6.67, 'FX: current default stays')
+  ok(migrateCatalogFxRate('7.2', 6.67) === 6.67, 'FX: string legacy value migrates too')
+  ok(migrateCatalogFxRate(6.9, 6.67) === 6.9, 'FX: helper keeps custom value')
+  ok(migrateCatalogFxRate(NaN, 6.67) === 6.67, 'FX: NaN falls back to default')
 }
 
 console.log('\n' + passed.length + ' passed, ' + failures + ' failed')

@@ -7,7 +7,7 @@
 // 在 pricing.priceFor 里确实生效（catalog 注入 → source='catalog'、
 // estimated=false；不注入时行为与 v1.8.x 完全一致）。
 // ============================================================
-import { catalogEntryFor, catalogProviders, catalogFingerprint, catalogProviderKey, catalogModelsFor, normalizeModelName, PROVIDER_ALIASES, CATALOG_FX_DEFAULT } from '../vendor-catalog.js'
+import { catalogEntryFor, catalogProviders, catalogFingerprint, catalogProviderKey, catalogModelsFor, normalizeModelName, PROVIDER_ALIASES, CATALOG_FX_DEFAULT, inferProviderFromModel } from '../vendor-catalog.js'
 import { priceFor, setPriceOverrides, setSyncedEras } from '../pricing.js'
 
 let failures = 0
@@ -72,16 +72,42 @@ console.log('[3] 匹配：exact / fuzzy / 跨厂商 / 汇率')
   check('fuzzy 命中带后缀的变体', !!e3 && e3.via === 'fuzzy', JSON.stringify(e3 && e3.via))
 
   // USD → CNY 折算
-  const cnyFee = catalogEntryFor('google', bare, { fx: 7.2 })
+  const cnyFee = catalogEntryFor('google', bare, { fx: 6.67 })
   const usdFee = catalogEntryFor('google', bare, { fx: 1 })
-  check('汇率生效（7.2 倍）', Math.abs(cnyFee.rates.input - usdFee.rates.input * 7.2) < 1e-9, cnyFee.rates.input + ' vs ' + usdFee.rates.input)
+  check('汇率生效（6.67 倍）', Math.abs(cnyFee.rates.input - usdFee.rates.input * 6.67) < 1e-9, cnyFee.rates.input + ' vs ' + usdFee.rates.input)
   check('缓存写入价 = 缓存命中价（目录口径）', cnyFee.rates.cacheWrite === cnyFee.rates.cacheRead)
-  check('默认汇率为 7.2', CATALOG_FX_DEFAULT === 7.2 && Math.abs(cnyFee.rates.input / usdFee.rates.input - CATALOG_FX_DEFAULT) < 1e-9)
+  check('默认汇率为 6.67（v1.11.0）', CATALOG_FX_DEFAULT === 6.67 && Math.abs(cnyFee.rates.input / usdFee.rates.input - CATALOG_FX_DEFAULT) < 1e-9)
   check('带 sourceUrl / checkedAt 便于溯源', typeof cnyFee.sourceUrl === 'string' && cnyFee.sourceUrl.length > 0 && typeof cnyFee.checkedAt === 'string')
 
   // 非法 fx 回落默认
   const bad = catalogEntryFor('google', bare, { fx: -3 })
-  check('非法汇率回落默认 7.2', Math.abs(bad.rates.input - usdFee.rates.input * 7.2) < 1e-9)
+  check('非法汇率回落默认 6.67', Math.abs(bad.rates.input - usdFee.rates.input * 6.67) < 1e-9)
+
+  // 独立缓存写价（OpenAI/Anthropic 写价 ≠ 读价）
+  const sol = catalogEntryFor('openai', 'gpt-6.1-sol', { fx: 6.67 })
+  check('条目自带 cacheWriteInput 时写价独立于读价',
+    Math.abs(sol.rates.cacheRead - 0.1 * 6.67) < 1e-9 && Math.abs(sol.rates.cacheWrite - 2.5 * 6.67) < 1e-9,
+    JSON.stringify(sol.rates))
+
+  // Fast 档：官方 Fast 页价格 × 汇率
+  const fast = catalogEntryFor('openai', 'gpt-6.1-sol', { fx: 6.67, serviceTier: 'fast' })
+  check('Fast 档命中目录内 fast 价', fast.serviceTier === 'fast' && fast.tierPriceSource === 'catalog-fast', JSON.stringify(fast.tierPriceSource))
+  check('Fast 档价格 = 官方 $4/$0.20/$20 × 6.67',
+    Math.abs(fast.rates.input - 4 * 6.67) < 1e-9
+    && Math.abs(fast.rates.cacheRead - 0.2 * 6.67) < 1e-9
+    && Math.abs(fast.rates.output - 20 * 6.67) < 1e-9, JSON.stringify(fast.rates))
+  check('Fast 档来源指向官方 Fast 页', fast.sourceUrl.indexOf('api-fast-mode') >= 0, fast.sourceUrl)
+
+  // Fast 档 + 长上下文（>272K 整请求计价）
+  const fastLong = catalogEntryFor('openai', 'gpt-6.1-sol', { fx: 6.67, serviceTier: 'fast', tokens: { input: 300000 } })
+  check('Fast 档长上下文切档', fastLong.contextTier === 'long' && Math.abs(fastLong.rates.input - 8 * 6.67) < 1e-9 && Math.abs(fastLong.rates.output - 30 * 6.67) < 1e-9, JSON.stringify(fastLong.rates))
+  const stdShort = catalogEntryFor('openai', 'gpt-6.1-sol', { fx: 6.67, tokens: { input: 1000 } })
+  check('未超过阈值保持短档', stdShort.contextTier === 'short' && Math.abs(stdShort.rates.input - 2 * 6.67) < 1e-9)
+
+  // 无 Fast 档价的模型：绝不按 ×2 推算
+  const noFast = catalogEntryFor('openai', 'gpt-5.4', { fx: 6.67, serviceTier: 'fast' })
+  check('无 fast 块时回落标准价并标注', noFast.tierPriceSource === 'standard-only' && !!noFast.tierNote, JSON.stringify(noFast.tierNote))
+  check('无 fast 块时价格与标准档一致', Math.abs(noFast.rates.input - catalogEntryFor('openai', 'gpt-5.4', { fx: 6.67 }).rates.input) < 1e-9)
 
   // 短名不参与包含匹配（防误伤）
   const short = catalogEntryFor('openai', 'gpt', { mode: 'fuzzy' })
@@ -89,7 +115,12 @@ console.log('[3] 匹配：exact / fuzzy / 跨厂商 / 汇率')
 
   // 跨厂商同名：恰好唯一才命中
   const cross = catalogEntryFor('my-gateway', bare, { mode: 'fuzzy' })
-  check('未登记 provider 不参与目录（宁缺勿错）', cross === null, JSON.stringify(cross))
+  // v1.11.0 语义变更：未登记 provider（中转站 / 聚合网关）现在按**模型名**推断厂商后
+  // 参与目录；「宁缺勿错」收紧为——模型名推断不出厂商时仍然返回 null。
+  check('未登记 provider + 可识别模型 -> 按模型名推断命中',
+    cross !== null && /model-inferred/.test(String(cross.via)), JSON.stringify(cross && cross.via))
+  check('未登记 provider + 不可识别模型 -> 仍不参与目录（宁缺勿错）',
+    catalogEntryFor('my-gateway', 'totally-unknown-model', { mode: 'fuzzy' }) === null, 'null')
   check('normalizeModelName 与 pricing.js 同规则', normalizeModelName('DeepSeek-V4.1 Flash') === 'deepseekv41flash')
 }
 
@@ -132,6 +163,41 @@ console.log('[4] 目录接入 priceFor（优先级与兼容性）')
   check('目录读取异常时回落 provider 兜底', boom.source === 'provider' && boom.estimated === true, boom.source)
 
   setPriceOverrides({})
+}
+
+// v1.11.0: relay / aggregation gateways have vendor-unrelated provider names
+// (this machine really uses "zhouhy-relay"). Those used to fall through to the
+// generic fallback, which is ~6x below the real price and also blocked fast mode.
+{
+  // direct inference
+  check('推断: gpt-* -> openai', inferProviderFromModel('gpt-6.1-sol') === 'openai')
+  check('推断: o3/o4 -> openai', inferProviderFromModel('o4-mini') === 'openai')
+  check('推断: claude-* -> anthropic', inferProviderFromModel('claude-fable-5-2') === 'anthropic')
+  check('推断: gemini-* -> google', inferProviderFromModel('gemini-4-carbon') === 'google')
+  check('推断: grok-* -> xai', inferProviderFromModel('grok-4.7') === 'xai')
+  check('推断: glm-* -> z-ai', inferProviderFromModel('glm-5.3-flashx') === 'z-ai')
+  check('推断: qwen* -> alibaba', inferProviderFromModel('qwen4-max-preview') === 'alibaba')
+  check('推断: hy/混元 -> tencent', inferProviderFromModel('hy4') === 'tencent')
+  check('推断: 未知模型 -> 空（不乱安价格）', inferProviderFromModel('totally-unknown-model') === '')
+  check('推断: deepseek 不映射到目录厂商', inferProviderFromModel('deepseek-v4.1-flash-1017') === '')
+
+  // relay provider names resolve through inference
+  const relay = catalogEntryFor('zhouhy-relay', 'gpt-6.1-sol', { fx: 6.67 })
+  check('中转站命中目录（按模型名推断）', !!relay && relay.provider === 'openai', JSON.stringify(relay && relay.provider))
+  check('中转站命中的 via 带 model-inferred 标记', !!relay && /model-inferred/.test(String(relay.via)), JSON.stringify(relay && relay.via))
+  check('中转站 gpt-6.1-sol 用官方价（$2 x 6.67）', !!relay && Math.abs(relay.rates.input - 2 * 6.67) < 1e-9, JSON.stringify(relay && relay.rates.input))
+  check('已知厂商名不带推断标记', (() => {
+    const e = catalogEntryFor('openai', 'gpt-6.1-sol', { fx: 6.67 })
+    return !!e && !/model-inferred/.test(String(e.via))
+  })())
+
+  // unknown models under a relay must still return null (fallback, no invented price)
+  check('中转站 + 未知模型 -> null（回退兜底）', catalogEntryFor('zhouhy-relay', 'unknown-model-xyz', { fx: 6.67 }) === null)
+
+  // fast tier also works through a relay
+  const relayFast = catalogEntryFor('zhouhy-relay', 'gpt-6.1-sol', { fx: 6.67, serviceTier: 'fast' })
+  check('中转站也能走 Fast 档', !!relayFast && relayFast.tierPriceSource === 'catalog-fast', JSON.stringify(relayFast && relayFast.tierPriceSource))
+  check('中转站 Fast 价 = 标准价 2 倍', !!relayFast && !!relay && Math.abs(relayFast.rates.input - relay.rates.input * 2) < 1e-9)
 }
 
 console.log('')
