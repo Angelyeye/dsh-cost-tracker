@@ -167,10 +167,18 @@ jobs:
           TITLE="v$VERSION"
           if node scripts/release-notes.mjs --version "$VERSION" > "$NOTES"; then
             NOTES_ARGS=(--notes-file "$NOTES")
-            # 标题取章节首行（形如 `**修复……**`），去掉加粗标记；过长时截断并加省略号。
+            # 标题取「第一个正文行」。
+            # ⚠️ v1.11.2 起正文首行是语言切换链接 `[中文](#cn-vX) | [English](#en-vX)`，
+            # 直接取 head -n 1 会把整行做成标题（v1.11.1 及以前首行是 `**标题**`）。
+            # 这里跳过该行与空行，取第一条真正的分类标题（`<h3 id="cn-...">xxx</h3>`）。
             # ⚠️ 不能用 `cut -c1-60`：runner 在 C locale 下按**字节**切，中文会被拦腰截断，
             # 出现 "…」��…" 这种替换字符（v1.9.6 发布时实测）。这里按 Unicode 码点切。
-            HEADLINE_FULL="$(head -n 1 "$NOTES" | sed 's/^\*\*//; s/\*\*$//' | tr -d '\r')"
+            # 标题：默认就用版本号（与 deepseek-harness 的 Release 标题风格一致，如
+            # `dsh-v0.2.2-rc.2`）。旧实现会拼上「正文首个加粗行」，但 v1.11.2 起正文
+            # 首行是语言切换链接、次行才是分类名（「新增功能」），拼进标题既没信息量
+            # 又容易抽错。现在改由脚本 --title 给出「版本号之后的补充说明」，
+            # 没有补充就只保留版本号本身。
+            HEADLINE_FULL="$(node scripts/release-notes.mjs --version "$VERSION" --title 2>/dev/null | tr -d '\r' || true)"
             HEADLINE="$(node -e 'const s=process.argv[1]||""; const c=[...s]; process.stdout.write(c.length>60?c.slice(0,60).join(""):s)' "$HEADLINE_FULL")"
             if [ -n "$HEADLINE" ] && [ "$HEADLINE" != "$HEADLINE_FULL" ]; then HEADLINE="$HEADLINE…"; fi
             if [ -n "$HEADLINE" ]; then TITLE="v$VERSION — $HEADLINE"; fi

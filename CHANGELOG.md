@@ -2,6 +2,36 @@
 
 本文件用中文记录 dsh-cost-tracker 的版本变更。
 
+## v1.11.2(2026-11-17)
+
+<!-- release: 新增功能 -->
+### 一、按模型聚合统一显示规范名
+
+同一模型跨渠道、跨拼写散成多条图例的问题修好了。此前「按模型」图表和明细列表按记录里的**原始 model 名**分组：按量记录入账时已被改写成计费规范名（小写），订阅记录不查价目表、保留渠道原始拼写，于是 `GLM-5.3-Flash` / `glm-5.3-flash` / `glm-5.3` 各占一条。 ｜ The model breakdown no longer splits one model into several legend entries. Grouping used the raw model string from each record, so billed records (rewritten to the canonical lowercase name) and subscription records (which keep the channel's original spelling) landed in separate buckets.
+
+- `pricing.js` 新增 `displayModelKey()`：按「时代价目表/路由 → 目录官方键 → 归一化兜底」折叠，解析顺序与计价层 `priceFor` 一致；价目表查不到的怪名（如 `3`、`hy3`、端点 id）保持原样，不强行改写。 ｜ New `displayModelKey()` in `pricing.js` folds names through era table/route, then catalog key, then normalization — the same order `priceFor` uses. Unrecognized names (`3`, `hy3`, endpoint ids) are left untouched.
+- `index.js` 新增下发 `displayModels`，原 `byModel` / `byModelDay` / `recent` 字段不动，旧客户端完全兼容。 ｜ `index.js` now emits `displayModels`; existing `byModel` / `byModelDay` / `recent` fields are unchanged, so older clients keep working.
+- `view.js` 新增 `foldModels` / `modelDisplayLabel` 纯函数，订阅与按量**拆桶**，显示名取规范名全大写，订阅条目保留原样，合并 ≥2 个原始键时标注「合并自 N 渠道」。 ｜ New `foldModels` / `modelDisplayLabel` in `view.js` keep subscription and metered entries in separate buckets, show canonical names in uppercase, and mark entries merged from two or more sources.
+- 入账口径与 CSV 导出**不变** —— 折叠只发生在展示层，对账数字不受影响。 ｜ Billing records and CSV exports are unchanged; folding happens only in the display layer.
+
+<!-- release: 体验优化 -->
+### 二、消费金额图表默认页签改为「按模型」
+
+打开看板先看到每个模型的消费构成，比先看峰谷更符合「这笔钱花在哪」的直觉；峰谷口径仍可一键切回。 ｜ The spend chart now opens on the model breakdown, which answers "where did the money go" first; the peak/off-peak view is one click away.
+
+<!-- release: 文档更新 -->
+### 三、README 重构为面向上手的产品化首页
+
+中英文同步重构：价值主张、能力概览、截图、快速安装、验证步骤、三段式架构在前；计价、云同步、HTTP API、迁移、隐私、FAQ 收进可折叠区。移除了过期的版本历史与自相矛盾的「仅本地」表述。 ｜ The Chinese and English READMEs are restructured as onboarding pages: value proposition, capabilities, screenshots, quick install and architecture come first, while pricing, cloud sync, HTTP API, migration, privacy and FAQ fold into expandable sections. Stale version history and contradictory local-only wording were removed.
+
+- 同时修正时间口径描述：卡片主值自 v1.11.1 起跟随顶部时间范围，累计值在副行单独标注。 ｜ The time-range wording was corrected: card values have followed the selected range since v1.11.1, with the all-time total shown separately beneath them.
+
+<!-- release: 问题修复 -->
+### 四、修复合并冲突与时间区间口径
+
+- `test/client-render.test.js` 合并时，PR 新增的 `[12] 展示层模型名折叠` 测试块与 main 新增的「Token 数量中文单位」测试块落在同一位置。两者都是独立断言、互不依赖，全部保留，未删减任何一方的测试覆盖。 ｜ A merge conflict in `test/client-render.test.js` placed the new model-folding test block and the existing token-unit block at the same position. Both were kept in full; no test coverage was dropped.
+- 修正 README 中与实现不符的时间口径描述。 ｜ Corrected README wording that no longer matched the implementation.
+
 ## v1.11.1(2026-11-16)
 
 **时间区间口径修复：卡片主值跟随筛选 ・ 新增「今天」・ 云端区间真正生效 ・ 设备 × Agent 矩阵恢复**
