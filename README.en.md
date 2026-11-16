@@ -110,7 +110,7 @@ When migrating from the old unscoped package `dsh-cost-tracker`, remove its load
 
 ### Dashboard
 
-Open **Settings → Cost Tracker** to view today, month-to-date and all-time cost, request counts, tokens, balances, model details and the token heatmap. The dashboard supports **local / local + cloud / cloud only** scopes.
+Open **Settings → Cost Tracker**. The dashboard has a time-range selector (**today / last 7 days / last 14 days / last 30 days / all**); cost, request counts and tokens on the cards follow the selected range, with the all-time total shown separately beneath them. Charts and detail tables use the same range. Today's and month-to-date cost, balance, model details and the token heatmap are shown as well. The dashboard supports **local / local + cloud / cloud only** scopes.
 
 ### Ask in chat
 
