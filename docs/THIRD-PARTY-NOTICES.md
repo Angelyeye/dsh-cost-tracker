@@ -11,7 +11,7 @@
 - **上游**：`dsh-cost-meter` v1.5.41 · <https://github.com/Han-1413141/dsh-cost-meter>
 - **用途**：本插件在其基础上**改编**为该目录：字段保持（`input` / `cachedInput` /
   `output` / `billingMode` / `sourceUrl` / `checkedAt`），并在运行时按
-  `catalogFxRate`（默认 7.2）把 USD/1M tokens 折算为人民币入账；
+  `catalogFxRate`（v1.11.0 起默认 6.67）把 USD/1M tokens 折算为人民币入账；
   provider 别名归一与匹配逻辑为本项目自行实现（`vendor-catalog.js`）。
 - **许可**：MIT
 
@@ -39,7 +39,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-> 目录初始数据改编自 `dsh-cost-meter`（MIT）；**2026-10-25 起**由本项目按各厂商官方定价页（OpenAI / Anthropic / Google / Moonshot / z-ai / xAI / Alibaba / MiniMax / Tencent / Xiaomi / Upstage / NVIDIA / Mistral / Meta / OpenCode）逐条复核刷新，官方页不可达时才使用网关价并在 `notes` 标注。每条都带 `sourceUrl` / `checkedAt` 便于溯源，
+> 目录初始数据改编自 `dsh-cost-meter`（MIT）；**2026-10-25 起**由本项目按各厂商官方定价页（OpenAI / Anthropic / Google / Moonshot / z-ai / xAI / Alibaba / MiniMax / Tencent / Xiaomi / Upstage / NVIDIA / Mistral / Meta / OpenCode）逐条复核刷新，官方页不可达时才使用网关价并在 `notes` 标注；**2026-11-16 起**新增/调价模型统一以 aiplans.dev 抓取的官方渠道报价为核对来源（不采信转售商与聚合渠道单价）。每条都带 `sourceUrl` / `checkedAt` 便于溯源，
 > 仅作**参考折算**用途；实际账单请以各厂商控制台为准。
 
 ---

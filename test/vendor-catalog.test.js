@@ -109,6 +109,44 @@ console.log('[3] 匹配：exact / fuzzy / 跨厂商 / 汇率')
   check('无 fast 块时回落标准价并标注', noFast.tierPriceSource === 'standard-only' && !!noFast.tierNote, JSON.stringify(noFast.tierNote))
   check('无 fast 块时价格与标准档一致', Math.abs(noFast.rates.input - catalogEntryFor('openai', 'gpt-5.4', { fx: 6.67 }).rates.input) < 1e-9)
 
+  // v1.12.0：GPT-6.2 系列（Astra / Sol / Astra Law，2026-11-17 发布）
+  const a62 = catalogEntryFor('openai', 'gpt-6.2-astra', { fx: 6.67 })
+  check('gpt-6.2-astra 命中目录且输入 $8', !!a62 && Math.abs(a62.rates.input - 8 * 6.67) < 1e-9, JSON.stringify(a62 && a62.rates))
+  check('gpt-6.2-astra 输出 $40 / 缓存读 $0.40 / 缓存写 $10',
+    !!a62 && Math.abs(a62.rates.output - 40 * 6.67) < 1e-9
+    && Math.abs(a62.rates.cacheRead - 0.4 * 6.67) < 1e-9
+    && Math.abs(a62.rates.cacheWrite - 10 * 6.67) < 1e-9, JSON.stringify(a62 && a62.rates))
+  const a62Long = catalogEntryFor('openai', 'gpt-6.2-astra', { fx: 6.67, tokens: { input: 300000 } })
+  check('gpt-6.2-astra 超 272K 切长档（16 / 0.80 / 60）',
+    a62Long.contextTier === 'long'
+    && Math.abs(a62Long.rates.input - 16 * 6.67) < 1e-9
+    && Math.abs(a62Long.rates.output - 60 * 6.67) < 1e-9, JSON.stringify(a62Long.rates))
+  const a62Fast = catalogEntryFor('openai', 'gpt-6.2-astra', { fx: 6.67, serviceTier: 'fast' })
+  check('gpt-6.2-astra Fast = 官方 2 倍（16 / 0.80 / 20 / 80）',
+    a62Fast.tierPriceSource === 'catalog-fast'
+    && Math.abs(a62Fast.rates.input - 16 * 6.67) < 1e-9
+    && Math.abs(a62Fast.rates.cacheWrite - 20 * 6.67) < 1e-9
+    && Math.abs(a62Fast.rates.output - 80 * 6.67) < 1e-9, JSON.stringify(a62Fast.rates))
+  const s62 = catalogEntryFor('openai', 'gpt-6.2-sol', { fx: 6.67 })
+  check('gpt-6.2-sol 沿用 6.1 Sol 价（2 / 0.10 / 2.5 / 10）',
+    !!s62 && Math.abs(s62.rates.input - 2 * 6.67) < 1e-9
+    && Math.abs(s62.rates.cacheRead - 0.1 * 6.67) < 1e-9
+    && Math.abs(s62.rates.cacheWrite - 2.5 * 6.67) < 1e-9
+    && Math.abs(s62.rates.output - 10 * 6.67) < 1e-9, JSON.stringify(s62 && s62.rates))
+  const s62FastLong = catalogEntryFor('openai', 'gpt-6.2-sol', { fx: 6.67, serviceTier: 'fast', tokens: { input: 300000 } })
+  check('gpt-6.2-sol Fast + 长档（8 / 0.40 / 30）',
+    s62FastLong.tierPriceSource === 'catalog-fast' && s62FastLong.contextTier === 'long'
+    && Math.abs(s62FastLong.rates.input - 8 * 6.67) < 1e-9
+    && Math.abs(s62FastLong.rates.output - 30 * 6.67) < 1e-9, JSON.stringify(s62FastLong.rates))
+  const law62 = catalogEntryFor('openai', 'gpt-6.2-astra-law', { fx: 6.67 })
+  check('gpt-6.2-astra-law 与 Astra 同价（8 / 0.40 / 40）',
+    !!law62 && Math.abs(law62.rates.input - 8 * 6.67) < 1e-9 && Math.abs(law62.rates.output - 40 * 6.67) < 1e-9,
+    JSON.stringify(law62 && law62.rates))
+  const law62Fast = catalogEntryFor('openai', 'gpt-6.2-astra-law', { fx: 6.67, serviceTier: 'fast' })
+  check('gpt-6.2-astra-law 未登记 Fast → 回落标准价并标注',
+    law62Fast.tierPriceSource === 'standard-only' && Math.abs(law62Fast.rates.input - 8 * 6.67) < 1e-9,
+    JSON.stringify({ src: law62Fast.tierPriceSource, rates: law62Fast.rates }))
+
   // 短名不参与包含匹配（防误伤）
   const short = catalogEntryFor('openai', 'gpt', { mode: 'fuzzy' })
   check('超短名不因包含而误命中', short === null || short.via === 'exact', JSON.stringify(short && short.via))

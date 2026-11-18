@@ -2,6 +2,32 @@
 
 本文件用中文记录 dsh-cost-tracker 的版本变更。
 
+## v1.12.0(2026-11-18)
+
+<!-- release: 新增功能 -->
+### 一、价格目录新增 GPT-6.2 系列（Astra / Sol / Astra Law） @Angelyeye
+
+OpenAI 于 2026-11-17 发布 GPT-6.2 系列，目录同步收入三条：`gpt-6.2-astra`、`gpt-6.2-sol`、`gpt-6.2-astra-law`。 ｜ OpenAI shipped the GPT-6.2 family on 2026-11-17; the catalog now carries gpt-6.2-astra, gpt-6.2-sol and gpt-6.2-astra-law.
+
+| 模型 | 标准（USD 输入 / 缓存读 / 缓存写 / 输出） | Fast（同口径） | 来源 |
+|---|---|---|---|
+| gpt-6.2-astra | 8 / 0.40 / 10 / 40 | 16 / 0.80 / 20 / 80 | 官方 |
+| gpt-6.2-sol | 2 / 0.10 / 2.5 / 10 | 4 / 0.20 / 5 / 20 | 官方 |
+| gpt-6.2-astra-law | 8 / 0.40 / 10 / 40 | 未登记（官方未列 Fast） | 官方 |
+
+- 长上下文按官方「>272K 输入 token 时输入与缓存放率翻倍、输出 ×1.5、整请求生效」登记：astra 长档 16 / 0.80 / 20 / 60，sol 长档 4 / 0.20 / 5 / 15。 ｜ Long-context tiers follow the official rule: above 272K input tokens, input and cache rates double and output is 1.5x for the whole request.
+- `gpt-6.2-astra` 相对 GPT-6 Astra 输入/输出降价 20%（10→8、50→40），缓存读降 60%（1→0.40）。 ｜ gpt-6.2-astra is 20% cheaper on input and output than GPT-6 Astra and 60% cheaper on cached input.
+- `gpt-6.2-sol` 沿用 GPT-6.1 Sol 价格，Fast 档仍为标准的 2 倍。 ｜ gpt-6.2-sol keeps GPT-6.1 Sol pricing, with Fast still twice the standard rate.
+- Ultrafast 目前为 3 倍、2027-03-01（太平洋时间）起 6 倍；插件仍按 Fast 价入账并在记录上标注「实际倍率更高」，本次未新增倍率维度。 ｜ Ultrafast costs 3x now and 6x from 2027-03-01 Pacific; the plugin still bills it at Fast rates and flags the understatement rather than adding a new tier dimension.
+
+<!-- release: 其他变更 -->
+### 二、价格来源、未收录口径与云端同源副本 @Angelyeye
+
+- 三条新价的核对来源为 aiplans.dev 官方渠道报价（2026-11-18 抓取），`sourceUrl` 指向对应模型页，`checkedAt` / `checkedAtFast` 均为 2026-11-18。 ｜ The new entries cite aiplans.dev official-channel quotes captured on 2026-11-18.
+- `gpt-6.2-sol-pro` / `gpt-6.2-astra-pro` 只有聚合渠道报价、官方未公布单价，**未写入目录**，继续走 provider 兜底（`estimated=true`），不编造价格。 ｜ The -pro variants only have aggregator quotes with no official list price, so they stay out of the catalog and keep falling back to provider rates.
+- 云端 `src/docs/provider-pricing.json` 与 `src/vendor-catalog.js` 逐字节同步，目录指纹随数据变化重算；`CATALOG_META.generatedAt` 与目录文件 `generatedAt` 一并更新为 2026-11-18。 ｜ The cloud copies are synced byte-for-byte and the catalog fingerprint is recomputed with the new generatedAt date.
+- `test/vendor-catalog.test.js` 增补 GPT-6.2 断言：标准价、Fast 档、长上下文切档，以及 `gpt-6.2-astra-law` 无 Fast 块时回落标准价。 ｜ New GPT-6.2 assertions cover standard pricing, Fast rates, long-context switching and the Astra Law standard-only fallback.
+
 ## v1.11.2(2026-11-17)
 
 <!-- release: 新增功能 -->
